@@ -577,7 +577,7 @@ h2 {
 
 .optimizer-list {
   display: grid;
-  grid-template-columns: repeat(5, minmax(220px, 1fr));
+  grid-template-columns: repeat(5, minmax(300px, 1fr));
   gap: 10px;
   overflow-x: auto;
   padding-bottom: 2px;
@@ -586,7 +586,7 @@ h2 {
 .optimizer-card {
   display: grid;
   gap: 10px;
-  min-width: 220px;
+  min-width: 300px;
   border: 1px solid #dce3ec;
   border-radius: 8px;
   background: #fbfcfd;
@@ -600,9 +600,9 @@ h2 {
 
 .optimizer-card-head {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: 1fr;
   align-items: start;
-  gap: 10px;
+  gap: 8px;
 }
 
 .optimizer-card-head > div:first-child {
@@ -611,7 +611,16 @@ h2 {
   min-width: 0;
 }
 
+.optimizer-card h3 {
+  font-size: 20px;
+  line-height: 1.15;
+  letter-spacing: 0;
+  overflow-wrap: anywhere;
+}
+
 .optimizer-card-head .text-button {
+  justify-content: center;
+  width: 100%;
   height: 32px;
   padding: 0 9px;
   font-size: 12px;
@@ -630,9 +639,9 @@ h2 {
   color: #344155;
   padding: 6px 7px;
   font-size: 12px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  line-height: 1.25;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .empty-state {
@@ -776,7 +785,7 @@ h2 {
   }
 
   .optimizer-list {
-    grid-template-columns: repeat(5, minmax(220px, 280px));
+    grid-template-columns: repeat(5, minmax(280px, 320px));
   }
 }
 
