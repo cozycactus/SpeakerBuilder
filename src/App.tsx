@@ -20,7 +20,7 @@ import {
   Trash2,
   Upload,
 } from "lucide-react";
-import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   CSSProperties,
   ChangeEvent,
@@ -701,9 +701,7 @@ function App() {
   const [libraryFilters, setLibraryFilters] = useState<LibraryFilters>(() => initialProject.libraryFilters);
   const [selectedDriverId, setSelectedDriverId] = useState(() => initialProject.selectedDriverId);
   const selectedDriver = drivers.find((driver) => driver.id === selectedDriverId) ?? drivers[0];
-  const deferredSelectedDriver = useDeferredValue(selectedDriver);
   const [designs, setDesigns] = useState<BoxDesign[]>(() => initialProject.designs);
-  const deferredDesigns = useDeferredValue(designs);
   const [analysisSnapshot, setAnalysisSnapshot] = useState<AnalysisSnapshot>(() =>
     createAnalysisSnapshot(selectedDriver, initialProject.designs, initialProject.powerW),
   );
@@ -721,7 +719,6 @@ function App() {
   const [compareDriverIds, setCompareDriverIds] = useState<string[]>(() => initialProject.compareDriverIds);
   const [measurements, setMeasurements] = useState<MeasurementTrace[]>(() => initialProject.measurements);
   const [acousticOptions, setAcousticOptions] = useState<AcousticOptions>(() => initialProject.acousticOptions);
-  const deferredPowerW = useDeferredValue(powerW);
   const [status, setStatus] = useState("");
   const [leftPanelWidth, setLeftPanelWidth] = useState(() =>
     loadPanelWidth(LEFT_PANEL_STORAGE_KEY, LEFT_PANEL_LIMITS),
@@ -918,8 +915,8 @@ function App() {
       designs[0];
   }, [designs, focusedDesignId]);
   const liveChartDesigns = useMemo(() => {
-    return deferredDesigns.filter((design) => design.enabled);
-  }, [deferredDesigns]);
+    return designs.filter((design) => design.enabled);
+  }, [designs]);
   const analysisStale =
     analysisSnapshot.driver !== selectedDriver ||
     analysisSnapshot.designs !== designs ||
@@ -940,8 +937,8 @@ function App() {
     if (!worker) {
       setChartResults(
         liveChartDesigns.map((design) =>
-          simulateDesign(deferredSelectedDriver, design, {
-            powerW: deferredPowerW,
+          simulateDesign(selectedDriver, design, {
+            powerW,
             outputs,
           }),
         ),
@@ -953,12 +950,12 @@ function App() {
     worker.postMessage({
       id: requestId,
       type: "chart",
-      driver: deferredSelectedDriver,
+      driver: selectedDriver,
       designs: liveChartDesigns,
-      powerW: deferredPowerW,
+      powerW,
       outputs,
     });
-  }, [activeTab, deferredPowerW, deferredSelectedDriver, liveChartDesigns]);
+  }, [activeTab, powerW, selectedDriver, liveChartDesigns]);
 
   const adjustedChartResults = useMemo(
     () => applyAcousticOptionsToResults(chartResults, acousticOptions),
@@ -1422,7 +1419,7 @@ function App() {
     setChartPanelOrder((current) => reorderPanelBefore(current, dragged.id as ChartToolPanelId, targetId));
   }
 
-  const chartProps = getChartProps(activeTab, chartDisplayResults, deferredSelectedDriver, focusedDesignId, text, powerW, measurementSeries);
+  const chartProps = getChartProps(activeTab, chartDisplayResults, selectedDriver, focusedDesignId, text, powerW, measurementSeries);
   const focusedDesignName = focusedDesign ? displayDesignName(focusedDesign.name, text) : "";
   const chartSubtitle = compareEnabled && focusedDesign
     ? `${text.compare.mode} · ${focusedDesignName}`
