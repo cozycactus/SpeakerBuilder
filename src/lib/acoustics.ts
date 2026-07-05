@@ -97,6 +97,20 @@ export interface ParsedMeasurementTrace {
   points: Point[];
 }
 
+export type SealedZmaEstimateQuality = "good" | "fair" | "poor";
+
+export interface SealedZmaEstimate {
+  baselineOhm: number;
+  confidence: SealedZmaEstimateQuality;
+  f1Hz?: number;
+  f2Hz?: number;
+  fcHz: number;
+  qtc?: number;
+  responseDb: Point[];
+  targetOhm?: number;
+  zMaxOhm: number;
+}
+
 export type SplLimitReason = "xmax" | "passive" | "port" | "power";
 
 export interface SimulationResult {
@@ -1131,6 +1145,104 @@ export function parseMeasurementTraceFile(name: string, content: string): Parsed
     name,
     points: uniquePoints,
   };
+}
+
+export function estimateSealedBoxFromZma(points: Point[]): SealedZmaEstimate | null {
+  const validPoints = points
+    .filter((point) => point.x >= 5 && point.x <= 1000 && point.y > 0 && Number.isFinite(point.x) && Number.isFinite(point.y))
+    .sort((left, right) => left.x - right.x);
+  if (validPoints.length < 5) {
+    return null;
+  }
+
+  const peak = validPoints
+    .filter((point) => point.x >= 10 && point.x <= 500)
+    .reduce((best, point) => (point.y > best.y ? point : best), validPoints[0]);
+  const baselineCandidates = validPoints
+    .filter((point) => point.x <= Math.max(peak.x * 0.75, 20) || point.x >= peak.x * 1.8)
+    .map((point) => point.y)
+    .sort((left, right) => left - right);
+  const allValues = validPoints.map((point) => point.y).sort((left, right) => left - right);
+  const baselineOhm = Math.max(
+    0.01,
+    baselineCandidates[Math.floor(baselineCandidates.length * 0.1)] ?? allValues[Math.floor(allValues.length * 0.1)] ?? allValues[0],
+  );
+  const peakRatio = peak.y / baselineOhm;
+  const targetOhm = peakRatio > 1.2 ? Math.sqrt(peak.y * baselineOhm) : undefined;
+  const f1Hz = targetOhm ? zmaCrossingFrequency(validPoints, targetOhm, 0, validPoints.indexOf(peak), "rising") : undefined;
+  const f2Hz = targetOhm ? zmaCrossingFrequency(validPoints, targetOhm, validPoints.indexOf(peak), validPoints.length - 1, "falling") : undefined;
+  const qtc = f1Hz !== undefined && f2Hz !== undefined && f2Hz > f1Hz
+    ? peak.x / (f2Hz - f1Hz)
+    : undefined;
+  const confidence: SealedZmaEstimateQuality =
+    qtc !== undefined && peakRatio >= 2.5 && validPoints.length >= 12
+      ? "good"
+      : qtc !== undefined && peakRatio >= 1.6
+        ? "fair"
+        : "poor";
+
+  return {
+    baselineOhm,
+    confidence,
+    f1Hz,
+    f2Hz,
+    fcHz: peak.x,
+    qtc,
+    responseDb: qtc ? sealedResponseFromFcQtc(peak.x, qtc, validPoints) : [],
+    targetOhm,
+    zMaxOhm: peak.y,
+  };
+}
+
+function zmaCrossingFrequency(
+  points: Point[],
+  targetOhm: number,
+  startIndex: number,
+  endIndex: number,
+  direction: "rising" | "falling",
+): number | undefined {
+  const start = Math.max(0, Math.min(startIndex, points.length - 1));
+  const end = Math.max(0, Math.min(endIndex, points.length - 1));
+  if (direction === "rising") {
+    for (let index = Math.max(start + 1, 1); index <= end; index += 1) {
+      const left = points[index - 1];
+      const right = points[index];
+      if (left.y <= targetOhm && right.y >= targetOhm) {
+        return interpolateLogFrequency(left, right, targetOhm);
+      }
+    }
+    return undefined;
+  }
+
+  for (let index = Math.max(start + 1, 1); index <= end; index += 1) {
+    const left = points[index - 1];
+    const right = points[index];
+    if (left.y >= targetOhm && right.y <= targetOhm) {
+      return interpolateLogFrequency(left, right, targetOhm);
+    }
+  }
+  return undefined;
+}
+
+function interpolateLogFrequency(left: Point, right: Point, targetY: number): number {
+  const deltaY = right.y - left.y;
+  const ratio = clamp(Math.abs(deltaY) < 0.000001 ? 0 : (targetY - left.y) / deltaY, 0, 1);
+  const leftLog = Math.log10(Math.max(0.001, left.x));
+  const rightLog = Math.log10(Math.max(0.001, right.x));
+  return Math.pow(10, leftLog + (rightLog - leftLog) * ratio);
+}
+
+function sealedResponseFromFcQtc(fcHz: number, qtc: number, sourcePoints: Point[]): Point[] {
+  const minFrequency = clamp(Math.min(...sourcePoints.map((point) => point.x), 10), 5, 40);
+  const maxFrequency = clamp(Math.max(500, fcHz * 8), 120, DEFAULT_FREQUENCY_MAX_HZ);
+  return logspace(minFrequency, maxFrequency, 160).map((frequency) => {
+    const x = frequency / Math.max(0.001, fcHz);
+    const magnitude = (x * x) / Math.hypot(1 - x * x, x / Math.max(0.05, qtc));
+    return {
+      x: frequency,
+      y: db(magnitude),
+    };
+  });
 }
 
 function responseAtFrequency(

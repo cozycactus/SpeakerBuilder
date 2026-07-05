@@ -1229,6 +1229,46 @@ h2 {
   flex: 1 1 120px;
 }
 
+.sealed-zma-tool {
+  display: grid;
+  gap: 8px;
+  border-top: 1px solid #dbe4ef;
+  padding-top: 10px;
+}
+
+.sealed-zma-readout {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.sealed-zma-readout div {
+  display: grid;
+  gap: 2px;
+  border-radius: 6px;
+  background: #eef2f6;
+  padding: 6px 7px;
+}
+
+.sealed-zma-readout span {
+  color: #66758a;
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.sealed-zma-readout strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #18212f;
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .mini-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

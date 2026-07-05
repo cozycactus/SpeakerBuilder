@@ -50,6 +50,7 @@ import {
   PRESET_DRIVERS,
   OptimizerCandidate,
   OptimizerGoal,
+  SealedZmaEstimate,
   SimulationResult,
   SimulationOutput,
   SplInputMode,
@@ -57,6 +58,7 @@ import {
   SplLimitReason,
   createDefaultDesigns,
   createDesignFromTemplate,
+  estimateSealedBoxFromZma,
   getDesignTemplates,
   optimizeDesigns,
   parseDriversFromFile,
@@ -156,6 +158,12 @@ interface ChartYScaleState {
   min: number;
 }
 
+interface SealedZmaState {
+  boxVolumeLiters: number;
+  selectedMeasurementId?: string;
+  targetQtc: number;
+}
+
 interface ProjectState {
   acousticOptions: AcousticOptions;
   activeTab: ChartTab;
@@ -174,6 +182,7 @@ interface ProjectState {
   powerW: number;
   referenceByTab: ReferenceByTab;
   selectedDriverId: string;
+  sealedZma: SealedZmaState;
   splInputMode: SplInputMode;
 }
 
@@ -260,6 +269,10 @@ const DEFAULT_ACOUSTIC_OPTIONS: AcousticOptions = {
   baffleStepHz: 450,
   roomGainDb: 0,
   roomGainStartHz: 80,
+};
+const DEFAULT_SEALED_ZMA: SealedZmaState = {
+  boxVolumeLiters: 10,
+  targetQtc: 0.707,
 };
 
 const driverFields: Array<{
@@ -505,6 +518,27 @@ const UI_TEXT = {
       visibleHint: "FRD: АЧХ/SPL, ZMA: импеданс",
       clear: "Очистить все",
       clearCurrent: "Очистить драйвер",
+      sealedZma: {
+        boxVolume: "Vb тест",
+        confidence: {
+          fair: "среднее",
+          good: "хорошее",
+          poor: "слабое",
+        },
+        currentAboveTarget: "Qtc выше цели - увеличь объем или добавь демпфирование",
+        currentBelowTarget: "Qtc ниже цели - объем можно уменьшить",
+        derivedSeries: "Оценка ЗЯ по ZMA",
+        f12: "F1 / F2",
+        fc: "Fc",
+        noZma: "Загрузи ZMA закрытого ящика",
+        qtc: "Qtc",
+        responseHint: "На АЧХ появится пунктирная НЧ-оценка",
+        targetQtc: "Цель Qtc",
+        title: "Закрытый ящик по ZMA",
+        tsTargetVolume: "Vb по T/S для цели",
+        zma: "ZMA",
+        zMax: "Zmax",
+      },
     },
     corrections: {
       title: "Поправки графика",
@@ -864,6 +898,27 @@ const UI_TEXT = {
       visibleHint: "FRD: response/SPL, ZMA: impedance",
       clear: "Clear all",
       clearCurrent: "Clear driver",
+      sealedZma: {
+        boxVolume: "Test Vb",
+        confidence: {
+          fair: "fair",
+          good: "good",
+          poor: "poor",
+        },
+        currentAboveTarget: "Qtc is above target - increase volume or add damping",
+        currentBelowTarget: "Qtc is below target - volume can be smaller",
+        derivedSeries: "ZMA closed estimate",
+        f12: "F1 / F2",
+        fc: "Fc",
+        noZma: "Load a sealed-box ZMA",
+        qtc: "Qtc",
+        responseHint: "A dashed LF estimate appears on Response",
+        targetQtc: "Target Qtc",
+        title: "Sealed box from ZMA",
+        tsTargetVolume: "T/S Vb for target",
+        zma: "ZMA",
+        zMax: "Zmax",
+      },
     },
     corrections: {
       title: "Chart corrections",
@@ -1082,6 +1137,7 @@ function App() {
   const [compareEnabled, setCompareEnabled] = useState(initialProject.compareEnabled);
   const [compareDriverIds, setCompareDriverIds] = useState<string[]>(() => initialProject.compareDriverIds);
   const [measurements, setMeasurements] = useState<MeasurementTrace[]>(() => initialProject.measurements);
+  const [sealedZma, setSealedZma] = useState<SealedZmaState>(() => initialProject.sealedZma);
   const [acousticOptions, setAcousticOptions] = useState<AcousticOptions>(() => initialProject.acousticOptions);
   const [status, setStatus] = useState("");
   const [leftPanelWidth, setLeftPanelWidth] = useState(() =>
@@ -1180,6 +1236,7 @@ function App() {
           powerW,
           referenceByTab,
           selectedDriverId,
+          sealedZma,
           splInputMode,
         }),
       ),
@@ -1202,6 +1259,7 @@ function App() {
     powerW,
     referenceByTab,
     selectedDriverId,
+    sealedZma,
     splInputMode,
   ]);
 
@@ -1423,16 +1481,42 @@ function App() {
     () => measurements.filter((measurement) => measurement.driverId === selectedDriver.id),
     [measurements, selectedDriver.id],
   );
+  const zmaMeasurements = useMemo(
+    () => currentDriverMeasurements.filter((measurement) => measurement.kind === "zma"),
+    [currentDriverMeasurements],
+  );
+  const selectedSealedZmaMeasurement = useMemo(
+    () => zmaMeasurements.find((measurement) => measurement.id === sealedZma.selectedMeasurementId) ?? zmaMeasurements[0],
+    [sealedZma.selectedMeasurementId, zmaMeasurements],
+  );
+  const sealedZmaEstimate = useMemo(
+    () => selectedSealedZmaMeasurement ? estimateSealedBoxFromZma(selectedSealedZmaMeasurement.points) : null,
+    [selectedSealedZmaMeasurement],
+  );
   const measurementSeries = useMemo(
-    () => currentDriverMeasurements
-      .filter((measurement) => measurementVisibleOnTab(measurement, activeTab))
-      .map((measurement) => ({
-        color: measurement.color,
-        measurement: true,
-        name: measurementSeriesName(measurement, activeTab),
-        points: measurementPointsForTab(measurement, activeTab),
-      })),
-    [activeTab, currentDriverMeasurements],
+    () => {
+      const importedSeries = currentDriverMeasurements
+        .filter((measurement) => measurementVisibleOnTab(measurement, activeTab))
+        .map((measurement) => ({
+          color: measurement.color,
+          measurement: true,
+          name: measurementSeriesName(measurement, activeTab),
+          points: measurementPointsForTab(measurement, activeTab),
+        }));
+      if (activeTab !== "response" || !sealedZmaEstimate?.responseDb.length || !selectedSealedZmaMeasurement) {
+        return importedSeries;
+      }
+      return [
+        ...importedSeries,
+        {
+          color: selectedSealedZmaMeasurement.color,
+          measurement: true,
+          name: text.measurements.sealedZma.derivedSeries,
+          points: sealedZmaEstimate.responseDb,
+        },
+      ];
+    },
+    [activeTab, currentDriverMeasurements, sealedZmaEstimate, selectedSealedZmaMeasurement, text],
   );
 
   useEffect(() => {
@@ -1593,6 +1677,9 @@ function App() {
         tab: measurementKindToDefaultTab(parsedTrace.kind),
       };
       setMeasurements((current) => [...current, trace]);
+      if (trace.kind === "zma") {
+        setSealedZma((current) => ({ ...current, selectedMeasurementId: trace.id }));
+      }
       setActiveTab(trace.kind === "zma" ? "impedance" : activeTab === "spl" ? "spl" : "response");
       setStatus(text.measurements.imported(driverMeasurements.length + 1, measurements.length + 1));
     } catch (error) {
@@ -1623,6 +1710,7 @@ function App() {
     setMeasurements(project.measurements);
     setOptimizerGoal(project.optimizerGoal);
     setPowerW(project.powerW);
+    setSealedZma(project.sealedZma);
     setSplInputMode(project.splInputMode);
     setReferenceByTab(project.referenceByTab);
     setAnalysisSnapshot(createAnalysisSnapshot(
@@ -1654,6 +1742,7 @@ function App() {
           powerW,
           referenceByTab,
           selectedDriverId,
+          sealedZma,
           splInputMode,
         }),
         null,
@@ -2059,12 +2148,17 @@ function App() {
           key={panelId}
           count={currentDriverMeasurements.length}
           dragHandle={dragHandle}
+          driver={selectedDriver}
+          estimate={sealedZmaEstimate}
+          sealedZma={sealedZma}
           text={text}
           totalCount={measurements.length}
+          zmaMeasurements={zmaMeasurements}
           onClear={() => setMeasurements([])}
           onClearCurrent={() => {
             setMeasurements((current) => current.filter((measurement) => measurement.driverId !== selectedDriver.id));
           }}
+          onSealedZmaChange={(patch) => setSealedZma((current) => normalizeSealedZmaState({ ...current, ...patch }))}
           onDragOver={(event) => dragPanelOver("chartTools", event)}
           onDrop={(event) => dropChartPanel(panelId, event)}
         />
@@ -3327,22 +3421,41 @@ function AcousticCorrectionsPanel({
 function MeasurementPanel({
   count,
   dragHandle,
+  driver,
+  estimate,
+  sealedZma,
   text,
   totalCount,
+  zmaMeasurements,
   onClear,
   onClearCurrent,
+  onSealedZmaChange,
   onDragOver,
   onDrop,
 }: {
   count: number;
   dragHandle?: ReactNode;
+  driver: SpeakerDriver;
+  estimate: SealedZmaEstimate | null;
+  sealedZma: SealedZmaState;
   text: UiText;
   totalCount: number;
+  zmaMeasurements: MeasurementTrace[];
   onClear: () => void;
   onClearCurrent: () => void;
+  onSealedZmaChange: (patch: Partial<SealedZmaState>) => void;
   onDragOver?: (event: ReactDragEvent<HTMLElement>) => void;
   onDrop?: (event: ReactDragEvent<HTMLElement>) => void;
 }) {
+  const targetVolume = sealedTargetVolumeFromTs(driver, sealedZma.targetQtc);
+  const qtcAdvice = estimate?.qtc
+    ? estimate.qtc > sealedZma.targetQtc + 0.04
+      ? text.measurements.sealedZma.currentAboveTarget
+      : estimate.qtc < sealedZma.targetQtc - 0.04
+        ? text.measurements.sealedZma.currentBelowTarget
+        : undefined
+    : undefined;
+
   return (
     <section className="mini-panel measurement-panel movable-panel" onDragOver={onDragOver} onDrop={onDrop}>
       {dragHandle}
@@ -3360,6 +3473,78 @@ function MeasurementPanel({
           <Trash2 size={16} />
           {text.measurements.clear}
         </button>
+      </div>
+      <div className="sealed-zma-tool">
+        <div className="mini-panel-head">
+          <h3>{text.measurements.sealedZma.title}</h3>
+          {estimate ? <span>{text.measurements.sealedZma.confidence[estimate.confidence]}</span> : null}
+        </div>
+        {zmaMeasurements.length > 0 ? (
+          <>
+            <label className="field">
+              <span>{text.measurements.sealedZma.zma}</span>
+              <select
+                value={sealedZma.selectedMeasurementId ?? zmaMeasurements[0]?.id ?? ""}
+                onChange={(event) => onSealedZmaChange({ selectedMeasurementId: event.target.value })}
+              >
+                {zmaMeasurements.map((measurement) => (
+                  <option key={measurement.id} value={measurement.id}>
+                    {measurement.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="mini-grid">
+              <NumberField
+                label={text.measurements.sealedZma.boxVolume}
+                unit="L"
+                value={sealedZma.boxVolumeLiters}
+                min={0.1}
+                max={10000}
+                step="0.1"
+                onChange={(boxVolumeLiters) => onSealedZmaChange({ boxVolumeLiters })}
+              />
+              <NumberField
+                label={text.measurements.sealedZma.targetQtc}
+                unit=""
+                value={sealedZma.targetQtc}
+                min={0.3}
+                max={2}
+                step="0.01"
+                onChange={(targetQtc) => onSealedZmaChange({ targetQtc })}
+              />
+            </div>
+            {estimate ? (
+              <div className="sealed-zma-readout">
+                <div>
+                  <span>{text.measurements.sealedZma.fc}</span>
+                  <strong>{formatHz(estimate.fcHz)}</strong>
+                </div>
+                <div>
+                  <span>{text.measurements.sealedZma.qtc}</span>
+                  <strong>{fmt(estimate.qtc, 2)}</strong>
+                </div>
+                <div>
+                  <span>{text.measurements.sealedZma.zMax}</span>
+                  <strong>{fmt(estimate.zMaxOhm, 1)} Ω</strong>
+                </div>
+                <div>
+                  <span>{text.measurements.sealedZma.f12}</span>
+                  <strong>{formatHzPair(estimate.f1Hz, estimate.f2Hz)}</strong>
+                </div>
+                {targetVolume ? (
+                  <div>
+                    <span>{text.measurements.sealedZma.tsTargetVolume}</span>
+                    <strong>{fmt(targetVolume, 1)} L</strong>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+            <p>{qtcAdvice ?? text.measurements.sealedZma.responseHint}</p>
+          </>
+        ) : (
+          <p>{text.measurements.sealedZma.noZma}</p>
+        )}
       </div>
     </section>
   );
@@ -5599,6 +5784,7 @@ function loadProjectState(): ProjectState {
     powerW: 25,
     referenceByTab: {},
     selectedDriverId: selectedDriver.id,
+    sealedZma: DEFAULT_SEALED_ZMA,
     splInputMode: "rePower",
   };
 }
@@ -5657,6 +5843,7 @@ function parseProjectFile(content: string): ProjectState | null {
         ? normalizeReferenceByTab(parsed.referenceByTab)
         : {},
       selectedDriverId,
+      sealedZma: normalizeSealedZmaState(parsed.sealedZma),
       splInputMode: isSplInputMode(parsed.splInputMode) ? parsed.splInputMode : "rePower",
     };
   } catch {
@@ -5706,6 +5893,17 @@ function normalizeAcousticOptions(value: unknown): AcousticOptions {
     baffleStepHz: finiteOptional(value.baffleStepHz) ?? DEFAULT_ACOUSTIC_OPTIONS.baffleStepHz,
     roomGainDb: finiteOptional(value.roomGainDb) ?? DEFAULT_ACOUSTIC_OPTIONS.roomGainDb,
     roomGainStartHz: finiteOptional(value.roomGainStartHz) ?? DEFAULT_ACOUSTIC_OPTIONS.roomGainStartHz,
+  };
+}
+
+function normalizeSealedZmaState(value: unknown): SealedZmaState {
+  if (!isPlainRecord(value)) {
+    return DEFAULT_SEALED_ZMA;
+  }
+  return {
+    boxVolumeLiters: clampNumber(finiteOptional(value.boxVolumeLiters) ?? DEFAULT_SEALED_ZMA.boxVolumeLiters, 0.1, 10000),
+    selectedMeasurementId: typeof value.selectedMeasurementId === "string" ? value.selectedMeasurementId : undefined,
+    targetQtc: clampNumber(finiteOptional(value.targetQtc) ?? DEFAULT_SEALED_ZMA.targetQtc, 0.3, 2),
   };
 }
 
@@ -6170,6 +6368,21 @@ function niceCeil(value: number): number {
 
 function formatHz(value?: number): string {
   return value ? `${fmt(value, value < 100 ? 1 : 0)} Hz` : "—";
+}
+
+function formatHzPair(left?: number, right?: number): string {
+  if (!left || !right) {
+    return "—";
+  }
+  return `${formatHz(left)} / ${formatHz(right)}`;
+}
+
+function sealedTargetVolumeFromTs(driver: SpeakerDriver, targetQtc: number): number | undefined {
+  if (targetQtc <= driver.qts || driver.vasL <= 0 || driver.qts <= 0) {
+    return undefined;
+  }
+  const ratio = Math.pow(targetQtc / driver.qts, 2) - 1;
+  return ratio > 0 ? driver.vasL / ratio : undefined;
 }
 
 function fmt(value?: number, decimals = 1): string {

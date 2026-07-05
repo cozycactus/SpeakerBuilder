@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   FREQUENCIES,
   createDefaultDesigns,
+  estimateSealedBoxFromZma,
   PRESET_DRIVERS,
   parseMeasurementTraceFile,
   resolveDriveInput,
@@ -185,6 +186,26 @@ describe("acoustic reference scenarios", () => {
       { x: 35, y: 42 },
       { x: 100, y: 8.2 },
     ]);
+  });
+
+  it("estimates sealed-box Fc and Qtc from an impedance peak", () => {
+    const targetOhm = Math.sqrt(30 * 6);
+    const estimate = estimateSealedBoxFromZma([
+      { x: 20, y: 6 },
+      { x: 32, y: 7 },
+      { x: 40, y: targetOhm },
+      { x: 60, y: 30 },
+      { x: 90, y: targetOhm },
+      { x: 140, y: 8 },
+      { x: 260, y: 6.5 },
+      { x: 500, y: 6.4 },
+    ]);
+
+    expect(estimate).not.toBeNull();
+    expectNear(estimate?.fcHz, 60, 0.1);
+    expectNear(estimate?.qtc, 1.2, 0.05);
+    expect(estimate?.responseDb.length).toBeGreaterThan(40);
+    expect(valueAt(estimate?.responseDb ?? [], 400)).toBeGreaterThan(-0.5);
   });
 
   it("can simulate each datasheet-backed preset without invalid metrics", () => {
