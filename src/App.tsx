@@ -1050,6 +1050,9 @@ function App() {
 
     if (shouldForkPreset) {
       setSelectedDriverId(nextDriver.id);
+      setCompareDriverIds((current) =>
+        current.map((id) => (id === selectedDriver.id ? nextDriver.id : id)),
+      );
     }
   }
 
