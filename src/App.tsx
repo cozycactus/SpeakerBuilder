@@ -129,14 +129,18 @@ interface AcousticOptions {
   roomGainStartHz: number;
 }
 
+interface ChartYScaleState {
+  auto: boolean;
+  max: number;
+  min: number;
+}
+
 interface ProjectState {
   acousticOptions: AcousticOptions;
   activeTab: ChartTab;
   chartFrequencyMinHz: number;
   chartFrequencyMaxHz: number;
-  chartYAuto: boolean;
-  chartYMax: number;
-  chartYMin: number;
+  chartYScales: Record<ChartTab, ChartYScaleState>;
   compareDriverIds: string[];
   compareEnabled: boolean;
   designs: BoxDesign[];
@@ -247,6 +251,16 @@ const driverFieldLimits = new Map(driverFields.map((field) => [field.key, { min:
 const requiredDriverNumberFields = new Set<keyof SpeakerDriver>(["fsHz", "qts", "vasL", "sdCm2", "reOhm"]);
 
 const chartTabs: ChartTab[] = ["response", "spl", "excursion", "groupDelay", "step", "phase", "impedance", "port"];
+const DEFAULT_CHART_Y_RANGES = {
+  response: [DEFAULT_CHART_Y_MIN, DEFAULT_CHART_Y_MAX],
+  spl: [60, 110],
+  excursion: [0, 10],
+  groupDelay: [0, 15],
+  step: [-1.1, 1.1],
+  phase: [-360, 90],
+  impedance: [0, 40],
+  port: [0, 0.2],
+} satisfies Record<ChartTab, [number, number]>;
 const optimizerGoals: OptimizerGoal[] = ["balanced", "flat", "deep", "compact", "transient", "output"];
 
 const UI_TEXT = {
@@ -816,9 +830,7 @@ function App() {
   const [activeTab, setActiveTab] = useState<ChartTab>(initialProject.activeTab);
   const [chartFrequencyMinHz, setChartFrequencyMinHz] = useState(initialProject.chartFrequencyMinHz);
   const [chartFrequencyMaxHz, setChartFrequencyMaxHz] = useState(initialProject.chartFrequencyMaxHz);
-  const [chartYAuto, setChartYAuto] = useState(initialProject.chartYAuto);
-  const [chartYMin, setChartYMin] = useState(initialProject.chartYMin);
-  const [chartYMax, setChartYMax] = useState(initialProject.chartYMax);
+  const [chartYScales, setChartYScales] = useState<Record<ChartTab, ChartYScaleState>>(() => initialProject.chartYScales);
   const [optimizerGoal, setOptimizerGoal] = useState<OptimizerGoal>(initialProject.optimizerGoal);
   const [powerW, setPowerW] = useState(initialProject.powerW);
   const [referenceByTab, setReferenceByTab] = useState<ReferenceByTab>(() => initialProject.referenceByTab);
@@ -910,9 +922,7 @@ function App() {
           activeTab,
           chartFrequencyMinHz,
           chartFrequencyMaxHz,
-          chartYAuto,
-          chartYMax,
-          chartYMin,
+          chartYScales,
           compareDriverIds,
           compareEnabled,
           designs,
@@ -933,9 +943,7 @@ function App() {
     activeTab,
     chartFrequencyMinHz,
     chartFrequencyMaxHz,
-    chartYAuto,
-    chartYMax,
-    chartYMin,
+    chartYScales,
     compareDriverIds,
     compareEnabled,
     designs,
@@ -1038,10 +1046,23 @@ function App() {
     () => normalizeChartFrequencyDomain(chartFrequencyMinHz, chartFrequencyMaxHz),
     [chartFrequencyMaxHz, chartFrequencyMinHz],
   );
+  const activeChartYScale = chartYScales[activeTab] ?? defaultChartYScale(activeTab);
   const chartYDomain = useMemo(
-    () => chartYAuto ? undefined : normalizeChartYDomain(chartYMin, chartYMax),
-    [chartYAuto, chartYMax, chartYMin],
+    () => activeChartYScale.auto ? undefined : normalizeChartYDomain(activeChartYScale.min, activeChartYScale.max),
+    [activeChartYScale.auto, activeChartYScale.max, activeChartYScale.min],
   );
+  const updateActiveChartYScale = (patch: Partial<ChartYScaleState>) => {
+    setChartYScales((current) => {
+      const currentScale = current[activeTab] ?? defaultChartYScale(activeTab);
+      return {
+        ...current,
+        [activeTab]: {
+          ...currentScale,
+          ...patch,
+        },
+      };
+    });
+  };
   const analysisStale =
     analysisSnapshot.driver !== selectedDriver ||
     analysisSnapshot.designs !== designs ||
@@ -1294,9 +1315,7 @@ function App() {
     setActiveTab(project.activeTab);
     setChartFrequencyMinHz(project.chartFrequencyMinHz);
     setChartFrequencyMaxHz(project.chartFrequencyMaxHz);
-    setChartYAuto(project.chartYAuto);
-    setChartYMin(project.chartYMin);
-    setChartYMax(project.chartYMax);
+    setChartYScales(project.chartYScales);
     setCompareEnabled(project.compareEnabled);
     setCompareDriverIds(project.compareDriverIds);
     setMeasurements(project.measurements);
@@ -1318,9 +1337,7 @@ function App() {
           activeTab,
           chartFrequencyMinHz,
           chartFrequencyMaxHz,
-          chartYAuto,
-          chartYMax,
-          chartYMin,
+          chartYScales,
           compareDriverIds,
           compareEnabled,
           designs,
@@ -1921,9 +1938,9 @@ function App() {
                     frequencyMaxHz={chartFrequencyMaxHz}
                     frequencyMinHz={chartFrequencyMinHz}
                     text={text}
-                    yAuto={chartYAuto}
-                    yMax={chartYMax}
-                    yMin={chartYMin}
+                    yAuto={activeChartYScale.auto}
+                    yMax={activeChartYScale.max}
+                    yMin={activeChartYScale.min}
                     onFrequencyMaxChange={(value) => {
                       const nextMax = parseBoundedNumber(value, chartFrequencyMaxHz, MIN_FREQUENCY_MAX_HZ, MAX_FREQUENCY_MAX_HZ);
                       setChartFrequencyMaxHz(nextMax);
@@ -1945,18 +1962,20 @@ function App() {
                     onReset={() => {
                       setChartFrequencyMinHz(DEFAULT_CHART_FREQUENCY_MIN_HZ);
                       setChartFrequencyMaxHz(DEFAULT_FREQUENCY_MAX_HZ);
-                      setChartYAuto(true);
-                      setChartYMin(DEFAULT_CHART_Y_MIN);
-                      setChartYMax(DEFAULT_CHART_Y_MAX);
+                      updateActiveChartYScale(defaultChartYScale(activeTab));
                     }}
-                    onYAutoChange={setChartYAuto}
+                    onYAutoChange={(auto) => updateActiveChartYScale({ auto })}
                     onYMaxChange={(value) => {
-                      setChartYAuto(false);
-                      setChartYMax(parseBoundedNumber(value, chartYMax, -CHART_Y_LIMIT, CHART_Y_LIMIT));
+                      updateActiveChartYScale({
+                        auto: false,
+                        max: parseBoundedNumber(value, activeChartYScale.max, -CHART_Y_LIMIT, CHART_Y_LIMIT),
+                      });
                     }}
                     onYMinChange={(value) => {
-                      setChartYAuto(false);
-                      setChartYMin(parseBoundedNumber(value, chartYMin, -CHART_Y_LIMIT, CHART_Y_LIMIT));
+                      updateActiveChartYScale({
+                        auto: false,
+                        min: parseBoundedNumber(value, activeChartYScale.min, -CHART_Y_LIMIT, CHART_Y_LIMIT),
+                      });
                     }}
                   />
                 </div>
@@ -3913,9 +3932,7 @@ function loadProjectState(): ProjectState {
     activeTab: "response",
     chartFrequencyMinHz: DEFAULT_CHART_FREQUENCY_MIN_HZ,
     chartFrequencyMaxHz: DEFAULT_FREQUENCY_MAX_HZ,
-    chartYAuto: true,
-    chartYMax: DEFAULT_CHART_Y_MAX,
-    chartYMin: DEFAULT_CHART_Y_MIN,
+    chartYScales: defaultChartYScales(),
     compareDriverIds: [selectedDriver.id],
     compareEnabled: false,
     designs,
@@ -3964,9 +3981,7 @@ function parseProjectFile(content: string): ProjectState | null {
       activeTab: isChartTab(parsed.activeTab) ? parsed.activeTab : "response",
       chartFrequencyMinHz: normalizeChartFrequencyMin(parsed.chartFrequencyMinHz),
       chartFrequencyMaxHz: normalizeChartFrequencyMax(parsed.chartFrequencyMaxHz),
-      chartYAuto: typeof parsed.chartYAuto === "boolean" ? parsed.chartYAuto : true,
-      chartYMax: normalizeChartYValue(parsed.chartYMax, DEFAULT_CHART_Y_MAX),
-      chartYMin: normalizeChartYValue(parsed.chartYMin, DEFAULT_CHART_Y_MIN),
+      chartYScales: normalizeChartYScales(parsed.chartYScales),
       compareDriverIds: Array.isArray(parsed.compareDriverIds)
         ? parsed.compareDriverIds.filter((id): id is string => typeof id === "string" && drivers.some((driver) => driver.id === id))
         : [selectedDriverId],
@@ -4054,6 +4069,40 @@ function normalizeChartYValue(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value)
     ? clampNumber(value, -CHART_Y_LIMIT, CHART_Y_LIMIT)
     : fallback;
+}
+
+function defaultChartYScale(tab: ChartTab): ChartYScaleState {
+  const [min, max] = DEFAULT_CHART_Y_RANGES[tab];
+  return { auto: true, max, min };
+}
+
+function defaultChartYScales(): Record<ChartTab, ChartYScaleState> {
+  return chartTabs.reduce((scales, tab) => {
+    scales[tab] = defaultChartYScale(tab);
+    return scales;
+  }, {} as Record<ChartTab, ChartYScaleState>);
+}
+
+function normalizeChartYScales(value: unknown): Record<ChartTab, ChartYScaleState> {
+  const scales = defaultChartYScales();
+  if (!isPlainRecord(value)) {
+    return scales;
+  }
+
+  for (const tab of chartTabs) {
+    const scale = value[tab];
+    if (!isPlainRecord(scale)) {
+      continue;
+    }
+    const fallback = defaultChartYScale(tab);
+    scales[tab] = {
+      auto: typeof scale.auto === "boolean" ? scale.auto : fallback.auto,
+      max: normalizeChartYValue(scale.max, fallback.max),
+      min: normalizeChartYValue(scale.min, fallback.min),
+    };
+  }
+
+  return scales;
 }
 
 function finiteOptional(value: unknown): number | undefined {
