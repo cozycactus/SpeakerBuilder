@@ -3,6 +3,7 @@ import {
   FREQUENCIES,
   createDefaultDesigns,
   PRESET_DRIVERS,
+  resolveDriveInput,
   simulateDesign,
 } from "./acoustics";
 
@@ -209,10 +210,44 @@ describe("acoustic reference scenarios", () => {
 
   it("changes aperiodic damping when damping Ql changes", () => {
     const { design, driver } = designByName(0, "Aperiodic damped");
-    const lightDamping = simulateDesign(driver, { ...design, ql: 4.5 }, { powerW: 25 });
-    const heavyDamping = simulateDesign(driver, { ...design, ql: 0.8 }, { powerW: 25 });
+    const lightDamping = simulateDesign(driver, { ...design, aperiodicMode: "ql", ql: 4.5 }, { powerW: 25 });
+    const heavyDamping = simulateDesign(driver, { ...design, aperiodicMode: "ql", ql: 0.8 }, { powerW: 25 });
 
     expect(Math.abs(nearestY(lightDamping.responseDb, driver.fsHz) - nearestY(heavyDamping.responseDb, driver.fsHz))).toBeGreaterThan(0.15);
+  });
+
+  it("models aperiodic flow resistance and reports effective damping metrics", () => {
+    const { design, driver } = designByName(0, "Aperiodic damped");
+    const lightMaterial = simulateDesign(driver, {
+      ...design,
+      aperiodicMode: "flow",
+      aperiodicThicknessMm: 4,
+      flowResistivityPaSecM2: 3000,
+    }, { powerW: 25 });
+    const denseMaterial = simulateDesign(driver, {
+      ...design,
+      aperiodicMode: "flow",
+      aperiodicThicknessMm: 20,
+      flowResistivityPaSecM2: 18000,
+    }, { powerW: 25 });
+
+    expect(lightMaterial.metrics.qtc).toBeUndefined();
+    expect(lightMaterial.metrics.effectiveQ).toBeGreaterThan(0);
+    expect(lightMaterial.metrics.impedancePeakReductionDb).toBeGreaterThan(0);
+    expect(Math.abs(nearestY(lightMaterial.responseDb, driver.fsHz) - nearestY(denseMaterial.responseDb, driver.fsHz))).toBeGreaterThan(0.15);
+  });
+
+  it("switches SPL drive input between 1 W, 2.83 V, nominal power, and Re power", () => {
+    const driver = presetById("usher-8945p");
+    const oneWatt = resolveDriveInput(driver, { powerW: 25, splInputMode: "oneWatt" });
+    const twoPointEightThreeVolt = resolveDriveInput(driver, { powerW: 25, splInputMode: "twoPointEightThreeVolt" });
+    const nominalPower = resolveDriveInput(driver, { powerW: 1, splInputMode: "nominalPower" });
+    const rePower = resolveDriveInput(driver, { powerW: 1, splInputMode: "rePower" });
+
+    expectNear(oneWatt.electricalPowerW, 1, 0.001);
+    expectNear(twoPointEightThreeVolt.voltageRms, 2.83, 0.001);
+    expect(nominalPower.voltageRms).toBeGreaterThan(rePower.voltageRms);
+    expect(nominalPower.electricalPowerW).toBeGreaterThan(rePower.electricalPowerW);
   });
 
   it("can calculate only the SPL graph without filling unrelated series", () => {

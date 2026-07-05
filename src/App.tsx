@@ -35,6 +35,9 @@ import type {
   WheelEvent as ReactWheelEvent,
 } from "react";
 import {
+  APERIODIC_MATERIALS,
+  AperiodicMaterial,
+  AperiodicMode,
   BoxDesign,
   BoxKind,
   DESIGN_COLORS,
@@ -48,6 +51,7 @@ import {
   OptimizerGoal,
   SimulationResult,
   SimulationOutput,
+  SplInputMode,
   SpeakerDriver,
   SplLimitReason,
   createDefaultDesigns,
@@ -55,6 +59,7 @@ import {
   getDesignTemplates,
   optimizeDesigns,
   parseDriversFromFile,
+  resolveDriveInput,
   simulateDesign,
 } from "./lib/acoustics";
 
@@ -69,6 +74,7 @@ type AnalysisSnapshot = {
   driver: SpeakerDriver;
   designs: BoxDesign[];
   powerW: number;
+  splInputMode: SplInputMode;
 };
 type SimulationWorkerResponse =
   | {
@@ -164,6 +170,7 @@ interface ProjectState {
   powerW: number;
   referenceByTab: ReferenceByTab;
   selectedDriverId: string;
+  splInputMode: SplInputMode;
 }
 
 type ProjectFile = Omit<ProjectState, "referenceByTab"> & {
@@ -295,6 +302,9 @@ const APERIODIC_DAMPING_PRESETS = [
   { key: "heavy", ql: 0.8 },
 ] as const;
 type AperiodicDampingPresetKey = (typeof APERIODIC_DAMPING_PRESETS)[number]["key"];
+const SPL_INPUT_MODES: SplInputMode[] = ["oneWatt", "twoPointEightThreeVolt", "nominalPower", "rePower"];
+const APERIODIC_MODES: AperiodicMode[] = ["flow", "ql"];
+const APERIODIC_MATERIAL_KEYS: AperiodicMaterial[] = ["foam", "felt", "denseFelt", "custom"];
 
 const UI_TEXT = {
   ru: {
@@ -514,6 +524,24 @@ const UI_TEXT = {
     analysisCalculating: "Расчет...",
     analysisStale: "Метрики и оптимизатор ждут пересчета",
     aperiodicDamping: "Демпф. Ql",
+    aperiodicEffectiveQ: "Qeff",
+    aperiodicFlowResistance: "σ потока",
+    aperiodicImpedancePeak: "Пик Z",
+    aperiodicMaterial: "Материал",
+    aperiodicMaterials: {
+      custom: "Свой",
+      denseFelt: "Плотный войлок",
+      felt: "Войлок",
+      foam: "Поролон",
+    } satisfies Record<AperiodicMaterial, string>,
+    aperiodicMode: "Модель",
+    aperiodicModes: {
+      flow: "Ra / материал",
+      ql: "Упрощ. Ql",
+    } satisfies Record<AperiodicMode, string>,
+    aperiodicPeakReduction: "ΔZ пик",
+    aperiodicRa: "Ra",
+    aperiodicThickness: "Толщина",
     aperiodicDampingPreset: "Демпф.",
     aperiodicDampingPresets: {
       light: "Легкий",
@@ -527,6 +555,13 @@ const UI_TEXT = {
     aperiodicVentWeak: "слабое влияние",
     aperiodicVentNormal: "рабочий диапазон",
     aperiodicVentLarge: "нужен плотный материал",
+    splInputMode: "SPL вход",
+    splInputModes: {
+      nominalPower: "Вт в ном.",
+      oneWatt: "1 W",
+      rePower: "Вт по Re",
+      twoPointEightThreeVolt: "2.83 V",
+    } satisfies Record<SplInputMode, string>,
     model: "Модель",
     noActiveDesigns: "Нет активных конфигураций.",
     portDiameter: "Порт Ø",
@@ -817,6 +852,24 @@ const UI_TEXT = {
     analysisCalculating: "Calculating...",
     analysisStale: "Metrics and optimizer need recalculation",
     aperiodicDamping: "Damping Ql",
+    aperiodicEffectiveQ: "Qeff",
+    aperiodicFlowResistance: "Flow σ",
+    aperiodicImpedancePeak: "Z peak",
+    aperiodicMaterial: "Material",
+    aperiodicMaterials: {
+      custom: "Custom",
+      denseFelt: "Dense felt",
+      felt: "Felt",
+      foam: "Foam",
+    } satisfies Record<AperiodicMaterial, string>,
+    aperiodicMode: "Model",
+    aperiodicModes: {
+      flow: "Ra / material",
+      ql: "Simple Ql",
+    } satisfies Record<AperiodicMode, string>,
+    aperiodicPeakReduction: "Peak ΔZ",
+    aperiodicRa: "Ra",
+    aperiodicThickness: "Thickness",
     aperiodicDampingPreset: "Damping",
     aperiodicDampingPresets: {
       light: "Light",
@@ -830,6 +883,13 @@ const UI_TEXT = {
     aperiodicVentWeak: "weak effect",
     aperiodicVentNormal: "working range",
     aperiodicVentLarge: "needs dense material",
+    splInputMode: "SPL input",
+    splInputModes: {
+      nominalPower: "W nominal",
+      oneWatt: "1 W",
+      rePower: "W by Re",
+      twoPointEightThreeVolt: "2.83 V",
+    } satisfies Record<SplInputMode, string>,
     model: "Model",
     noActiveDesigns: "No active configurations.",
     portDiameter: "Port Ø",
@@ -936,7 +996,7 @@ function App() {
   const selectedDriver = drivers.find((driver) => driver.id === selectedDriverId) ?? drivers[0];
   const [designs, setDesigns] = useState<BoxDesign[]>(() => initialProject.designs);
   const [analysisSnapshot, setAnalysisSnapshot] = useState<AnalysisSnapshot>(() =>
-    createAnalysisSnapshot(selectedDriver, initialProject.designs, initialProject.powerW),
+    createAnalysisSnapshot(selectedDriver, initialProject.designs, initialProject.powerW, initialProject.splInputMode),
   );
   const [analysisResults, setAnalysisResults] = useState<SimulationResult[]>([]);
   const [chartResults, setChartResults] = useState<SimulationResult[]>([]);
@@ -951,6 +1011,7 @@ function App() {
   const [chartExpanded, setChartExpanded] = useState(false);
   const [optimizerGoal, setOptimizerGoal] = useState<OptimizerGoal>(initialProject.optimizerGoal);
   const [powerW, setPowerW] = useState(initialProject.powerW);
+  const [splInputMode, setSplInputMode] = useState<SplInputMode>(initialProject.splInputMode);
   const [referenceByTab, setReferenceByTab] = useState<ReferenceByTab>(() => initialProject.referenceByTab);
   const [compareEnabled, setCompareEnabled] = useState(initialProject.compareEnabled);
   const [compareDriverIds, setCompareDriverIds] = useState<string[]>(() => initialProject.compareDriverIds);
@@ -1053,6 +1114,7 @@ function App() {
           powerW,
           referenceByTab,
           selectedDriverId,
+          splInputMode,
         }),
       ),
     );
@@ -1074,6 +1136,7 @@ function App() {
     powerW,
     referenceByTab,
     selectedDriverId,
+    splInputMode,
   ]);
 
   useEffect(() => {
@@ -1212,7 +1275,8 @@ function App() {
   const analysisStale =
     analysisSnapshot.driver !== selectedDriver ||
     analysisSnapshot.designs !== designs ||
-    analysisSnapshot.powerW !== powerW;
+    analysisSnapshot.powerW !== powerW ||
+    analysisSnapshot.splInputMode !== splInputMode;
   const allWarnings = analysisResults.flatMap((result) =>
     result.metrics.notes.map((note) =>
       `${displayDesignName(result.design.name, text)}: ${translateNote(note, text)}`,
@@ -1232,6 +1296,7 @@ function App() {
           simulateDesign(selectedDriver, design, {
             frequencyMaxHz: chartFrequencyDomain[1],
             powerW,
+            splInputMode,
             outputs,
           }),
         ),
@@ -1247,9 +1312,10 @@ function App() {
       designs: liveChartDesigns,
       frequencyMaxHz: chartFrequencyDomain[1],
       powerW,
+      splInputMode,
       outputs,
     });
-  }, [activeTab, chartFrequencyDomain, powerW, selectedDriver, liveChartDesigns]);
+  }, [activeTab, chartFrequencyDomain, powerW, selectedDriver, liveChartDesigns, splInputMode]);
 
   const adjustedChartResults = useMemo(
     () => applyAcousticOptionsToResults(chartResults, acousticOptions),
@@ -1278,11 +1344,11 @@ function App() {
           name: displayDriverName(driver, text),
           color: DESIGN_COLORS[index % DESIGN_COLORS.length],
           enabled: true,
-        }, { frequencyMaxHz: chartFrequencyDomain[1], powerW, outputs }),
+        }, { frequencyMaxHz: chartFrequencyDomain[1], powerW, splInputMode, outputs }),
       ),
       acousticOptions,
     );
-  }, [activeTab, acousticOptions, chartFrequencyDomain, compareDriverIds, compareEnabled, drivers, focusedDesign, powerW, selectedDriver, text]);
+  }, [activeTab, acousticOptions, chartFrequencyDomain, compareDriverIds, compareEnabled, drivers, focusedDesign, powerW, selectedDriver, splInputMode, text]);
   const chartDisplayResults = compareEnabled ? compareChartResults : adjustedChartResults;
   const measurementSeries = useMemo(
     () => measurements
@@ -1306,9 +1372,17 @@ function App() {
       setAnalysisResults(
         analysisSnapshot.designs
           .filter((design) => design.enabled)
-          .map((design) => simulateDesign(analysisSnapshot.driver, design, { powerW: analysisSnapshot.powerW })),
+          .map((design) => simulateDesign(analysisSnapshot.driver, design, {
+            powerW: analysisSnapshot.powerW,
+            splInputMode: analysisSnapshot.splInputMode,
+          })),
       );
-      setOptimizerCandidates(optimizeDesigns(analysisSnapshot.driver, analysisSnapshot.powerW, optimizerGoal));
+      setOptimizerCandidates(optimizeDesigns(
+        analysisSnapshot.driver,
+        analysisSnapshot.powerW,
+        optimizerGoal,
+        analysisSnapshot.splInputMode,
+      ));
       setAnalysisPending(false);
       return;
     }
@@ -1319,6 +1393,7 @@ function App() {
       driver: analysisSnapshot.driver,
       designs: analysisSnapshot.designs,
       powerW: analysisSnapshot.powerW,
+      splInputMode: analysisSnapshot.splInputMode,
       goal: optimizerGoal,
     });
   }, [analysisSnapshot, optimizerGoal]);
@@ -1368,7 +1443,7 @@ function App() {
     setSelectedDriverId(driver.id);
     setDesigns(nextDesigns);
     setFocusedDesignId(nextDesigns.find((design) => design.enabled)?.id ?? nextDesigns[0]?.id ?? "");
-    setAnalysisSnapshot(createAnalysisSnapshot(driver, nextDesigns, powerW));
+    setAnalysisSnapshot(createAnalysisSnapshot(driver, nextDesigns, powerW, splInputMode));
   }
 
   function changeSelectedDriver(id: string) {
@@ -1467,11 +1542,13 @@ function App() {
     setMeasurements(project.measurements);
     setOptimizerGoal(project.optimizerGoal);
     setPowerW(project.powerW);
+    setSplInputMode(project.splInputMode);
     setReferenceByTab(project.referenceByTab);
     setAnalysisSnapshot(createAnalysisSnapshot(
       project.drivers.find((driver) => driver.id === project.selectedDriverId) ?? project.drivers[0],
       project.designs,
       project.powerW,
+      project.splInputMode,
     ));
   }
 
@@ -1496,6 +1573,7 @@ function App() {
           powerW,
           referenceByTab,
           selectedDriverId,
+          splInputMode,
         }),
         null,
         2,
@@ -1519,6 +1597,7 @@ function App() {
       driver: selectedDriver,
       measurements,
       powerW,
+      splInputMode,
       results: analysisResults,
       text,
       title: chartProps.title,
@@ -1601,7 +1680,7 @@ function App() {
   }
 
   function recalculateAnalysis() {
-    setAnalysisSnapshot(createAnalysisSnapshot(selectedDriver, designs, powerW));
+    setAnalysisSnapshot(createAnalysisSnapshot(selectedDriver, designs, powerW, splInputMode));
   }
 
   function updateDesign(id: string, patch: Partial<BoxDesign>) {
@@ -1723,7 +1802,7 @@ function App() {
   }
 
   const chartFocusedSeriesId = compareEnabled ? selectedDriver.id : focusedDesignId;
-  const chartProps = getChartProps(activeTab, chartDisplayResults, selectedDriver, chartFocusedSeriesId, text, powerW, chartFrequencyDomain, chartYDomain, measurementSeries);
+  const chartProps = getChartProps(activeTab, chartDisplayResults, selectedDriver, chartFocusedSeriesId, text, powerW, splInputMode, chartFrequencyDomain, chartYDomain, measurementSeries);
   const focusedDesignName = focusedDesign ? displayDesignName(focusedDesign.name, text) : "";
   const chartSubtitle = compareEnabled && focusedDesign
     ? `${text.compare.mode} · ${focusedDesignName}`
@@ -1870,6 +1949,7 @@ function App() {
           dragHandle={dragHandle}
           driver={selectedDriver}
           powerW={powerW}
+          splInputMode={splInputMode}
           profile={driverProfile}
           text={text}
           onDragOver={(event) => dragPanelOver("chartTools", event)}
@@ -1928,6 +2008,14 @@ function App() {
     "--left-panel-width": `${leftPanelWidth}px`,
     "--right-panel-width": `${rightPanelWidth}px`,
   } as CSSProperties;
+  const inputDrive = resolveDriveInput(selectedDriver, { powerW, splInputMode });
+  const fixedInputMode = splInputMode === "oneWatt" || splInputMode === "twoPointEightThreeVolt";
+  const inputControlValue = splInputMode === "oneWatt"
+    ? 1
+    : splInputMode === "twoPointEightThreeVolt"
+      ? 2.83
+      : powerW;
+  const inputControlUnit = splInputMode === "twoPointEightThreeVolt" ? "V" : "W";
 
   function startResize(target: ResizeTarget, event: ReactPointerEvent<HTMLDivElement>) {
     event.preventDefault();
@@ -2001,18 +2089,32 @@ function App() {
               <option value="en">EN</option>
             </select>
           </label>
-          <label className="power-control">
+          <label className="power-control" title={`${fmt(inputDrive.voltageRms, 2)} Vrms / ${fmt(inputDrive.electricalPowerW, 2)} W @ Re`}>
             <Gauge size={18} />
-            <span>{text.power}</span>
+            <span>{text.splInputMode}</span>
+            <select
+              aria-label={text.splInputMode}
+              value={splInputMode}
+              onChange={(event) => setSplInputMode(event.target.value as SplInputMode)}
+            >
+              {SPL_INPUT_MODES.map((mode) => (
+                <option key={mode} value={mode}>{text.splInputModes[mode]}</option>
+              ))}
+            </select>
             <input
               type="number"
               min="0.1"
               max="100000"
-              step="1"
-              value={powerW}
-              onChange={(event) => setPowerW(parseBoundedNumber(event.target.value, powerW, 0.1, 100000))}
+              step={splInputMode === "twoPointEightThreeVolt" ? "0.01" : "1"}
+              disabled={fixedInputMode}
+              value={inputControlValue}
+              onChange={(event) => {
+                if (!fixedInputMode) {
+                  setPowerW(parseBoundedNumber(event.target.value, powerW, 0.1, 100000));
+                }
+              }}
             />
-            <span>W</span>
+            <span>{inputControlUnit}</span>
           </label>
           <button type="button" className="icon-button" onClick={exportProject} title={text.exportJson}>
             <Download size={18} />
@@ -2443,12 +2545,16 @@ function DesignEditor({
   const hasPort = design.kind === "vented" || design.kind === "bandpass";
   const hasAperiodicVent = design.kind === "aperiodic";
   const hasVentGeometry = hasPort || hasAperiodicVent;
+  const aperiodicMode = hasAperiodicVent ? design.aperiodicMode ?? "ql" : undefined;
   const ventShapeLabel = hasAperiodicVent ? text.aperiodicVentShape : text.portShape;
   const ventDiameterLabel = hasAperiodicVent ? text.aperiodicVentDiameter : text.portDiameter;
   const ventCountLabel = hasAperiodicVent ? text.aperiodicVentCount : text.ports;
   const dampingLabel = hasAperiodicVent ? text.aperiodicDamping : "Ql";
   const aperiodicSummary = hasAperiodicVent ? aperiodicVentSummary(design, driver, text) : undefined;
-  const selectedDampingPreset = hasAperiodicVent
+  const aperiodicResistance = hasAperiodicVent && aperiodicMode === "flow"
+    ? aperiodicResistanceSummary(design, driver, text)
+    : undefined;
+  const selectedDampingPreset = hasAperiodicVent && aperiodicMode === "ql"
     ? selectedAperiodicDampingPreset(design.ql ?? 1.7)
     : undefined;
 
@@ -2496,10 +2602,23 @@ function DesignEditor({
         {hasTuning ? (
           <NumberField label="Fb" unit="Hz" value={design.fbHz ?? 30} min={1} step="0.1" onChange={(fbHz) => onChange({ fbHz })} />
         ) : null}
-        {design.kind !== "sealed" && design.kind !== "infinite" ? (
+        {hasAperiodicVent ? (
+          <label className="field">
+            <span>{text.aperiodicMode}</span>
+            <select
+              value={aperiodicMode}
+              onChange={(event) => onChange(aperiodicModePatch(event.target.value as AperiodicMode, design))}
+            >
+              {APERIODIC_MODES.map((mode) => (
+                <option key={mode} value={mode}>{text.aperiodicModes[mode]}</option>
+              ))}
+            </select>
+          </label>
+        ) : null}
+        {design.kind !== "sealed" && design.kind !== "infinite" && !(hasAperiodicVent && aperiodicMode === "flow") ? (
           <NumberField label={dampingLabel} unit="" value={design.ql ?? (design.kind === "aperiodic" ? 1.7 : 7)} min={0.1} step="0.1" onChange={(ql) => onChange({ ql })} />
         ) : null}
-        {hasAperiodicVent ? (
+        {hasAperiodicVent && aperiodicMode === "ql" ? (
           <div className="aperiodic-preset-control" role="group" aria-label={text.aperiodicDampingPreset}>
             <span>{text.aperiodicDampingPreset}</span>
             <div className="aperiodic-preset-buttons">
@@ -2517,6 +2636,39 @@ function DesignEditor({
               ))}
             </div>
           </div>
+        ) : null}
+        {hasAperiodicVent && aperiodicMode === "flow" ? (
+          <>
+            <label className="field">
+              <span>{text.aperiodicMaterial}</span>
+              <select
+                value={design.aperiodicMaterial ?? "felt"}
+                onChange={(event) => onChange(aperiodicMaterialPatch(event.target.value as AperiodicMaterial, design))}
+              >
+                {APERIODIC_MATERIAL_KEYS.map((material) => (
+                  <option key={material} value={material}>{text.aperiodicMaterials[material]}</option>
+                ))}
+              </select>
+            </label>
+            <NumberField
+              label={text.aperiodicThickness}
+              unit="mm"
+              value={design.aperiodicThicknessMm ?? 8}
+              min={0.5}
+              max={200}
+              step="0.5"
+              onChange={(aperiodicThicknessMm) => onChange({ aperiodicThicknessMm })}
+            />
+            <NumberField
+              label={text.aperiodicFlowResistance}
+              unit="Pa s/m²"
+              value={design.flowResistivityPaSecM2 ?? defaultFlowResistivity(design.aperiodicMaterial ?? "felt")}
+              min={100}
+              max={200000}
+              step="100"
+              onChange={(flowResistivityPaSecM2) => onChange({ flowResistivityPaSecM2, aperiodicMaterial: "custom" })}
+            />
+          </>
         ) : null}
         {hasVentGeometry ? (
           <>
@@ -2576,6 +2728,13 @@ function DesignEditor({
             <em>{aperiodicSummary.note}</em>
           </div>
         ) : null}
+        {aperiodicResistance ? (
+          <div className="design-readout">
+            <span>{text.aperiodicRa}</span>
+            <strong>{aperiodicResistance.value}</strong>
+            <em>{aperiodicResistance.note}</em>
+          </div>
+        ) : null}
       </div>
     </article>
   );
@@ -2632,6 +2791,10 @@ function designKindPatch(kind: BoxKind, design: BoxDesign, driver: SpeakerDriver
     return {
       kind,
       ql: design.ql ?? 1.7,
+      aperiodicMode: design.aperiodicMode ?? "flow",
+      aperiodicMaterial: design.aperiodicMaterial ?? "felt",
+      aperiodicThicknessMm: design.aperiodicThicknessMm ?? 8,
+      flowResistivityPaSecM2: design.flowResistivityPaSecM2 ?? defaultFlowResistivity(design.aperiodicMaterial ?? "felt"),
       portShape: design.portShape ?? "round",
       portDiameterCm: design.portDiameterCm ?? defaultAperiodicVentDiameterCm(driver),
       portCount: design.portCount ?? 1,
@@ -2655,6 +2818,35 @@ function designKindPatch(kind: BoxKind, design: BoxDesign, driver: SpeakerDriver
     };
   }
   return { kind };
+}
+
+function aperiodicModePatch(mode: AperiodicMode, design: BoxDesign): Partial<BoxDesign> {
+  if (mode === "flow") {
+    const material = design.aperiodicMaterial ?? "felt";
+    return {
+      aperiodicMode: "flow",
+      aperiodicMaterial: material,
+      aperiodicThicknessMm: design.aperiodicThicknessMm ?? 8,
+      flowResistivityPaSecM2: design.flowResistivityPaSecM2 ?? defaultFlowResistivity(material),
+    };
+  }
+  return {
+    aperiodicMode: "ql",
+    ql: design.ql ?? 1.7,
+  };
+}
+
+function aperiodicMaterialPatch(material: AperiodicMaterial, design: BoxDesign): Partial<BoxDesign> {
+  return {
+    aperiodicMaterial: material,
+    flowResistivityPaSecM2: material === "custom"
+      ? design.flowResistivityPaSecM2 ?? defaultFlowResistivity("felt")
+      : defaultFlowResistivity(material),
+  };
+}
+
+function defaultFlowResistivity(material: AperiodicMaterial): number {
+  return APERIODIC_MATERIALS[material].flowResistivityPaSecM2;
 }
 
 function defaultAperiodicVentDiameterCm(driver: SpeakerDriver): number {
@@ -2683,6 +2875,22 @@ function aperiodicVentSummary(
     note,
     tone,
     value: `${formatCompactNumber(areaCm2)} cm² / ${fmt(ratio * 100, 1)}%`,
+  };
+}
+
+function aperiodicResistanceSummary(
+  design: BoxDesign,
+  driver: SpeakerDriver,
+  text: UiText,
+): { note: string; value: string } {
+  const areaM2 = Math.max(0.00001, designVentAreaCm2(design, driver) / 10000);
+  const thicknessM = clampNumber((design.aperiodicThicknessMm ?? 8) / 1000, 0.0005, 0.2);
+  const material = design.aperiodicMaterial ?? "felt";
+  const flow = clampNumber(design.flowResistivityPaSecM2 ?? defaultFlowResistivity(material), 100, 200000);
+  const ra = (flow * thicknessM) / areaM2;
+  return {
+    note: text.aperiodicMaterials[material],
+    value: `${formatCompactNumber(ra)} Pa s/m³`,
   };
 }
 
@@ -2841,6 +3049,7 @@ function ChartInputsPanel({
   dragHandle,
   driver,
   powerW,
+  splInputMode,
   profile,
   text,
   onDragOver,
@@ -2852,12 +3061,13 @@ function ChartInputsPanel({
   dragHandle?: ReactNode;
   driver: SpeakerDriver;
   powerW: number;
+  splInputMode: SplInputMode;
   profile: DriverProfile;
   text: UiText;
   onDragOver?: (event: ReactDragEvent<HTMLElement>) => void;
   onDrop?: (event: ReactDragEvent<HTMLElement>) => void;
 }) {
-  const groups = chartInputGroups(activeTab, driver, design, powerW, acousticOptions, profile, text)
+  const groups = chartInputGroups(activeTab, driver, design, powerW, splInputMode, acousticOptions, profile, text)
     .filter((group) => group.items.length > 0);
 
   return (
@@ -3172,6 +3382,7 @@ function chartInputGroups(
   driver: SpeakerDriver,
   design: BoxDesign | undefined,
   powerW: number,
+  splInputMode: SplInputMode,
   acousticOptions: AcousticOptions,
   profile: DriverProfile,
   text: UiText,
@@ -3195,13 +3406,22 @@ function chartInputGroups(
         { label: text.design, value: text.boxLabels[design.kind] },
         { label: "Vb", value: `${formatCompactNumber(design.vbLiters)} L` },
         ...(design.fbHz !== undefined ? [{ label: "Fb", value: `${formatCompactNumber(design.fbHz)} Hz` }] : []),
-        ...(design.ql !== undefined ? [{ label: design.kind === "aperiodic" ? text.aperiodicDamping : "Ql", value: formatCompactNumber(design.ql) }] : []),
+        ...(design.kind === "aperiodic"
+          ? aperiodicInputItems(design, driver, text)
+          : design.ql !== undefined
+            ? [{ label: "Ql", value: formatCompactNumber(design.ql) }]
+            : []),
         ...(chartUsesPort(activeTab, design) ? portInputItems(design, driver, text) : []),
       ]
     : [{ label: text.design, value: text.chartInputs.notes.noFocusedDesign, tone: "warning" as const }];
 
+  const driveInput = resolveDriveInput(driver, { powerW, splInputMode });
   const globalItems: ChartInputItem[] = chartUsesPower(activeTab)
-    ? [{ label: text.power, value: `${formatCompactNumber(powerW)} W` }]
+    ? [
+        { label: text.splInputMode, value: text.splInputModes[splInputMode] },
+        { label: "Vrms", value: `${formatCompactNumber(driveInput.voltageRms)} V` },
+        { label: text.power, value: `${formatCompactNumber(driveInput.electricalPowerW)} W` },
+      ]
     : [];
 
   const correctionItems: ChartInputItem[] = chartUsesCorrections(activeTab)
@@ -3251,6 +3471,26 @@ function chartUsesCorrections(activeTab: ChartTab): boolean {
 function chartUsesPort(activeTab: ChartTab, design: BoxDesign): boolean {
   return (activeTab === "port" || activeTab === "response" || activeTab === "spl" || activeTab === "impedance") &&
     (design.kind === "vented" || design.kind === "passive" || design.kind === "bandpass" || design.kind === "aperiodic");
+}
+
+function aperiodicInputItems(design: BoxDesign, driver: SpeakerDriver, text: UiText): ChartInputItem[] {
+  const mode = design.aperiodicMode ?? "ql";
+  if (mode === "flow") {
+    const material = design.aperiodicMaterial ?? "felt";
+    const resistance = aperiodicResistanceSummary(design, driver, text);
+    return [
+      { label: text.aperiodicMode, value: text.aperiodicModes.flow },
+      { label: text.aperiodicMaterial, value: text.aperiodicMaterials[material] },
+      { label: text.aperiodicThickness, value: `${formatCompactNumber(design.aperiodicThicknessMm ?? 8)} mm` },
+      { label: text.aperiodicFlowResistance, value: `${formatCompactNumber(design.flowResistivityPaSecM2 ?? defaultFlowResistivity(material))} Pa s/m²` },
+      { label: text.aperiodicRa, value: resistance.value },
+    ];
+  }
+
+  return [
+    { label: text.aperiodicMode, value: text.aperiodicModes.ql },
+    { label: text.aperiodicDamping, value: formatCompactNumber(design.ql ?? 1.7) },
+  ];
 }
 
 function portInputItems(design: BoxDesign, driver: SpeakerDriver, text: UiText): ChartInputItem[] {
@@ -3412,13 +3652,7 @@ function MetricsTable({
                 {displayDesignName(result.design.name, text)}
               </td>
               <td>{fmt(result.design.vbLiters, 1)} L</td>
-              <td>
-                {result.design.fbHz
-                  ? `${fmt(result.design.fbHz, 1)} Hz`
-                  : result.metrics.qtc
-                    ? `Qtc ${fmt(result.metrics.qtc, 2)}`
-                    : boxLabels[result.design.kind]}
-              </td>
+              <td>{formatTune(result, text, boxLabels)}</td>
               <td>
                 {formatHz(result.metrics.f3Hz)} / {formatHz(result.metrics.f6Hz)}
               </td>
@@ -3995,8 +4229,9 @@ function createAnalysisSnapshot(
   driver: SpeakerDriver,
   designs: BoxDesign[],
   powerW: number,
+  splInputMode: SplInputMode,
 ): AnalysisSnapshot {
-  return { driver, designs, powerW };
+  return { driver, designs, powerW, splInputMode };
 }
 
 function getChartProps(
@@ -4006,6 +4241,7 @@ function getChartProps(
   focusedDesignId: string,
   text: UiText,
   powerW: number,
+  splInputMode: SplInputMode,
   chartFrequencyDomain: [number, number],
   chartYDomain: [number, number] | undefined,
   measurementSeries: Series[] = [],
@@ -4041,8 +4277,9 @@ function getChartProps(
     ];
     const domain = splDomain(points.map((point) => point.y));
     const yDomain = chartYDomain ?? domain;
+    const driveInput = resolveDriveInput(driver, { powerW, splInputMode });
     const sensitivityLine = driver.sensitivityDb !== undefined
-      ? driver.sensitivityDb + powerToDb(powerW)
+      ? driver.sensitivityDb + powerToDb(driveInput.electricalPowerW)
       : 85;
     return {
       ...base,
@@ -4367,15 +4604,28 @@ function translateNote(note: string, text: UiText): string {
   return note;
 }
 
-function formatTune(result: SimulationResult, text: UiText): string {
+function formatTune(
+  result: SimulationResult,
+  text: UiText,
+  boxLabels: Record<BoxKind, string> = text.boxLabels,
+): string {
   if (result.design.fbHz) {
     return `Fb ${fmt(result.design.fbHz, 1)} Hz`;
+  }
+  if (result.design.kind === "aperiodic") {
+    const qeff = result.metrics.effectiveQ !== undefined
+      ? `${text.aperiodicEffectiveQ} ${fmt(result.metrics.effectiveQ, 2)}`
+      : text.boxLabels.aperiodic;
+    const reduction = result.metrics.impedancePeakReductionDb !== undefined
+      ? ` / ${text.aperiodicPeakReduction} ${fmt(result.metrics.impedancePeakReductionDb, 1)} dB`
+      : "";
+    return `${qeff}${reduction}`;
   }
   if (result.metrics.qtc) {
     return `Qtc ${fmt(result.metrics.qtc, 2)}`;
   }
 
-  return text.boxLabels[result.design.kind];
+  return boxLabels[result.design.kind];
 }
 
 function formatPort(result: SimulationResult): string {
@@ -4748,6 +4998,7 @@ function createReportHtml({
   driver,
   measurements,
   powerW,
+  splInputMode,
   results,
   text,
   title,
@@ -4758,6 +5009,7 @@ function createReportHtml({
   driver: SpeakerDriver;
   measurements: MeasurementTrace[];
   powerW: number;
+  splInputMode: SplInputMode;
   results: SimulationResult[];
   text: UiText;
   title: string;
@@ -4778,6 +5030,7 @@ function createReportHtml({
   const source = driver.source?.url
     ? `<a href="${escapeHtml(driver.source.url)}">${escapeHtml(driver.source.title)}</a>`
     : escapeHtml(driver.source?.title ?? text.driverSource.sourceUnknown);
+  const driveInput = resolveDriveInput(driver, { powerW, splInputMode });
   return `<!doctype html>
 <html lang="ru">
 <head>
@@ -4799,7 +5052,8 @@ function createReportHtml({
   <div class="meta">
     <div><strong>${escapeHtml(text.model)}:</strong> ${escapeHtml(displayDriverName(driver, text))}</div>
     <div><strong>${escapeHtml(text.driverSource.title)}:</strong> ${source}</div>
-    <div><strong>${escapeHtml(text.power)}:</strong> ${fmt(powerW, 1)} W</div>
+    <div><strong>${escapeHtml(text.splInputMode)}:</strong> ${escapeHtml(text.splInputModes[splInputMode])}</div>
+    <div><strong>${escapeHtml(text.power)}:</strong> ${fmt(driveInput.electricalPowerW, 2)} W / ${fmt(driveInput.voltageRms, 2)} Vrms</div>
     <div><strong>${escapeHtml(text.corrections.title)}:</strong> ${escapeHtml(text.corrections.roomGain)} ${fmt(acousticOptions.roomGainDb, 1)} dB, ${escapeHtml(text.corrections.baffleStep)} ${fmt(acousticOptions.baffleStepDb, 1)} dB</div>
     <div><strong>${escapeHtml(text.measurements.title)}:</strong> ${measurements.length}</div>
   </div>
@@ -4940,6 +5194,7 @@ function loadProjectState(): ProjectState {
     powerW: 25,
     referenceByTab: {},
     selectedDriverId: selectedDriver.id,
+    splInputMode: "rePower",
   };
 }
 
@@ -4997,6 +5252,7 @@ function parseProjectFile(content: string): ProjectState | null {
         ? normalizeReferenceByTab(parsed.referenceByTab)
         : {},
       selectedDriverId,
+      splInputMode: isSplInputMode(parsed.splInputMode) ? parsed.splInputMode : "rePower",
     };
   } catch {
     return null;
@@ -5334,6 +5590,16 @@ function normalizeDesign(design: BoxDesign): BoxDesign {
     vbLiters: Math.max(0.1, design.vbLiters || 0.1),
     fbHz: design.fbHz !== undefined ? Math.max(1, design.fbHz) : undefined,
     ql: design.ql !== undefined ? Math.max(0.1, design.ql) : undefined,
+    aperiodicMode: design.aperiodicMode === "flow" || design.aperiodicMode === "ql" ? design.aperiodicMode : undefined,
+    aperiodicMaterial: APERIODIC_MATERIAL_KEYS.includes(design.aperiodicMaterial as AperiodicMaterial)
+      ? design.aperiodicMaterial
+      : undefined,
+    aperiodicThicknessMm: design.aperiodicThicknessMm !== undefined
+      ? clampNumber(design.aperiodicThicknessMm, 0.5, 200)
+      : undefined,
+    flowResistivityPaSecM2: design.flowResistivityPaSecM2 !== undefined
+      ? clampNumber(design.flowResistivityPaSecM2, 100, 200000)
+      : undefined,
     portShape: design.portShape === "slot" ? "slot" : "round",
     portDiameterCm: design.portDiameterCm !== undefined ? Math.max(0.1, design.portDiameterCm) : undefined,
     portHeightCm: design.portHeightCm !== undefined ? Math.max(0.1, design.portHeightCm) : undefined,
@@ -5403,6 +5669,10 @@ function isChartTab(value: unknown): value is ChartTab {
 
 function isOptimizerGoal(value: unknown): value is OptimizerGoal {
   return typeof value === "string" && optimizerGoals.includes(value as OptimizerGoal);
+}
+
+function isSplInputMode(value: unknown): value is SplInputMode {
+  return typeof value === "string" && SPL_INPUT_MODES.includes(value as SplInputMode);
 }
 
 function keyForTemplate(design: BoxDesign): string {

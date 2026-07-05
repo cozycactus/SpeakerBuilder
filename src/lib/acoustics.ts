@@ -43,6 +43,10 @@ export interface BoxDesign {
   vbLiters: number;
   fbHz?: number;
   ql?: number;
+  aperiodicMode?: AperiodicMode;
+  aperiodicMaterial?: AperiodicMaterial;
+  aperiodicThicknessMm?: number;
+  flowResistivityPaSecM2?: number;
   portShape?: "round" | "slot";
   portDiameterCm?: number;
   portWidthCm?: number;
@@ -51,9 +55,14 @@ export interface BoxDesign {
   color: string;
 }
 
+export type AperiodicMode = "flow" | "ql";
+export type AperiodicMaterial = "foam" | "felt" | "denseFelt" | "custom";
+export type SplInputMode = "oneWatt" | "twoPointEightThreeVolt" | "nominalPower" | "rePower";
+
 export interface SimulationOptions {
   frequencyMaxHz?: number;
   powerW: number;
+  splInputMode?: SplInputMode;
   outputs?: SimulationOutput[];
 }
 
@@ -113,6 +122,9 @@ export interface SimulationResult {
     minImpedanceOhm: number;
     qtc?: number;
     fcHz?: number;
+    effectiveQ?: number;
+    impedancePeakOhm?: number;
+    impedancePeakReductionDb?: number;
     notes: string[];
   };
 }
@@ -174,6 +186,7 @@ const TWO_PI = Math.PI * 2;
 const REFERENCE_PRESSURE_PA = 20e-6;
 const SPL_DISTANCE_M = 1;
 const PORT_LIMIT_MACH = 0.16;
+const DEFAULT_SPL_INPUT_MODE: SplInputMode = "rePower";
 export const DEFAULT_FREQUENCY_MAX_HZ = 500;
 export const MIN_FREQUENCY_MAX_HZ = 100;
 export const MAX_FREQUENCY_MAX_HZ = 20000;
@@ -202,6 +215,19 @@ export const DESIGN_COLORS = [
   "#a21caf",
   "#4d7c0f",
 ];
+
+export const APERIODIC_MATERIALS: Record<AperiodicMaterial, { flowResistivityPaSecM2: number; label: string }> = {
+  foam: { flowResistivityPaSecM2: 3000, label: "Open-cell foam" },
+  felt: { flowResistivityPaSecM2: 8000, label: "Felt" },
+  denseFelt: { flowResistivityPaSecM2: 18000, label: "Dense felt" },
+  custom: { flowResistivityPaSecM2: 8000, label: "Custom" },
+};
+
+export interface DriveInput {
+  electricalPowerW: number;
+  nominalOhm: number;
+  voltageRms: number;
+}
 
 export const PRESET_DRIVERS: SpeakerDriver[] = [
   {
@@ -441,6 +467,10 @@ export function createDefaultDesigns(driver: SpeakerDriver): BoxDesign[] {
       enabled: false,
       vbLiters: sealedBw * 0.68,
       ql: 1.7,
+      aperiodicMode: "flow",
+      aperiodicMaterial: "felt",
+      aperiodicThicknessMm: 8,
+      flowResistivityPaSecM2: APERIODIC_MATERIALS.felt.flowResistivityPaSecM2,
       portShape: "round",
       portDiameterCm: aperiodicVentDiameterCm(driver),
       portCount: 1,
@@ -488,6 +518,40 @@ export function getDesignTemplates(driver: SpeakerDriver): BoxDesign[] {
   return createDefaultDesigns(driver).map((design) => ({ ...design, enabled: true }));
 }
 
+export function nominalImpedanceOhm(driver: SpeakerDriver): number {
+  const re = Math.max(0.2, driver.reOhm);
+  if (re <= 3.4) {
+    return 4;
+  }
+  if (re <= 6.8) {
+    return 8;
+  }
+  return 16;
+}
+
+export function resolveDriveInput(
+  driver: SpeakerDriver,
+  options: Pick<SimulationOptions, "powerW" | "splInputMode">,
+): DriveInput {
+  const reOhm = Math.max(0.2, driver.reOhm);
+  const nominalOhm = nominalImpedanceOhm(driver);
+  const powerW = Math.max(0.1, options.powerW);
+  const mode = options.splInputMode ?? DEFAULT_SPL_INPUT_MODE;
+  const voltageRms = mode === "oneWatt"
+    ? Math.sqrt(reOhm)
+    : mode === "twoPointEightThreeVolt"
+      ? 2.83
+      : mode === "nominalPower"
+        ? Math.sqrt(powerW * nominalOhm)
+        : Math.sqrt(powerW * reOhm);
+
+  return {
+    electricalPowerW: (voltageRms * voltageRms) / reOhm,
+    nominalOhm,
+    voltageRms,
+  };
+}
+
 export function simulateDesign(
   driver: SpeakerDriver,
   design: BoxDesign,
@@ -505,7 +569,11 @@ export function simulateDesign(
   const needsPort = outputs.has("port") || needsMetrics;
   const needsImpedance = outputs.has("impedance") || needsMetrics;
   const powerW = Math.max(0.1, options.powerW);
-  const voltageRms = Math.sqrt(powerW * derived.reOhm);
+  const driveInput = resolveDriveInput(driver, {
+    powerW,
+    splInputMode: options.splInputMode,
+  });
+  const voltageRms = driveInput.voltageRms;
   const frequencies = simulationFrequencies(options.frequencyMaxHz);
   const raw = frequencies.map((frequency) => ({
     frequency,
@@ -529,7 +597,7 @@ export function simulateDesign(
         y: splAtOneMeter(item.response.acoustic, voltageRms),
       }))
     : [];
-  const splDb = needsSpl ? calibrateSplDb(uncalibratedSplDb, driver, powerW) : [];
+  const splDb = needsSpl ? calibrateSplDb(uncalibratedSplDb, driver, driveInput.electricalPowerW) : [];
   const rawFrequencies = raw.map((point) => point.frequency);
   const phaseRad = needsPhase ? unwrapPhase(raw.map((item) => carg(item.response.acoustic))) : [];
   const phaseDeg = outputs.has("phase")
@@ -582,6 +650,9 @@ export function simulateDesign(
   let minImpedance = { x: 0, y: 0 };
   let qtc: number | undefined;
   let fcHz: number | undefined;
+  let effectiveQ: number | undefined;
+  let impedancePeakOhm: number | undefined;
+  let peakReductionDb: number | undefined;
   let portLengthCm: number | undefined;
   let portResonanceHz: number | undefined;
 
@@ -601,10 +672,10 @@ export function simulateDesign(
       excursionMm,
       f3Hz,
       portMach,
-      powerW,
+      powerW: driveInput.electricalPowerW,
       splDb,
     });
-    qtc = design.kind === "sealed" || design.kind === "aperiodic"
+    qtc = design.kind === "sealed"
       ? sealedQtc(driver, design.vbLiters)
       : undefined;
     fcHz = qtc ? driver.fsHz * Math.sqrt(1 + driver.vasL / design.vbLiters) : undefined;
@@ -616,8 +687,14 @@ export function simulateDesign(
     if (driver.xmaxMm && maxExcursion.y > driver.xmaxMm) {
       notes.push(`Xmax exceeded at ${roundTo(maxExcursion.x, 1)} Hz`);
     }
-    if (driver.peW && powerW > driver.peW) {
-      notes.push(`Power exceeds Pe: ${roundTo(powerW, 1)} W`);
+    if (design.kind === "aperiodic") {
+      const impedanceSummary = aperiodicImpedanceSummary(derived, design, rawFrequencies);
+      peakReductionDb = impedanceSummary.peakReductionDb;
+      effectiveQ = impedanceSummary.effectiveQ;
+      impedancePeakOhm = impedanceSummary.peakOhm;
+    }
+    if (driver.peW && driveInput.electricalPowerW > driver.peW) {
+      notes.push(`Power exceeds Pe: ${roundTo(driveInput.electricalPowerW, 1)} W`);
     }
     if (splLimits.usable?.reason === "xmax") {
       notes.push(`Max SPL limited by Xmax at ${roundTo(splLimits.usable.frequency, 1)} Hz`);
@@ -702,6 +779,9 @@ export function simulateDesign(
       minImpedanceOhm: minImpedance.y,
       qtc,
       fcHz,
+      effectiveQ,
+      impedancePeakOhm,
+      impedancePeakReductionDb: peakReductionDb,
       notes,
     },
   };
@@ -711,10 +791,11 @@ export function optimizeDesigns(
   driver: SpeakerDriver,
   powerW: number,
   goal: OptimizerGoal,
+  splInputMode?: SplInputMode,
 ): OptimizerCandidate[] {
   return createOptimizerDesigns(driver)
     .map((design) => {
-      const result = simulateDesign(driver, design, { powerW });
+      const result = simulateDesign(driver, design, { powerW, splInputMode });
       const flatnessDb = responseFlatness(result.responseDb);
 
       return {
@@ -759,6 +840,10 @@ function createOptimizerDesigns(driver: SpeakerDriver): BoxDesign[] {
         kind: "aperiodic",
         vbLiters: volumeForQtc(driver, qtc) * 0.72,
         ql,
+        aperiodicMode: "flow",
+        aperiodicMaterial: "felt",
+        aperiodicThicknessMm: 8,
+        flowResistivityPaSecM2: APERIODIC_MATERIALS.felt.flowResistivityPaSecM2,
         portDiameterCm: aperiodicVentDiameterCm(driver),
         portCount: 1,
       });
@@ -1040,11 +1125,9 @@ function enclosureLoad(
   }
 
   const yBox = cmul(s, c(cab, 0));
-  const ql = design.kind === "aperiodic" ? clamp(design.ql ?? 1.7, 0.5, 5) : 0;
-  const leakAreaFactor = design.kind === "aperiodic"
-    ? clamp(aperiodicVentAreaRatio(driver, design) / 0.1, 0.05, 4)
-    : 1;
-  const leakAdmittance = ql > 0 ? c(((TWO_PI * driver.fsHz * cab) / ql) * leakAreaFactor, 0) : c(0, 0);
+  const leakAdmittance = design.kind === "aperiodic"
+    ? aperiodicLeakAdmittance(driver, design, cab)
+    : c(0, 0);
   const zAcoustic = cdiv(c(1, 0), cadd(yBox, leakAdmittance));
   return {
     zload: cmul(c(driver.sdM2 * driver.sdM2, 0), zAcoustic),
@@ -1313,18 +1396,112 @@ function ventedBaseVolumeFactor(qts: number): number {
   return clamp(12 * Math.pow(clamp(qts, 0.18, 0.65), 2.4), 0.25, 1.7);
 }
 
+function aperiodicLeakAdmittance(driver: DerivedDriver, design: BoxDesign, cab: number): Complex {
+  if ((design.aperiodicMode ?? "ql") === "flow") {
+    const resistance = aperiodicAcousticResistance(driver, design);
+    return resistance > 0 ? c(1 / resistance, 0) : c(0, 0);
+  }
+
+  const ql = clamp(design.ql ?? 1.7, 0.5, 5);
+  const leakAreaFactor = clamp(aperiodicVentAreaRatio(driver, design) / 0.1, 0.05, 4);
+  return c(((TWO_PI * driver.fsHz * cab) / ql) * leakAreaFactor, 0);
+}
+
+function aperiodicAcousticResistance(driver: DerivedDriver, design: BoxDesign): number {
+  const areaM2 = Math.max(0.00001, aperiodicVentAreaM2(driver, design));
+  const thicknessM = clamp((design.aperiodicThicknessMm ?? 8) / 1000, 0.0005, 0.2);
+  const material = design.aperiodicMaterial ?? "felt";
+  const flowResistivity = clamp(
+    design.flowResistivityPaSecM2 ?? APERIODIC_MATERIALS[material].flowResistivityPaSecM2,
+    100,
+    200000,
+  );
+  return (flowResistivity * thicknessM) / areaM2;
+}
+
+function aperiodicImpedanceSummary(
+  driver: DerivedDriver,
+  design: BoxDesign,
+  frequencies: number[],
+): { effectiveQ?: number; peakOhm?: number; peakReductionDb?: number } {
+  const band = frequencies.filter((frequency) => frequency >= 10 && frequency <= 220);
+  if (band.length < 8) {
+    return {};
+  }
+
+  const current = impedancePeakFromFrequencies(driver, design, band);
+  const sealed = impedancePeakFromFrequencies(driver, { ...design, kind: "sealed" }, band);
+  if (!current || !sealed) {
+    return {};
+  }
+
+  return {
+    effectiveQ: current.effectiveQ,
+    peakOhm: current.peakOhm,
+    peakReductionDb: Math.max(0, db(sealed.peakOhm / current.peakOhm)),
+  };
+}
+
+function impedancePeakFromFrequencies(
+  driver: DerivedDriver,
+  design: BoxDesign,
+  frequencies: number[],
+): { effectiveQ?: number; peakFrequency: number; peakOhm: number } | undefined {
+  const points = frequencies.map((frequency) => ({
+    x: frequency,
+    y: cabs(responseAtFrequency(driver, design, frequency).inputImpedance),
+  }));
+  if (points.length < 3) {
+    return undefined;
+  }
+
+  const peakIndex = points.reduce((bestIndex, point, index) =>
+    point.y > points[bestIndex].y ? index : bestIndex,
+  0);
+  const zMin = Math.max(0.001, Math.min(...points.map((point) => point.y)));
+  const peak = points[peakIndex];
+  const target = Math.sqrt(zMin * peak.y);
+  const low = crossingFrequency(points, peakIndex, target, -1);
+  const high = crossingFrequency(points, peakIndex, target, 1);
+  const effectiveQ = low !== undefined && high !== undefined && high > low
+    ? peak.x / (high - low)
+    : undefined;
+
+  return {
+    effectiveQ,
+    peakFrequency: peak.x,
+    peakOhm: peak.y,
+  };
+}
+
+function crossingFrequency(points: Point[], startIndex: number, target: number, direction: -1 | 1): number | undefined {
+  for (let index = startIndex; index + direction >= 0 && index + direction < points.length; index += direction) {
+    const a = points[index];
+    const b = points[index + direction];
+    if ((a.y >= target && b.y <= target) || (a.y <= target && b.y >= target)) {
+      const ratio = (target - a.y) / (b.y - a.y || 1);
+      return a.x + ratio * (b.x - a.x);
+    }
+  }
+  return undefined;
+}
+
 function aperiodicVentDiameterCm(driver: SpeakerDriver): number {
   const targetAreaCm2 = Math.max(0.5, driver.sdCm2 * 0.1);
   return roundTo(Math.sqrt((targetAreaCm2 * 4) / Math.PI), 1);
 }
 
 function aperiodicVentAreaRatio(driver: DerivedDriver, design: BoxDesign): number {
+  return clamp(aperiodicVentAreaM2(driver, design) / Math.max(0.0001, driver.sdM2), 0.005, 0.6);
+}
+
+function aperiodicVentAreaM2(driver: DerivedDriver, design: BoxDesign): number {
   const geometry = getPortGeometry(design);
   if (!geometry) {
-    return 0.1;
+    return driver.sdM2 * 0.1;
   }
   const count = Math.max(1, design.portCount ?? 1);
-  return clamp((geometry.singleAreaM2 * count) / Math.max(0.0001, driver.sdM2), 0.005, 0.6);
+  return geometry.singleAreaM2 * count;
 }
 
 function portLength(design: BoxDesign): number | undefined {

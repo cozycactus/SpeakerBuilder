@@ -1,5 +1,5 @@
 import { optimizeDesigns, simulateDesign } from "./acoustics";
-import type { BoxDesign, OptimizerGoal, SimulationOutput, SpeakerDriver } from "./acoustics";
+import type { BoxDesign, OptimizerGoal, SimulationOutput, SpeakerDriver, SplInputMode } from "./acoustics";
 
 type SimulationWorkerRequest =
   | {
@@ -9,6 +9,7 @@ type SimulationWorkerRequest =
       designs: BoxDesign[];
       frequencyMaxHz: number;
       powerW: number;
+      splInputMode?: SplInputMode;
       outputs: SimulationOutput[];
     }
   | {
@@ -17,6 +18,7 @@ type SimulationWorkerRequest =
       driver: SpeakerDriver;
       designs: BoxDesign[];
       powerW: number;
+      splInputMode?: SplInputMode;
       goal: OptimizerGoal;
     };
 
@@ -50,6 +52,7 @@ self.onmessage = (event: MessageEvent<SimulationWorkerRequest>) => {
           simulateDesign(request.driver, design, {
             frequencyMaxHz: request.frequencyMaxHz,
             powerW: request.powerW,
+            splInputMode: request.splInputMode,
             outputs: request.outputs,
           }),
         ),
@@ -60,10 +63,13 @@ self.onmessage = (event: MessageEvent<SimulationWorkerRequest>) => {
     postMessage({
       id: request.id,
       type: "analysis",
-      candidates: optimizeDesigns(request.driver, request.powerW, request.goal),
+      candidates: optimizeDesigns(request.driver, request.powerW, request.goal, request.splInputMode),
       results: request.designs
         .filter((design) => design.enabled)
-        .map((design) => simulateDesign(request.driver, design, { powerW: request.powerW })),
+        .map((design) => simulateDesign(request.driver, design, {
+          powerW: request.powerW,
+          splInputMode: request.splInputMode,
+        })),
     } satisfies SimulationWorkerResponse);
   } catch (error) {
     postMessage({

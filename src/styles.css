@@ -143,6 +143,15 @@ h2 {
   padding: 0 8px;
 }
 
+.power-control select {
+  height: 28px;
+  min-width: 112px;
+  border: 1px solid #d9e0e7;
+  border-radius: 6px;
+  background: #ffffff;
+  padding: 0 8px;
+}
+
 .power-control input,
 .chart-range-control input {
   width: 72px;
@@ -150,6 +159,11 @@ h2 {
   border: 1px solid #d9e0e7;
   border-radius: 6px;
   padding: 0 8px;
+}
+
+.power-control input:disabled {
+  background: #eef2f6;
+  color: #66758a;
 }
 
 .chart-range-control {
@@ -1853,7 +1867,8 @@ h2 {
     width: 100%;
   }
 
-  .language-control select {
+  .language-control select,
+  .power-control select {
     flex: 1;
   }
 
