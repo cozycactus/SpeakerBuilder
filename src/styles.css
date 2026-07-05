@@ -56,6 +56,7 @@ button {
 .config-rail-header,
 .tabs,
 .legend,
+.language-control,
 .power-control {
   display: flex;
   align-items: center;
@@ -104,10 +105,12 @@ h2 {
 }
 
 .topbar-actions {
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 10px;
 }
 
+.language-control,
 .power-control {
   gap: 8px;
   height: 38px;
@@ -116,6 +119,15 @@ h2 {
   border-radius: 8px;
   background: #ffffff;
   color: #344155;
+}
+
+.language-control select {
+  height: 28px;
+  min-width: 60px;
+  border: 1px solid #d9e0e7;
+  border-radius: 6px;
+  background: #ffffff;
+  padding: 0 8px;
 }
 
 .power-control input {
@@ -705,8 +717,13 @@ h2 {
   }
 
   .design-toolbar select,
+  .language-control,
   .power-control {
     width: 100%;
+  }
+
+  .language-control select {
+    flex: 1;
   }
 
   .power-control input {

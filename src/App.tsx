@@ -3,6 +3,7 @@ import {
   Copy,
   Download,
   Gauge,
+  Languages,
   Plus,
   RefreshCw,
   SlidersHorizontal,
@@ -33,6 +34,7 @@ import {
 } from "./lib/acoustics";
 
 type ChartTab = "response" | "excursion" | "groupDelay" | "step" | "phase" | "impedance" | "port";
+type Language = "ru" | "en";
 type ScaleMode = "linear" | "log";
 type ResizeTarget = "left" | "right";
 
@@ -51,6 +53,7 @@ interface ResizeState {
 }
 
 const DRIVER_STORAGE_KEY = "speaker-builder-drivers-v1";
+const LANGUAGE_STORAGE_KEY = "speaker-builder-language-v1";
 const LEFT_PANEL_STORAGE_KEY = "speaker-builder-left-panel-width-v1";
 const RIGHT_PANEL_STORAGE_KEY = "speaker-builder-right-panel-width-v1";
 const LEFT_PANEL_LIMITS = { min: 240, max: 540, defaultValue: 320 };
@@ -77,26 +80,149 @@ const driverFields: Array<{
   { key: "blTm", label: "BL", unit: "Tm", step: "0.1" },
 ];
 
-const chartTabs: Array<{ id: ChartTab; label: string }> = [
-  { id: "response", label: "АЧХ" },
-  { id: "excursion", label: "Ход" },
-  { id: "groupDelay", label: "Group delay" },
-  { id: "step", label: "Step" },
-  { id: "phase", label: "Фаза" },
-  { id: "impedance", label: "Импеданс" },
-  { id: "port", label: "Порт" },
-];
+const chartTabs: ChartTab[] = ["response", "excursion", "groupDelay", "step", "phase", "impedance", "port"];
 
-const boxLabels: Record<BoxKind, string> = {
-  sealed: "Closed",
-  vented: "Vented",
-  passive: "Passive radiator",
-  aperiodic: "Aperiodic",
-  infinite: "Infinite baffle",
-  bandpass: "Bandpass",
-};
+const UI_TEXT = {
+  ru: {
+    add: "Добавить",
+    activeCount: (active: number, total?: number) =>
+      total === undefined ? `${active} активно` : `${active} активно / ${total}`,
+    appSubtitle: "расчет корпусов по T/S",
+    bandpass: "Bandpass",
+    boxLabels: {
+      sealed: "Закрытый",
+      vented: "ФИ",
+      passive: "Пассивный радиатор",
+      aperiodic: "Апериодический",
+      infinite: "Infinite baffle",
+      bandpass: "Bandpass",
+    } satisfies Record<BoxKind, string>,
+    chartAria: "Графики",
+    chartTabs: {
+      response: "АЧХ",
+      excursion: "Ход",
+      groupDelay: "Group delay",
+      step: "Step",
+      phase: "Фаза",
+      impedance: "Импеданс",
+      port: "Порт",
+    } satisfies Record<ChartTab, string>,
+    chartTitles: {
+      response: "АЧХ",
+      excursion: "Ход диффузора",
+      groupDelay: "Group delay",
+      step: "Step response",
+      phase: "Фаза",
+      impedance: "Импеданс",
+      port: "Скорость в порту",
+    } satisfies Record<ChartTab, string>,
+    configs: "Конфигурации",
+    delete: "Удалить",
+    design: "Конфигурация",
+    drivers: "Динамики",
+    duplicate: "Дублировать",
+    excursion: "Ход",
+    exportJson: "Экспорт JSON",
+    importError: "Ошибка импорта",
+    imported: (count: number) => `Импортировано: ${count}`,
+    importJsonCsv: "Импорт JSON/CSV",
+    inactivePrefix: "Неактивно - ",
+    language: "Язык",
+    metrics: "Метрики",
+    model: "Модель",
+    noActiveDesigns: "Нет активных конфигураций.",
+    portDiameter: "Порт Ø",
+    ports: "Порты",
+    power: "Мощность",
+    requiredFieldsMissing: "Файл не содержит обязательные поля Fs, Qts, Vas, Sd, Re.",
+    reset: "Сбросить",
+    resizeConfigPanel: "Изменить ширину панели конфигураций",
+    resizeDriverPanel: "Изменить ширину панели динамиков",
+    table: {
+      design: "Конфигурация",
+      excursion: "Ход",
+      gd: "GD 30 / 40",
+      peak: "Пик",
+      port: "Порт",
+      tune: "Настройка",
+      vb: "Vb",
+      zmin: "Zmin",
+    },
+    type: "Тип",
+  },
+  en: {
+    add: "Add",
+    activeCount: (active: number, total?: number) =>
+      total === undefined ? `${active} active` : `${active} active / ${total}`,
+    appSubtitle: "T/S enclosure workbench",
+    bandpass: "Bandpass",
+    boxLabels: {
+      sealed: "Closed",
+      vented: "Vented",
+      passive: "Passive radiator",
+      aperiodic: "Aperiodic",
+      infinite: "Infinite baffle",
+      bandpass: "Bandpass",
+    } satisfies Record<BoxKind, string>,
+    chartAria: "Charts",
+    chartTabs: {
+      response: "Response",
+      excursion: "Excursion",
+      groupDelay: "Group delay",
+      step: "Step",
+      phase: "Phase",
+      impedance: "Impedance",
+      port: "Port",
+    } satisfies Record<ChartTab, string>,
+    chartTitles: {
+      response: "Frequency response",
+      excursion: "Cone excursion",
+      groupDelay: "Group delay",
+      step: "Step response",
+      phase: "Phase",
+      impedance: "Impedance",
+      port: "Port velocity",
+    } satisfies Record<ChartTab, string>,
+    configs: "Configurations",
+    delete: "Delete",
+    design: "Design",
+    drivers: "Drivers",
+    duplicate: "Duplicate",
+    excursion: "Excursion",
+    exportJson: "Export JSON",
+    importError: "Import error",
+    imported: (count: number) => `Imported: ${count}`,
+    importJsonCsv: "Import JSON/CSV",
+    inactivePrefix: "Inactive - ",
+    language: "Language",
+    metrics: "Metrics",
+    model: "Model",
+    noActiveDesigns: "No active configurations.",
+    portDiameter: "Port Ø",
+    ports: "Ports",
+    power: "Power",
+    requiredFieldsMissing: "File must contain Fs, Qts, Vas, Sd, and Re.",
+    reset: "Reset",
+    resizeConfigPanel: "Resize configuration panel",
+    resizeDriverPanel: "Resize driver panel",
+    table: {
+      design: "Design",
+      excursion: "Excursion",
+      gd: "GD 30 / 40",
+      peak: "Peak",
+      port: "Port",
+      tune: "Tune",
+      vb: "Vb",
+      zmin: "Zmin",
+    },
+    type: "Type",
+  },
+} as const;
+
+type UiText = (typeof UI_TEXT)[Language];
 
 function App() {
+  const [language, setLanguage] = useState<Language>(() => loadLanguage());
   const [drivers, setDrivers] = useState<SpeakerDriver[]>(() => loadDrivers());
   const [selectedDriverId, setSelectedDriverId] = useState(() => drivers[0]?.id ?? "");
   const selectedDriver = drivers.find((driver) => driver.id === selectedDriverId) ?? drivers[0];
@@ -113,6 +239,12 @@ function App() {
   );
   const [resizeState, setResizeState] = useState<ResizeState | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const text = UI_TEXT[language];
+
+  useEffect(() => {
+    localStorage.setItem(LANGUAGE_STORAGE_KEY, language);
+    document.documentElement.lang = language;
+  }, [language]);
 
   useEffect(() => {
     localStorage.setItem(DRIVER_STORAGE_KEY, JSON.stringify(drivers));
@@ -242,14 +374,14 @@ function App() {
       const content = await file.text();
       const imported = parseDriversFromFile(file.name, content);
       if (imported.length === 0) {
-        setStatus("Файл не содержит обязательные поля Fs, Qts, Vas, Sd, Re.");
+        setStatus(text.requiredFieldsMissing);
         return;
       }
       setDrivers((current) => [...current, ...imported]);
       setSelectedDriverId(imported[0].id);
-      setStatus(`Импортировано: ${imported.length}`);
+      setStatus(text.imported(imported.length));
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Ошибка импорта");
+      setStatus(error instanceof Error ? error.message : text.importError);
     }
   }
 
@@ -324,7 +456,7 @@ function App() {
     );
   }
 
-  const chartProps = getChartProps(activeTab, enabledResults, selectedDriver, focusedDesignId);
+  const chartProps = getChartProps(activeTab, enabledResults, selectedDriver, focusedDesignId, text);
   const layoutStyle = {
     "--left-panel-width": `${leftPanelWidth}px`,
     "--right-panel-width": `${rightPanelWidth}px`,
@@ -386,13 +518,25 @@ function App() {
           </div>
           <div>
             <h1>Speaker Builder</h1>
-            <p>T/S enclosure workbench</p>
+            <p>{text.appSubtitle}</p>
           </div>
         </div>
         <div className="topbar-actions">
+          <label className="language-control">
+            <Languages size={18} />
+            <span>{text.language}</span>
+            <select
+              aria-label={text.language}
+              value={language}
+              onChange={(event) => setLanguage(event.target.value as Language)}
+            >
+              <option value="ru">RU</option>
+              <option value="en">EN</option>
+            </select>
+          </label>
           <label className="power-control">
             <Gauge size={18} />
-            <span>Power</span>
+            <span>{text.power}</span>
             <input
               type="number"
               min="0.1"
@@ -402,7 +546,7 @@ function App() {
             />
             <span>W</span>
           </label>
-          <button type="button" className="icon-button" onClick={exportDrivers} title="Export JSON">
+          <button type="button" className="icon-button" onClick={exportDrivers} title={text.exportJson}>
             <Download size={18} />
           </button>
         </div>
@@ -413,7 +557,7 @@ function App() {
           <section className="section">
             <div className="section-title">
               <div>
-                <h2>Динамики</h2>
+                <h2>{text.drivers}</h2>
                 <span>{drivers.length}</span>
               </div>
               <div className="inline-actions">
@@ -421,14 +565,14 @@ function App() {
                   type="button"
                   className="icon-button"
                   onClick={() => fileInputRef.current?.click()}
-                  title="Import JSON/CSV"
+                  title={text.importJsonCsv}
                 >
                   <Upload size={17} />
                 </button>
-                <button type="button" className="icon-button" onClick={addDriver} title="Duplicate">
+                <button type="button" className="icon-button" onClick={addDriver} title={text.duplicate}>
                   <Plus size={17} />
                 </button>
-                <button type="button" className="icon-button" onClick={deleteDriver} title="Delete">
+                <button type="button" className="icon-button" onClick={deleteDriver} title={text.delete}>
                   <Trash2 size={17} />
                 </button>
               </div>
@@ -456,7 +600,7 @@ function App() {
 
           <section className="section">
             <label className="field span-2">
-              <span>Model</span>
+              <span>{text.model}</span>
               <input
                 type="text"
                 value={selectedDriver.name}
@@ -484,7 +628,7 @@ function App() {
 
         <ResizeHandle
           className="workspace-resizer"
-          label="Resize driver panel"
+          label={text.resizeDriverPanel}
           max={LEFT_PANEL_LIMITS.max}
           min={LEFT_PANEL_LIMITS.min}
           value={leftPanelWidth}
@@ -499,15 +643,15 @@ function App() {
                 <h2>{chartProps.title}</h2>
                 <span>{selectedDriver.name}</span>
               </div>
-              <div className="tabs" role="tablist" aria-label="Charts">
+              <div className="tabs" role="tablist" aria-label={text.chartAria}>
                 {chartTabs.map((tab) => (
                   <button
-                    key={tab.id}
+                    key={tab}
                     type="button"
-                    className={activeTab === tab.id ? "active" : ""}
-                    onClick={() => setActiveTab(tab.id)}
+                    className={activeTab === tab ? "active" : ""}
+                    onClick={() => setActiveTab(tab)}
                   >
-                    {tab.label}
+                    {text.chartTabs[tab]}
                   </button>
                 ))}
               </div>
@@ -520,7 +664,7 @@ function App() {
 
               <ResizeHandle
                 className="chart-resizer"
-                label="Resize configuration panel"
+                label={text.resizeConfigPanel}
                 max={RIGHT_PANEL_LIMITS.max}
                 min={RIGHT_PANEL_LIMITS.min}
                 value={rightPanelWidth}
@@ -528,11 +672,11 @@ function App() {
                 onPointerDown={(event) => startResize("right", event)}
               />
 
-              <aside className="config-rail" aria-label="Конфигурации">
+              <aside className="config-rail" aria-label={text.configs}>
                 <div className="config-rail-header">
                   <div>
-                    <h2>Конфигурации</h2>
-                    <span>{enabledResults.length} active / {designs.length}</span>
+                    <h2>{text.configs}</h2>
+                    <span>{text.activeCount(enabledResults.length, designs.length)}</span>
                   </div>
                   <SlidersHorizontal size={18} />
                 </div>
@@ -541,16 +685,16 @@ function App() {
                   <select value={focusedDesignId} onChange={(event) => focusDesign(event.target.value)}>
                     {designs.map((design) => (
                       <option key={design.id} value={design.id}>
-                        {design.enabled ? "" : "Inactive - "}
+                        {design.enabled ? "" : text.inactivePrefix}
                         {design.name}
                       </option>
                     ))}
                   </select>
                   <button type="button" className="text-button" onClick={addDesign}>
                     <Plus size={16} />
-                    Add
+                    {text.add}
                   </button>
-                  <button type="button" className="icon-button" onClick={resetDesigns} title="Reset">
+                  <button type="button" className="icon-button" onClick={resetDesigns} title={text.reset}>
                     <RefreshCw size={16} />
                   </button>
                 </div>
@@ -559,8 +703,10 @@ function App() {
                   {designs.map((design) => (
                     <DesignEditor
                       key={design.id}
+                      boxLabels={text.boxLabels}
                       design={design}
                       focused={design.id === focusedDesignId}
+                      text={text}
                       onChange={(patch) => updateDesign(design.id, patch)}
                       onDuplicate={() => duplicateDesign(design)}
                       onDelete={() => deleteDesign(design.id)}
@@ -574,12 +720,17 @@ function App() {
           <div className="panel metrics-panel">
             <div className="section-title">
               <div>
-                <h2>Метрики</h2>
-                <span>{enabledResults.length} active</span>
+                <h2>{text.metrics}</h2>
+                <span>{text.activeCount(enabledResults.length)}</span>
               </div>
               <Activity size={18} />
             </div>
-            <MetricsTable focusedDesignId={focusedDesignId} results={enabledResults} />
+            <MetricsTable
+              boxLabels={text.boxLabels}
+              focusedDesignId={focusedDesignId}
+              results={enabledResults}
+              text={text}
+            />
             {allWarnings.length > 0 ? (
               <div className="warning-strip">
                 {allWarnings.slice(0, 5).map((warning) => (
@@ -631,14 +782,18 @@ function ResizeHandle({
 }
 
 function DesignEditor({
+  boxLabels,
   design,
   focused,
+  text,
   onChange,
   onDuplicate,
   onDelete,
 }: {
+  boxLabels: Record<BoxKind, string>;
   design: BoxDesign;
   focused: boolean;
+  text: UiText;
   onChange: (patch: Partial<BoxDesign>) => void;
   onDuplicate: () => void;
   onDelete: () => void;
@@ -663,16 +818,16 @@ function DesignEditor({
           value={design.name}
           onChange={(event) => onChange({ name: event.target.value })}
         />
-        <button type="button" className="icon-button" onClick={onDuplicate} title="Duplicate">
+        <button type="button" className="icon-button" onClick={onDuplicate} title={text.duplicate}>
           <Copy size={16} />
         </button>
-        <button type="button" className="icon-button" onClick={onDelete} title="Delete">
+        <button type="button" className="icon-button" onClick={onDelete} title={text.delete}>
           <Trash2 size={16} />
         </button>
       </div>
       <div className="design-grid">
         <label className="field">
-          <span>Type</span>
+          <span>{text.type}</span>
           <select
             value={design.kind}
             onChange={(event) => onChange({ kind: event.target.value as BoxKind })}
@@ -684,7 +839,7 @@ function DesignEditor({
             ))}
           </select>
         </label>
-        <NumberField label="Vb" unit="L" value={design.vbLiters} step="0.1" onChange={(vbLiters) => onChange({ vbLiters })} />
+        <NumberField label={text.table.vb} unit="L" value={design.vbLiters} step="0.1" onChange={(vbLiters) => onChange({ vbLiters })} />
         {hasTuning ? (
           <NumberField label="Fb" unit="Hz" value={design.fbHz ?? 30} step="0.1" onChange={(fbHz) => onChange({ fbHz })} />
         ) : null}
@@ -694,14 +849,14 @@ function DesignEditor({
         {hasPort ? (
           <>
             <NumberField
-              label="Port Ø"
+              label={text.portDiameter}
               unit="cm"
               value={design.portDiameterCm ?? 7}
               step="0.1"
               onChange={(portDiameterCm) => onChange({ portDiameterCm })}
             />
             <NumberField
-              label="Ports"
+              label={text.ports}
               unit=""
               value={design.portCount ?? 1}
               step="1"
@@ -747,14 +902,18 @@ function NumberField({
 }
 
 function MetricsTable({
+  boxLabels,
   focusedDesignId,
   results,
+  text,
 }: {
+  boxLabels: Record<BoxKind, string>;
   focusedDesignId: string;
   results: SimulationResult[];
+  text: UiText;
 }) {
   if (results.length === 0) {
-    return <div className="empty-state">Нет активных конфигураций.</div>;
+    return <div className="empty-state">{text.noActiveDesigns}</div>;
   }
 
   return (
@@ -762,15 +921,15 @@ function MetricsTable({
       <table className="metrics-table">
         <thead>
           <tr>
-            <th>Design</th>
-            <th>Vb</th>
-            <th>Tune</th>
+            <th>{text.table.design}</th>
+            <th>{text.table.vb}</th>
+            <th>{text.table.tune}</th>
             <th>F3 / F6</th>
-            <th>Peak</th>
-            <th>GD 30 / 40</th>
-            <th>Excursion</th>
-            <th>Port</th>
-            <th>Zmin</th>
+            <th>{text.table.peak}</th>
+            <th>{text.table.gd}</th>
+            <th>{text.table.excursion}</th>
+            <th>{text.table.port}</th>
+            <th>{text.table.zmin}</th>
           </tr>
         </thead>
         <tbody>
@@ -914,6 +1073,7 @@ function getChartProps(
   results: SimulationResult[],
   driver: SpeakerDriver,
   focusedDesignId: string,
+  text: UiText,
 ): Parameters<typeof LineChart>[0] {
   const base = {
     xDomain: [10, 500] as [number, number],
@@ -925,7 +1085,7 @@ function getChartProps(
   if (tab === "response") {
     return {
       ...base,
-      title: "АЧХ",
+      title: text.chartTitles.response,
       yLabel: "dB",
       yDomain: [-36, 9],
       referenceLines: [
@@ -941,7 +1101,7 @@ function getChartProps(
     const max = Math.max(driver.xmaxMm ?? 0, ...points.map((point) => point.y), 1);
     return {
       ...base,
-      title: "Ход диффузора",
+      title: text.chartTitles.excursion,
       yLabel: "mm",
       yDomain: [0, niceCeil(max * 1.18)],
       referenceLines: driver.xmaxMm ? [{ y: driver.xmaxMm, label: "Xmax" }] : [],
@@ -953,7 +1113,7 @@ function getChartProps(
     const max = Math.max(...points.map((point) => point.y), 12);
     return {
       ...base,
-      title: "Group delay",
+      title: text.chartTitles.groupDelay,
       yLabel: "ms",
       yDomain: [0, niceCeil(max * 1.12)],
       series: toSeriesList(results, "groupDelayMs", focusedDesignId),
@@ -962,7 +1122,7 @@ function getChartProps(
   if (tab === "step") {
     return {
       ...base,
-      title: "Step response",
+      title: text.chartTitles.step,
       yLabel: "norm",
       xScale: "linear",
       xDomain: [0, 250],
@@ -976,7 +1136,7 @@ function getChartProps(
     const domain = paddedDomain(points.map((point) => point.y), [-360, 90]);
     return {
       ...base,
-      title: "Фаза",
+      title: text.chartTitles.phase,
       yLabel: "deg",
       yDomain: domain,
       series: toSeriesList(results, "phaseDeg", focusedDesignId),
@@ -987,7 +1147,7 @@ function getChartProps(
     const max = Math.max(...points.map((point) => point.y), driver.reOhm * 2);
     return {
       ...base,
-      title: "Импеданс",
+      title: text.chartTitles.impedance,
       yLabel: "Ω",
       yDomain: [0, niceCeil(max * 1.1)],
       series: toSeriesList(results, "impedanceOhm", focusedDesignId),
@@ -997,7 +1157,7 @@ function getChartProps(
   const max = Math.max(...points.map((point) => point.y), 0.18);
   return {
     ...base,
-    title: "Скорость в порту",
+    title: text.chartTitles.port,
     yLabel: "Mach",
     yDomain: [0, Math.max(0.2, niceCeil(max * 1.15))],
     referenceLines: [
@@ -1058,6 +1218,14 @@ function loadDrivers(): SpeakerDriver[] {
     return Array.isArray(parsed) && parsed.length > 0 ? parsed : PRESET_DRIVERS;
   } catch {
     return PRESET_DRIVERS;
+  }
+}
+
+function loadLanguage(): Language {
+  try {
+    return localStorage.getItem(LANGUAGE_STORAGE_KEY) === "en" ? "en" : "ru";
+  } catch {
+    return "ru";
   }
 }
 
