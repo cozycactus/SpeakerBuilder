@@ -540,6 +540,101 @@ h2 {
   font-size: 13px;
 }
 
+.optimizer-section {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #e7ecf2;
+}
+
+.optimizer-header {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) minmax(180px, 260px);
+  align-items: end;
+  gap: 12px;
+}
+
+.optimizer-header > div:first-child {
+  display: grid;
+  gap: 2px;
+}
+
+.optimizer-header h2,
+.optimizer-card h3 {
+  margin: 0;
+}
+
+.optimizer-header span,
+.optimizer-card-head span {
+  color: #66758a;
+  font-size: 13px;
+}
+
+.optimizer-goal {
+  gap: 6px;
+}
+
+.optimizer-list {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(220px, 1fr));
+  gap: 10px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.optimizer-card {
+  display: grid;
+  gap: 10px;
+  min-width: 220px;
+  border: 1px solid #dce3ec;
+  border-radius: 8px;
+  background: #fbfcfd;
+  padding: 12px;
+}
+
+.optimizer-card.best {
+  border-color: #0f766e;
+  background: #f1fbf8;
+}
+
+.optimizer-card-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
+}
+
+.optimizer-card-head > div:first-child {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.optimizer-card-head .text-button {
+  height: 32px;
+  padding: 0 9px;
+  font-size: 12px;
+}
+
+.optimizer-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.optimizer-metrics span {
+  min-width: 0;
+  border-radius: 6px;
+  background: #eef2f6;
+  color: #344155;
+  padding: 6px 7px;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .empty-state {
   border: 1px dashed #cbd5e1;
   border-radius: 8px;
@@ -679,17 +774,26 @@ h2 {
   .config-rail {
     max-height: none;
   }
+
+  .optimizer-list {
+    grid-template-columns: repeat(5, minmax(220px, 280px));
+  }
 }
 
 @media (max-width: 720px) {
   .topbar,
   .section-title,
-  .config-rail-header {
+  .config-rail-header,
+  .optimizer-header {
     align-items: flex-start;
     flex-direction: column;
   }
 
   .chart-header {
+    grid-template-columns: 1fr;
+  }
+
+  .optimizer-header {
     grid-template-columns: 1fr;
   }
 
@@ -718,7 +822,8 @@ h2 {
 
   .design-toolbar select,
   .language-control,
-  .power-control {
+  .power-control,
+  .optimizer-goal {
     width: 100%;
   }
 

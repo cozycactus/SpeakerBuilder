@@ -8,6 +8,7 @@ import {
   RefreshCw,
   SlidersHorizontal,
   Speaker,
+  Target,
   Trash2,
   Upload,
 } from "lucide-react";
@@ -35,6 +36,7 @@ import {
 
 type ChartTab = "response" | "excursion" | "groupDelay" | "step" | "phase" | "impedance" | "port";
 type Language = "ru" | "en";
+type OptimizerGoal = "balanced" | "flat" | "deep" | "compact" | "transient" | "output";
 type ScaleMode = "linear" | "log";
 type ResizeTarget = "left" | "right";
 
@@ -50,6 +52,14 @@ interface ResizeState {
   target: ResizeTarget;
   startX: number;
   startWidth: number;
+}
+
+interface OptimizerCandidate {
+  id: string;
+  design: BoxDesign;
+  flatnessDb: number;
+  result: SimulationResult;
+  score: number;
 }
 
 const DRIVER_STORAGE_KEY = "speaker-builder-drivers-v1";
@@ -81,6 +91,7 @@ const driverFields: Array<{
 ];
 
 const chartTabs: ChartTab[] = ["response", "excursion", "groupDelay", "step", "phase", "impedance", "port"];
+const optimizerGoals: OptimizerGoal[] = ["balanced", "flat", "deep", "compact", "transient", "output"];
 
 const UI_TEXT = {
   ru: {
@@ -157,6 +168,30 @@ const UI_TEXT = {
     reset: "Сбросить",
     resizeConfigPanel: "Изменить ширину панели конфигураций",
     resizeDriverPanel: "Изменить ширину панели динамиков",
+    optimizer: {
+      apply: "Применить",
+      best: "Лучший",
+      f3: "F3",
+      flatness: "Неровн.",
+      gd: "ГЗ",
+      goal: "Цель",
+      goals: {
+        balanced: "Баланс",
+        flat: "Ровная АЧХ",
+        deep: "Глубокий бас",
+        compact: "Компактно",
+        transient: "Быстрый отклик",
+        output: "Запас по мощности",
+      } satisfies Record<OptimizerGoal, string>,
+      noCandidates: "Нет вариантов",
+      peak: "Пик",
+      port: "Порт",
+      score: "Оценка",
+      title: "Оптимизатор",
+      tune: "Настройка",
+      volume: "Vb",
+      appliedName: (goal: string, kind: string) => `Оптимум: ${goal} / ${kind}`,
+    },
     notes: {
       highQts: "Динамику с высоким Qts может лучше подойти закрытый или апериодический корпус",
       highVentAirSpeed: (mach: string) => `Высокая скорость воздуха в порту: Mach ${mach}`,
@@ -236,6 +271,30 @@ const UI_TEXT = {
     reset: "Reset",
     resizeConfigPanel: "Resize configuration panel",
     resizeDriverPanel: "Resize driver panel",
+    optimizer: {
+      apply: "Apply",
+      best: "Best",
+      f3: "F3",
+      flatness: "Flatness",
+      gd: "GD",
+      goal: "Goal",
+      goals: {
+        balanced: "Balanced",
+        flat: "Flat response",
+        deep: "Deep bass",
+        compact: "Compact",
+        transient: "Fast transient",
+        output: "Output headroom",
+      } satisfies Record<OptimizerGoal, string>,
+      noCandidates: "No candidates",
+      peak: "Peak",
+      port: "Port",
+      score: "Score",
+      title: "Optimizer",
+      tune: "Tune",
+      volume: "Vb",
+      appliedName: (goal: string, kind: string) => `Optimized: ${goal} / ${kind}`,
+    },
     notes: {
       highQts: "High Qts driver may prefer sealed or aperiodic loading",
       highVentAirSpeed: (mach: string) => `High vent air speed: Mach ${mach}`,
@@ -269,6 +328,7 @@ function App() {
   const [designs, setDesigns] = useState<BoxDesign[]>(() => createDefaultDesigns(selectedDriver));
   const [focusedDesignId, setFocusedDesignId] = useState("");
   const [activeTab, setActiveTab] = useState<ChartTab>("response");
+  const [optimizerGoal, setOptimizerGoal] = useState<OptimizerGoal>("balanced");
   const [powerW, setPowerW] = useState(25);
   const [status, setStatus] = useState("");
   const [leftPanelWidth, setLeftPanelWidth] = useState(() =>
@@ -366,6 +426,10 @@ function App() {
         .filter((design) => design.enabled)
         .map((design) => simulateDesign(selectedDriver, design, { powerW })),
     [designs, powerW, selectedDriver],
+  );
+  const optimizerCandidates = useMemo(
+    () => optimizeDesigns(selectedDriver, powerW, optimizerGoal),
+    [optimizerGoal, powerW, selectedDriver],
   );
   const allWarnings = enabledResults.flatMap((result) =>
     result.metrics.notes.map((note) =>
@@ -490,6 +554,23 @@ function App() {
     const nextDesigns = createDefaultDesigns(selectedDriver);
     setDesigns(nextDesigns);
     setFocusedDesignId(nextDesigns.find((design) => design.enabled)?.id ?? nextDesigns[0]?.id ?? "");
+  }
+
+  function applyOptimizerCandidate(candidate: OptimizerCandidate) {
+    const next: BoxDesign = {
+      ...candidate.design,
+      id: newId("optimized"),
+      name: text.optimizer.appliedName(
+        text.optimizer.goals[optimizerGoal],
+        text.boxLabels[candidate.design.kind],
+      ),
+      color: DESIGN_COLORS[designs.length % DESIGN_COLORS.length],
+      enabled: true,
+    };
+
+    setDesigns((current) => [...current, next]);
+    setFocusedDesignId(next.id);
+    setActiveTab("response");
   }
 
   function focusDesign(id: string) {
@@ -768,6 +849,13 @@ function App() {
               </div>
               <Activity size={18} />
             </div>
+            <OptimizerPanel
+              candidates={optimizerCandidates}
+              goal={optimizerGoal}
+              text={text}
+              onApply={applyOptimizerCandidate}
+              onGoalChange={setOptimizerGoal}
+            />
             <MetricsTable
               boxLabels={text.boxLabels}
               focusedDesignId={focusedDesignId}
@@ -941,6 +1029,73 @@ function NumberField({
         onChange={(event) => onChange(Number.parseFloat(event.target.value) || 0)}
       />
     </label>
+  );
+}
+
+function OptimizerPanel({
+  candidates,
+  goal,
+  text,
+  onApply,
+  onGoalChange,
+}: {
+  candidates: OptimizerCandidate[];
+  goal: OptimizerGoal;
+  text: UiText;
+  onApply: (candidate: OptimizerCandidate) => void;
+  onGoalChange: (goal: OptimizerGoal) => void;
+}) {
+  const best = candidates[0];
+
+  return (
+    <section className="optimizer-section">
+      <div className="optimizer-header">
+        <div>
+          <h2>{text.optimizer.title}</h2>
+          <span>
+            {best
+              ? `${text.optimizer.best}: ${text.optimizer.score} ${fmt(best.score, 0)}`
+              : text.optimizer.noCandidates}
+          </span>
+        </div>
+        <label className="field optimizer-goal">
+          <span>{text.optimizer.goal}</span>
+          <select value={goal} onChange={(event) => onGoalChange(event.target.value as OptimizerGoal)}>
+            {optimizerGoals.map((item) => (
+              <option key={item} value={item}>
+                {text.optimizer.goals[item]}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+
+      <div className="optimizer-list">
+        {candidates.slice(0, 5).map((candidate, index) => (
+          <article className={`optimizer-card ${index === 0 ? "best" : ""}`} key={candidate.id}>
+            <div className="optimizer-card-head">
+              <div>
+                <h3>{text.boxLabels[candidate.design.kind]}</h3>
+                <span>{`${text.optimizer.score} ${fmt(candidate.score, 0)}`}</span>
+              </div>
+              <button type="button" className="text-button" onClick={() => onApply(candidate)}>
+                <Target size={16} />
+                {text.optimizer.apply}
+              </button>
+            </div>
+            <div className="optimizer-metrics">
+              <span>{`${text.optimizer.volume} ${fmt(candidate.design.vbLiters, 1)} L`}</span>
+              <span>{`${text.optimizer.tune} ${formatTune(candidate.result, text)}`}</span>
+              <span>{`${text.optimizer.f3} ${formatHz(candidate.result.metrics.f3Hz)}`}</span>
+              <span>{`${text.optimizer.peak} ${fmt(candidate.result.metrics.peakDb, 1)} dB`}</span>
+              <span>{`${text.optimizer.gd} ${fmt(candidate.result.metrics.groupDelay40Ms, 1)} ms`}</span>
+              <span>{`${text.optimizer.flatness} ${fmt(candidate.flatnessDb, 1)} dB`}</span>
+              <span>{`${text.optimizer.port} ${formatPort(candidate.result)}`}</span>
+            </div>
+          </article>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -1268,6 +1423,247 @@ function translateNote(note: string, text: UiText): string {
   }
 
   return note;
+}
+
+function optimizeDesigns(
+  driver: SpeakerDriver,
+  powerW: number,
+  goal: OptimizerGoal,
+): OptimizerCandidate[] {
+  return createOptimizerDesigns(driver)
+    .map((design) => {
+      const result = simulateDesign(driver, design, { powerW });
+      const flatnessDb = responseFlatness(result.responseDb);
+
+      return {
+        id: design.id,
+        design,
+        flatnessDb,
+        result,
+        score: scoreOptimizerCandidate(result, driver, goal, flatnessDb),
+      };
+    })
+    .sort((left, right) => right.score - left.score)
+    .slice(0, 8);
+}
+
+function createOptimizerDesigns(driver: SpeakerDriver): BoxDesign[] {
+  const designs: BoxDesign[] = [];
+  const addDesign = (design: Omit<BoxDesign, "color" | "enabled">) => {
+    designs.push({
+      ...design,
+      color: DESIGN_COLORS[designs.length % DESIGN_COLORS.length],
+      enabled: true,
+      vbLiters: roundTo(Math.max(0.5, design.vbLiters), 1),
+      fbHz: design.fbHz ? roundTo(design.fbHz, 1) : undefined,
+      portDiameterCm: design.portDiameterCm ? roundTo(design.portDiameterCm, 1) : undefined,
+    });
+  };
+
+  for (const qtc of [0.58, 0.65, 0.707, 0.8, 0.9, 1]) {
+    addDesign({
+      id: `opt-sealed-${qtc}`,
+      name: `Optimized sealed Qtc ${qtc.toFixed(2)}`,
+      kind: "sealed",
+      vbLiters: volumeForQtc(driver, qtc),
+    });
+  }
+
+  for (const qtc of [0.68, 0.78, 0.88]) {
+    for (const ql of [1.3, 1.8]) {
+      addDesign({
+        id: `opt-aperiodic-${qtc}-${ql}`,
+        name: `Optimized aperiodic Qtc ${qtc.toFixed(2)}`,
+        kind: "aperiodic",
+        vbLiters: volumeForQtc(driver, qtc) * 0.72,
+        ql,
+      });
+    }
+  }
+
+  const baseVolumeFactor = optimizerVentedBaseVolumeFactor(driver.qts);
+  const pistonDiameterCm = Math.sqrt((Math.max(1, driver.sdCm2) * 4) / Math.PI);
+  const basePortCm = clampNumber(roundTo(pistonDiameterCm * 0.32, 1), 4, 16);
+  const portOptions = [
+    { diameterCm: basePortCm, count: 1 },
+    { diameterCm: clampNumber(roundTo(basePortCm * 1.25, 1), 4, 18), count: 1 },
+    { diameterCm: basePortCm, count: 2 },
+  ];
+
+  for (const volumeFactor of [0.62, 0.82, 1.05, 1.34, 1.72]) {
+    for (const fbRatio of [0.64, 0.76, 0.88, 1, 1.12]) {
+      for (const port of portOptions) {
+        addDesign({
+          id: `opt-vented-${volumeFactor}-${fbRatio}-${port.diameterCm}-${port.count}`,
+          name: "Optimized vented",
+          kind: "vented",
+          vbLiters: driver.vasL * baseVolumeFactor * volumeFactor,
+          fbHz: driver.fsHz * fbRatio,
+          ql: 7,
+          portDiameterCm: port.diameterCm,
+          portCount: port.count,
+        });
+      }
+    }
+  }
+
+  for (const volumeFactor of [0.85, 1.25, 1.7]) {
+    for (const fbRatio of [0.64, 0.78, 0.92]) {
+      addDesign({
+        id: `opt-passive-${volumeFactor}-${fbRatio}`,
+        name: "Optimized passive radiator",
+        kind: "passive",
+        vbLiters: driver.vasL * baseVolumeFactor * volumeFactor,
+        fbHz: driver.fsHz * fbRatio,
+        ql: 9,
+        portDiameterCm: clampNumber(roundTo(basePortCm * 1.7, 1), 6, 22),
+        portCount: 1,
+      });
+    }
+  }
+
+  return designs;
+}
+
+function scoreOptimizerCandidate(
+  result: SimulationResult,
+  driver: SpeakerDriver,
+  goal: OptimizerGoal,
+  flatnessDb: number,
+): number {
+  const metrics = result.metrics;
+  const targetF3 = Math.max(18, driver.fsHz * optimizerF3TargetFactor(goal));
+  const f3Hz = metrics.f3Hz ?? 500;
+  const f3Penalty = Math.max(0, (f3Hz - targetF3) / targetF3) * 45;
+  const flatPenalty = flatnessDb * 9 + Math.max(0, metrics.peakDb) * 5;
+  const volumePenalty = clampNumber((result.design.vbLiters / Math.max(1, driver.vasL)) * 22, 0, 70);
+  const groupDelayMs = metrics.groupDelay40Ms ?? metrics.groupDelay30Ms ?? 0;
+  const groupDelayPenalty = clampNumber(groupDelayMs * 0.9, 0, 70);
+  const excursionPenalty = driver.xmaxMm
+    ? Math.max(0, metrics.maxExcursionMm / driver.xmaxMm - 0.95) * 70
+    : 0;
+  const portPenalty = metrics.maxPortMach !== undefined
+    ? Math.max(0, metrics.maxPortMach - 0.14) * 260
+    : 0;
+  const portLengthPenalty = metrics.portLengthCm !== undefined && metrics.portLengthCm <= 1
+    ? 22
+    : metrics.portLengthCm !== undefined && metrics.portLengthCm < 4
+      ? 8
+      : 0;
+  const limitPenalty = excursionPenalty + portPenalty + portLengthPenalty;
+  const weights = optimizerWeights(goal);
+  const weightedPenalty =
+    f3Penalty * weights.f3 +
+    flatPenalty * weights.flat +
+    volumePenalty * weights.volume +
+    groupDelayPenalty * weights.groupDelay +
+    limitPenalty * weights.limits +
+    optimizerKindPenalty(result.design.kind, goal);
+
+  return clampNumber(100 - weightedPenalty, 0, 100);
+}
+
+function responseFlatness(points: Point[]): number {
+  const passband = points
+    .filter((point) => point.x >= 45 && point.x <= 220 && Number.isFinite(point.y))
+    .map((point) => point.y);
+  const values = passband.length > 0 ? passband : points.map((point) => point.y);
+  const rms = Math.sqrt(values.reduce((sum, value) => sum + value * value, 0) / Math.max(1, values.length));
+  const peak = values.reduce((max, value) => Math.max(max, Math.abs(value)), 0);
+
+  return rms * 0.75 + peak * 0.25;
+}
+
+function optimizerWeights(goal: OptimizerGoal): {
+  f3: number;
+  flat: number;
+  groupDelay: number;
+  limits: number;
+  volume: number;
+} {
+  if (goal === "flat") {
+    return { f3: 0.12, flat: 0.52, groupDelay: 0.13, limits: 0.15, volume: 0.08 };
+  }
+  if (goal === "deep") {
+    return { f3: 0.55, flat: 0.12, groupDelay: 0.05, limits: 0.2, volume: 0.08 };
+  }
+  if (goal === "compact") {
+    return { f3: 0.12, flat: 0.18, groupDelay: 0.08, limits: 0.1, volume: 0.52 };
+  }
+  if (goal === "transient") {
+    return { f3: 0.12, flat: 0.2, groupDelay: 0.46, limits: 0.1, volume: 0.12 };
+  }
+  if (goal === "output") {
+    return { f3: 0.18, flat: 0.12, groupDelay: 0.05, limits: 0.6, volume: 0.05 };
+  }
+
+  return { f3: 0.28, flat: 0.27, groupDelay: 0.12, limits: 0.15, volume: 0.18 };
+}
+
+function optimizerF3TargetFactor(goal: OptimizerGoal): number {
+  if (goal === "deep") {
+    return 0.62;
+  }
+  if (goal === "compact") {
+    return 1.05;
+  }
+  if (goal === "transient" || goal === "flat") {
+    return 0.92;
+  }
+  if (goal === "output") {
+    return 0.8;
+  }
+
+  return 0.85;
+}
+
+function optimizerKindPenalty(kind: BoxKind, goal: OptimizerGoal): number {
+  if (goal === "transient" && (kind === "vented" || kind === "passive" || kind === "bandpass")) {
+    return kind === "bandpass" ? 14 : 8;
+  }
+  if (goal === "deep" && (kind === "sealed" || kind === "aperiodic")) {
+    return 4;
+  }
+  if (goal === "output" && kind === "sealed") {
+    return 4;
+  }
+  if (goal === "compact" && kind === "bandpass") {
+    return 8;
+  }
+
+  return 0;
+}
+
+function volumeForQtc(driver: SpeakerDriver, qtc: number): number {
+  const ratio = Math.pow(qtc / Math.max(0.05, driver.qts), 2) - 1;
+  if (ratio <= 0) {
+    return driver.vasL * 4;
+  }
+
+  return driver.vasL / ratio;
+}
+
+function optimizerVentedBaseVolumeFactor(qts: number): number {
+  return clampNumber(12 * Math.pow(clampNumber(qts, 0.18, 0.65), 2.4), 0.25, 1.7);
+}
+
+function formatTune(result: SimulationResult, text: UiText): string {
+  if (result.design.fbHz) {
+    return `Fb ${fmt(result.design.fbHz, 1)} Hz`;
+  }
+  if (result.metrics.qtc) {
+    return `Qtc ${fmt(result.metrics.qtc, 2)}`;
+  }
+
+  return text.boxLabels[result.design.kind];
+}
+
+function formatPort(result: SimulationResult): string {
+  if (result.metrics.maxPortMach === undefined) {
+    return "—";
+  }
+
+  return `M ${fmt(result.metrics.maxPortMach, 2)} / ${fmt(result.metrics.portLengthCm, 1)} cm`;
 }
 
 function pathForSeries(
