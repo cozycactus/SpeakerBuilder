@@ -223,6 +223,81 @@ h2 {
   gap: 8px;
 }
 
+.movable-panel {
+  min-width: 0;
+}
+
+.panel-drag-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin-bottom: 10px;
+  color: #66758a;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.panel-drag-handle {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid #d5dee8;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #64748b;
+  cursor: grab;
+}
+
+.panel-drag-handle:active {
+  cursor: grabbing;
+}
+
+.panel-drag-handle:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+}
+
+.panel-drag-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.panel-order-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.panel-order-actions button {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid #d5dee8;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #344155;
+}
+
+.panel-order-actions button:hover:not(:disabled),
+.panel-drag-handle:hover {
+  border-color: #95a7bb;
+  background: #f7f9fb;
+}
+
+.panel-order-actions button:disabled {
+  cursor: not-allowed;
+  color: #a7b3c2;
+  opacity: 0.55;
+}
+
 .icon-button,
 .text-button,
 .tabs button {

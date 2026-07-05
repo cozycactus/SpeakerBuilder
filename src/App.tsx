@@ -1,5 +1,7 @@
 import {
   Activity,
+  ArrowDown,
+  ArrowUp,
   Copy,
   Download,
   ExternalLink,
@@ -7,6 +9,7 @@ import {
   FileCheck2,
   Filter,
   Gauge,
+  GripVertical,
   Languages,
   Plus,
   RefreshCw,
@@ -21,8 +24,10 @@ import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import type {
   CSSProperties,
   ChangeEvent,
+  DragEvent as ReactDragEvent,
   KeyboardEvent as ReactKeyboardEvent,
   PointerEvent as ReactPointerEvent,
+  ReactNode,
   Ref,
 } from "react";
 import {
@@ -50,6 +55,9 @@ type ChartTab = "response" | "spl" | "excursion" | "groupDelay" | "step" | "phas
 type Language = "ru" | "en";
 type ScaleMode = "linear" | "log";
 type ResizeTarget = "left" | "right";
+type SidebarPanelId = "drivers" | "model";
+type ChartToolPanelId = "corrections" | "measurements" | "compare";
+type PanelArea = "sidebar" | "chartTools";
 type AnalysisSnapshot = {
   driver: SpeakerDriver;
   designs: BoxDesign[];
@@ -165,14 +173,23 @@ interface ResizeState {
   startWidth: number;
 }
 
+interface PanelDragState {
+  area: PanelArea;
+  id: string;
+}
+
 const DRIVER_STORAGE_KEY = "speaker-builder-drivers-v1";
 const LANGUAGE_STORAGE_KEY = "speaker-builder-language-v1";
 const PROJECT_STORAGE_KEY = "speaker-builder-project-v1";
 const LEFT_PANEL_STORAGE_KEY = "speaker-builder-left-panel-width-v1";
 const RIGHT_PANEL_STORAGE_KEY = "speaker-builder-right-panel-width-v1";
+const SIDEBAR_PANEL_ORDER_STORAGE_KEY = "speaker-builder-sidebar-panel-order-v1";
+const CHART_PANEL_ORDER_STORAGE_KEY = "speaker-builder-chart-panel-order-v1";
 const LEFT_PANEL_LIMITS = { min: 240, max: 540, defaultValue: 320 };
 const RIGHT_PANEL_LIMITS = { min: 260, max: 560, defaultValue: 340 };
 const RESIZE_KEY_STEP = 16;
+const DEFAULT_SIDEBAR_PANEL_ORDER: SidebarPanelId[] = ["drivers", "model"];
+const DEFAULT_CHART_PANEL_ORDER: ChartToolPanelId[] = ["corrections", "measurements", "compare"];
 const DEFAULT_LIBRARY_FILTERS: LibraryFilters = {
   query: "",
   status: "all",
@@ -370,6 +387,11 @@ const UI_TEXT = {
     },
     portWidth: "Ширина",
     ports: "Порты",
+    panelLayout: {
+      drag: "Перетащить панель",
+      moveDown: "Ниже",
+      moveUp: "Выше",
+    },
     power: "Мощность",
     projectImported: "Проект загружен",
     requiredFieldsMissing: "Файл не содержит обязательные поля Fs, Qts, Vas, Sd, Re.",
@@ -587,6 +609,11 @@ const UI_TEXT = {
     },
     portWidth: "Width",
     ports: "Ports",
+    panelLayout: {
+      drag: "Drag panel",
+      moveDown: "Move down",
+      moveUp: "Move up",
+    },
     power: "Power",
     projectImported: "Project loaded",
     requiredFieldsMissing: "File must contain Fs, Qts, Vas, Sd, and Re.",
@@ -702,12 +729,19 @@ function App() {
   const [rightPanelWidth, setRightPanelWidth] = useState(() =>
     loadPanelWidth(RIGHT_PANEL_STORAGE_KEY, RIGHT_PANEL_LIMITS),
   );
+  const [sidebarPanelOrder, setSidebarPanelOrder] = useState<SidebarPanelId[]>(() =>
+    loadPanelOrder(SIDEBAR_PANEL_ORDER_STORAGE_KEY, DEFAULT_SIDEBAR_PANEL_ORDER),
+  );
+  const [chartPanelOrder, setChartPanelOrder] = useState<ChartToolPanelId[]>(() =>
+    loadPanelOrder(CHART_PANEL_ORDER_STORAGE_KEY, DEFAULT_CHART_PANEL_ORDER),
+  );
   const [resizeState, setResizeState] = useState<ResizeState | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const measurementInputRef = useRef<HTMLInputElement>(null);
   const chartSvgRef = useRef<SVGSVGElement>(null);
   const simulationWorkerRef = useRef<Worker | null>(null);
   const simulationRequestIdRef = useRef({ analysis: 0, chart: 0 });
+  const panelDragRef = useRef<PanelDragState | null>(null);
   const text = UI_TEXT[language];
 
   useEffect(() => {
@@ -809,6 +843,14 @@ function App() {
   useEffect(() => {
     localStorage.setItem(RIGHT_PANEL_STORAGE_KEY, String(rightPanelWidth));
   }, [rightPanelWidth]);
+
+  useEffect(() => {
+    localStorage.setItem(SIDEBAR_PANEL_ORDER_STORAGE_KEY, JSON.stringify(sidebarPanelOrder));
+  }, [sidebarPanelOrder]);
+
+  useEffect(() => {
+    localStorage.setItem(CHART_PANEL_ORDER_STORAGE_KEY, JSON.stringify(chartPanelOrder));
+  }, [chartPanelOrder]);
 
   useEffect(() => {
     if (!resizeState) {
@@ -1335,6 +1377,48 @@ function App() {
     );
   }
 
+  function moveSidebarPanel(id: SidebarPanelId, direction: -1 | 1) {
+    setSidebarPanelOrder((current) => movePanelInOrder(current, id, direction));
+  }
+
+  function moveChartPanel(id: ChartToolPanelId, direction: -1 | 1) {
+    setChartPanelOrder((current) => movePanelInOrder(current, id, direction));
+  }
+
+  function startPanelDrag(area: PanelArea, id: string, event: ReactDragEvent<HTMLElement>) {
+    panelDragRef.current = { area, id };
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", `${area}:${id}`);
+  }
+
+  function dragPanelOver(area: PanelArea, event: ReactDragEvent<HTMLElement>) {
+    if (panelDragRef.current?.area !== area) {
+      return;
+    }
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+  }
+
+  function dropSidebarPanel(targetId: SidebarPanelId, event: ReactDragEvent<HTMLElement>) {
+    event.preventDefault();
+    const dragged = panelDragRef.current;
+    panelDragRef.current = null;
+    if (dragged?.area !== "sidebar") {
+      return;
+    }
+    setSidebarPanelOrder((current) => reorderPanelBefore(current, dragged.id as SidebarPanelId, targetId));
+  }
+
+  function dropChartPanel(targetId: ChartToolPanelId, event: ReactDragEvent<HTMLElement>) {
+    event.preventDefault();
+    const dragged = panelDragRef.current;
+    panelDragRef.current = null;
+    if (dragged?.area !== "chartTools") {
+      return;
+    }
+    setChartPanelOrder((current) => reorderPanelBefore(current, dragged.id as ChartToolPanelId, targetId));
+  }
+
   const chartProps = getChartProps(activeTab, chartDisplayResults, deferredSelectedDriver, focusedDesignId, text, powerW, measurementSeries);
   const focusedDesignName = focusedDesign ? displayDesignName(focusedDesign.name, text) : "";
   const chartSubtitle = compareEnabled && focusedDesign
@@ -1343,6 +1427,167 @@ function App() {
   const configStatusText = compareEnabled && focusedDesign
     ? text.compare.focusedConfig(focusedDesignName)
     : text.activeCount(activeDesignCount, designs.length);
+  const sidebarPanelLabels: Record<SidebarPanelId, string> = {
+    drivers: text.drivers,
+    model: text.model,
+  };
+  const chartPanelLabels: Record<ChartToolPanelId, string> = {
+    compare: text.compare.title,
+    corrections: text.corrections.title,
+    measurements: text.measurements.title,
+  };
+
+  function renderSidebarPanel(panelId: SidebarPanelId) {
+    if (panelId === "drivers") {
+      return (
+        <>
+          <div className="section-title">
+            <div>
+              <h2>{text.drivers}</h2>
+              <span>{drivers.length}</span>
+            </div>
+            <div className="inline-actions">
+              <button
+                type="button"
+                className="icon-button"
+                onClick={() => fileInputRef.current?.click()}
+                title={text.importJsonCsv}
+              >
+                <Upload size={17} />
+              </button>
+              <button type="button" className="icon-button" onClick={addDriver} title={text.duplicate}>
+                <Plus size={17} />
+              </button>
+              <button type="button" className="icon-button" onClick={deleteDriver} title={text.delete}>
+                <Trash2 size={17} />
+              </button>
+            </div>
+          </div>
+          <input
+            ref={fileInputRef}
+            className="hidden-input"
+            type="file"
+            accept=".json,.csv,text/csv,application/json"
+            onChange={importDrivers}
+          />
+          <DriverLibraryFilters
+            filters={libraryFilters}
+            text={text}
+            total={drivers.length}
+            visible={filteredDrivers.length}
+            onChange={setLibraryFilters}
+          />
+          <select
+            className="driver-select"
+            value={selectedDriver.id}
+            onChange={(event) => changeSelectedDriver(event.target.value)}
+          >
+            {driverSelectOptions.map((driver) => (
+              <option key={driver.id} value={driver.id}>
+                {displayDriverName(driver, text)}
+              </option>
+            ))}
+          </select>
+          {status ? <div className="status-line">{status}</div> : null}
+          <DriverSourcePanel
+            canReset={Boolean(findPresetForDriver(selectedDriver)?.source)}
+            driver={selectedDriver}
+            text={text}
+            onReset={resetDriverToDatasheet}
+          />
+        </>
+      );
+    }
+
+    return (
+      <>
+        <label className="field span-2">
+          <span>{text.model}</span>
+          <input
+            type="text"
+            value={displayDriverName(selectedDriver, text)}
+            onChange={(event) => updateDriverField("name", event.target.value)}
+          />
+        </label>
+        <div className="driver-grid">
+          {driverFields.map((field) => (
+            <label className="field" key={field.key}>
+              <span>
+                {field.label}
+                {field.unit ? <em>{field.unit}</em> : null}
+              </span>
+              <input
+                type="number"
+                step={field.step}
+                value={String(selectedDriver[field.key] ?? "")}
+                onChange={(event) => updateDriverField(field.key, event.target.value)}
+              />
+            </label>
+          ))}
+        </div>
+        <DriverAnalysisPanel profile={driverProfile} text={text} />
+      </>
+    );
+  }
+
+  function renderChartToolPanel(panelId: ChartToolPanelId) {
+    const index = chartPanelOrder.indexOf(panelId);
+    const dragHandle = (
+      <PanelDragBar
+        canMoveDown={index < chartPanelOrder.length - 1}
+        canMoveUp={index > 0}
+        label={chartPanelLabels[panelId]}
+        text={text}
+        onDragStart={(event) => startPanelDrag("chartTools", panelId, event)}
+        onMoveDown={() => moveChartPanel(panelId, 1)}
+        onMoveUp={() => moveChartPanel(panelId, -1)}
+      />
+    );
+
+    if (panelId === "corrections") {
+      return (
+        <AcousticCorrectionsPanel
+          key={panelId}
+          dragHandle={dragHandle}
+          options={acousticOptions}
+          text={text}
+          onChange={setAcousticOptions}
+          onDragOver={(event) => dragPanelOver("chartTools", event)}
+          onDrop={(event) => dropChartPanel(panelId, event)}
+        />
+      );
+    }
+
+    if (panelId === "measurements") {
+      return (
+        <MeasurementPanel
+          key={panelId}
+          count={measurements.length}
+          dragHandle={dragHandle}
+          text={text}
+          onClear={() => setMeasurements([])}
+          onDragOver={(event) => dragPanelOver("chartTools", event)}
+          onDrop={(event) => dropChartPanel(panelId, event)}
+        />
+      );
+    }
+
+    return (
+      <DriverComparePanel
+        key={panelId}
+        dragHandle={dragHandle}
+        drivers={drivers}
+        enabled={compareEnabled}
+        selectedIds={compareDriverIds}
+        text={text}
+        onEnabledChange={setCompareEnabled}
+        onToggleDriver={toggleCompareDriver}
+        onDragOver={(event) => dragPanelOver("chartTools", event)}
+        onDrop={(event) => dropChartPanel(panelId, event)}
+      />
+    );
+  }
+
   const currentReference = referenceByTab[activeTab];
   const layoutStyle = {
     "--left-panel-width": `${leftPanelWidth}px`,
@@ -1444,90 +1689,22 @@ function App() {
 
       <main className="workspace" style={layoutStyle}>
         <aside className="sidebar panel">
-          <section className="section">
-            <div className="section-title">
-              <div>
-                <h2>{text.drivers}</h2>
-                <span>{drivers.length}</span>
-              </div>
-              <div className="inline-actions">
-                <button
-                  type="button"
-                  className="icon-button"
-                  onClick={() => fileInputRef.current?.click()}
-                  title={text.importJsonCsv}
-                >
-                  <Upload size={17} />
-                </button>
-                <button type="button" className="icon-button" onClick={addDriver} title={text.duplicate}>
-                  <Plus size={17} />
-                </button>
-                <button type="button" className="icon-button" onClick={deleteDriver} title={text.delete}>
-                  <Trash2 size={17} />
-                </button>
-              </div>
-            </div>
-            <input
-              ref={fileInputRef}
-              className="hidden-input"
-              type="file"
-              accept=".json,.csv,text/csv,application/json"
-              onChange={importDrivers}
-            />
-            <DriverLibraryFilters
-              filters={libraryFilters}
+          {sidebarPanelOrder.map((panelId, index) => (
+            <MovablePanel
+              key={panelId}
+              canMoveDown={index < sidebarPanelOrder.length - 1}
+              canMoveUp={index > 0}
+              label={sidebarPanelLabels[panelId]}
               text={text}
-              total={drivers.length}
-              visible={filteredDrivers.length}
-              onChange={setLibraryFilters}
-            />
-            <select
-              className="driver-select"
-              value={selectedDriver.id}
-              onChange={(event) => changeSelectedDriver(event.target.value)}
+              onDragOver={(event) => dragPanelOver("sidebar", event)}
+              onDragStart={(event) => startPanelDrag("sidebar", panelId, event)}
+              onDrop={(event) => dropSidebarPanel(panelId, event)}
+              onMoveDown={() => moveSidebarPanel(panelId, 1)}
+              onMoveUp={() => moveSidebarPanel(panelId, -1)}
             >
-              {driverSelectOptions.map((driver) => (
-                <option key={driver.id} value={driver.id}>
-                  {displayDriverName(driver, text)}
-                </option>
-              ))}
-            </select>
-            {status ? <div className="status-line">{status}</div> : null}
-            <DriverSourcePanel
-              canReset={Boolean(findPresetForDriver(selectedDriver)?.source)}
-              driver={selectedDriver}
-              text={text}
-              onReset={resetDriverToDatasheet}
-            />
-          </section>
-
-          <section className="section">
-            <label className="field span-2">
-              <span>{text.model}</span>
-              <input
-                type="text"
-                value={displayDriverName(selectedDriver, text)}
-                onChange={(event) => updateDriverField("name", event.target.value)}
-              />
-            </label>
-            <div className="driver-grid">
-              {driverFields.map((field) => (
-                <label className="field" key={field.key}>
-                  <span>
-                    {field.label}
-                    {field.unit ? <em>{field.unit}</em> : null}
-                  </span>
-                  <input
-                    type="number"
-                    step={field.step}
-                    value={String(selectedDriver[field.key] ?? "")}
-                    onChange={(event) => updateDriverField(field.key, event.target.value)}
-                  />
-                </label>
-              ))}
-            </div>
-            <DriverAnalysisPanel profile={driverProfile} text={text} />
-          </section>
+              {renderSidebarPanel(panelId)}
+            </MovablePanel>
+          ))}
         </aside>
 
         <ResizeHandle
@@ -1665,24 +1842,7 @@ function App() {
               </aside>
             </div>
             <div className="chart-control-strip">
-              <AcousticCorrectionsPanel
-                options={acousticOptions}
-                text={text}
-                onChange={setAcousticOptions}
-              />
-              <MeasurementPanel
-                count={measurements.length}
-                text={text}
-                onClear={() => setMeasurements([])}
-              />
-              <DriverComparePanel
-                drivers={drivers}
-                enabled={compareEnabled}
-                selectedIds={compareDriverIds}
-                text={text}
-                onEnabledChange={setCompareEnabled}
-                onToggleDriver={toggleCompareDriver}
-              />
+              {chartPanelOrder.map((panelId) => renderChartToolPanel(panelId))}
             </div>
           </div>
 
@@ -2005,6 +2165,88 @@ function NumberField({
   );
 }
 
+function MovablePanel({
+  canMoveDown,
+  canMoveUp,
+  children,
+  label,
+  text,
+  onDragOver,
+  onDragStart,
+  onDrop,
+  onMoveDown,
+  onMoveUp,
+}: {
+  canMoveDown: boolean;
+  canMoveUp: boolean;
+  children: ReactNode;
+  label: string;
+  text: UiText;
+  onDragOver: (event: ReactDragEvent<HTMLElement>) => void;
+  onDragStart: (event: ReactDragEvent<HTMLElement>) => void;
+  onDrop: (event: ReactDragEvent<HTMLElement>) => void;
+  onMoveDown: () => void;
+  onMoveUp: () => void;
+}) {
+  return (
+    <section className="section movable-panel" onDragOver={onDragOver} onDrop={onDrop}>
+      <PanelDragBar
+        canMoveDown={canMoveDown}
+        canMoveUp={canMoveUp}
+        label={label}
+        text={text}
+        onDragStart={onDragStart}
+        onMoveDown={onMoveDown}
+        onMoveUp={onMoveUp}
+      />
+      {children}
+    </section>
+  );
+}
+
+function PanelDragBar({
+  canMoveDown,
+  canMoveUp,
+  label,
+  text,
+  onDragStart,
+  onMoveDown,
+  onMoveUp,
+}: {
+  canMoveDown: boolean;
+  canMoveUp: boolean;
+  label: string;
+  text: UiText;
+  onDragStart: (event: ReactDragEvent<HTMLElement>) => void;
+  onMoveDown: () => void;
+  onMoveUp: () => void;
+}) {
+  return (
+    <div className="panel-drag-bar">
+      <span
+        aria-label={`${text.panelLayout.drag}: ${label}`}
+        className="panel-drag-handle"
+        draggable
+        role="button"
+        tabIndex={0}
+        title={text.panelLayout.drag}
+        onDragStart={onDragStart}
+      >
+        <GripVertical size={15} />
+      </span>
+      <span className="panel-drag-label">{label}</span>
+      <div className="panel-order-actions">
+        <button type="button" disabled={!canMoveUp} title={text.panelLayout.moveUp} onClick={onMoveUp}>
+          <ArrowUp size={14} />
+        </button>
+        <button type="button" disabled={!canMoveDown} title={text.panelLayout.moveDown} onClick={onMoveDown}>
+          <ArrowDown size={14} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function DriverSourcePanel({
   canReset,
   driver,
@@ -2062,17 +2304,24 @@ function DriverSourcePanel({
 }
 
 function AcousticCorrectionsPanel({
+  dragHandle,
   options,
   text,
   onChange,
+  onDragOver,
+  onDrop,
 }: {
+  dragHandle?: ReactNode;
   options: AcousticOptions;
   text: UiText;
   onChange: (options: AcousticOptions) => void;
+  onDragOver?: (event: ReactDragEvent<HTMLElement>) => void;
+  onDrop?: (event: ReactDragEvent<HTMLElement>) => void;
 }) {
   const update = (patch: Partial<AcousticOptions>) => onChange({ ...options, ...patch });
   return (
-    <section className="mini-panel">
+    <section className="mini-panel movable-panel" onDragOver={onDragOver} onDrop={onDrop}>
+      {dragHandle}
       <div className="mini-panel-head">
         <h3>{text.corrections.title}</h3>
       </div>
@@ -2088,15 +2337,22 @@ function AcousticCorrectionsPanel({
 
 function MeasurementPanel({
   count,
+  dragHandle,
   text,
   onClear,
+  onDragOver,
+  onDrop,
 }: {
   count: number;
+  dragHandle?: ReactNode;
   text: UiText;
   onClear: () => void;
+  onDragOver?: (event: ReactDragEvent<HTMLElement>) => void;
+  onDrop?: (event: ReactDragEvent<HTMLElement>) => void;
 }) {
   return (
-    <section className="mini-panel measurement-panel">
+    <section className="mini-panel measurement-panel movable-panel" onDragOver={onDragOver} onDrop={onDrop}>
+      {dragHandle}
       <div className="mini-panel-head">
         <h3>{text.measurements.title}</h3>
         <span>{text.measurements.imported(count)}</span>
@@ -2110,22 +2366,29 @@ function MeasurementPanel({
 }
 
 function DriverComparePanel({
+  dragHandle,
   drivers,
   enabled,
   selectedIds,
   text,
   onEnabledChange,
   onToggleDriver,
+  onDragOver,
+  onDrop,
 }: {
+  dragHandle?: ReactNode;
   drivers: SpeakerDriver[];
   enabled: boolean;
   selectedIds: string[];
   text: UiText;
   onEnabledChange: (enabled: boolean) => void;
   onToggleDriver: (id: string) => void;
+  onDragOver?: (event: ReactDragEvent<HTMLElement>) => void;
+  onDrop?: (event: ReactDragEvent<HTMLElement>) => void;
 }) {
   return (
-    <section className="mini-panel compare-panel">
+    <section className="mini-panel compare-panel movable-panel" onDragOver={onDragOver} onDrop={onDrop}>
+      {dragHandle}
       <div className="mini-panel-head">
         <h3>{text.compare.title}</h3>
         <label className="switch-control">
@@ -3496,6 +3759,49 @@ function loadPanelWidth(
   } catch {
     return limits.defaultValue;
   }
+}
+
+function loadPanelOrder<T extends string>(key: string, defaults: T[]): T[] {
+  try {
+    const raw = localStorage.getItem(key);
+    return normalizePanelOrder(raw ? JSON.parse(raw) : undefined, defaults);
+  } catch {
+    return [...defaults];
+  }
+}
+
+function normalizePanelOrder<T extends string>(value: unknown, defaults: T[]): T[] {
+  if (!Array.isArray(value)) {
+    return [...defaults];
+  }
+  const allowed = new Set<string>(defaults);
+  const ordered = value.filter((item): item is T => typeof item === "string" && allowed.has(item));
+  const unique = ordered.filter((item, index) => ordered.indexOf(item) === index);
+  return [...unique, ...defaults.filter((item) => !unique.includes(item))];
+}
+
+function movePanelInOrder<T extends string>(order: T[], id: T, direction: -1 | 1): T[] {
+  const index = order.indexOf(id);
+  const nextIndex = index + direction;
+  if (index < 0 || nextIndex < 0 || nextIndex >= order.length) {
+    return order;
+  }
+  const next = [...order];
+  [next[index], next[nextIndex]] = [next[nextIndex], next[index]];
+  return next;
+}
+
+function reorderPanelBefore<T extends string>(order: T[], draggedId: T, targetId: T): T[] {
+  if (draggedId === targetId || !order.includes(draggedId) || !order.includes(targetId)) {
+    return order;
+  }
+  const withoutDragged = order.filter((item) => item !== draggedId);
+  const targetIndex = withoutDragged.indexOf(targetId);
+  return [
+    ...withoutDragged.slice(0, targetIndex),
+    draggedId,
+    ...withoutDragged.slice(targetIndex),
+  ];
 }
 
 function normalizeDesign(design: BoxDesign): BoxDesign {
