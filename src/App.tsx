@@ -2,6 +2,8 @@ import {
   Activity,
   Copy,
   Download,
+  ExternalLink,
+  FileCheck2,
   Gauge,
   Languages,
   Plus,
@@ -24,6 +26,7 @@ import {
   BoxDesign,
   BoxKind,
   DESIGN_COLORS,
+  DriverSourceNote,
   Point,
   PRESET_DRIVERS,
   OptimizerCandidate,
@@ -240,6 +243,17 @@ const UI_TEXT = {
       } satisfies Record<DriverRecommendation, string>,
       title: "Проверка T/S",
     },
+    driverSource: {
+      title: "Паспорт данных",
+      open: "Открыть",
+      sourceUnknown: "Источник не указан",
+      manual: "ручной ввод",
+      verified: "проверено",
+      notes: {
+        usherPeRms: "Pe внесен как 70 W RMS; в даташите также указан максимум 100 W",
+        sbXmaxPeakToPeak: "Xmax внесен как 5.5 mm в одну сторону из 11 mm пик-пик",
+      } satisfies Record<DriverSourceNote, string>,
+    },
     duplicate: "Дублировать",
     excursion: "Ход",
     exportJson: "Экспорт проекта JSON",
@@ -396,6 +410,17 @@ const UI_TEXT = {
         vented: "Good vented candidate",
       } satisfies Record<DriverRecommendation, string>,
       title: "T/S check",
+    },
+    driverSource: {
+      title: "Data passport",
+      open: "Open",
+      sourceUnknown: "Source not specified",
+      manual: "manual entry",
+      verified: "verified",
+      notes: {
+        usherPeRms: "Pe is entered as 70 W RMS; the datasheet also lists 100 W maximum input",
+        sbXmaxPeakToPeak: "Xmax is entered as 5.5 mm one-way from 11 mm peak-to-peak travel",
+      } satisfies Record<DriverSourceNote, string>,
     },
     duplicate: "Duplicate",
     excursion: "Excursion",
@@ -1161,6 +1186,7 @@ function App() {
               ))}
             </select>
             {status ? <div className="status-line">{status}</div> : null}
+            <DriverSourcePanel driver={selectedDriver} text={text} />
           </section>
 
           <section className="section">
@@ -1519,6 +1545,44 @@ function NumberField({
         onChange={(event) => onChange(Number.parseFloat(event.target.value) || 0)}
       />
     </label>
+  );
+}
+
+function DriverSourcePanel({
+  driver,
+  text,
+}: {
+  driver: SpeakerDriver;
+  text: UiText;
+}) {
+  const source = driver.source;
+
+  return (
+    <div className={`driver-source ${source?.verified ? "verified" : ""}`}>
+      <div className="driver-source-head">
+        <div>
+          <FileCheck2 size={15} />
+          <h3>{text.driverSource.title}</h3>
+        </div>
+        <span>{source?.verified ? text.driverSource.verified : text.driverSource.manual}</span>
+      </div>
+      <div className="driver-source-body">
+        <span>{source?.title ?? text.driverSource.sourceUnknown}</span>
+        {source?.url ? (
+          <a href={source.url} target="_blank" rel="noreferrer">
+            <ExternalLink size={14} />
+            {text.driverSource.open}
+          </a>
+        ) : null}
+      </div>
+      {source?.notes?.length ? (
+        <div className="driver-source-notes">
+          {source.notes.map((note) => (
+            <span key={note}>{text.driverSource.notes[note]}</span>
+          ))}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -2469,12 +2533,26 @@ function loadDrivers(): SpeakerDriver[] {
 }
 
 function mergePresetDrivers(drivers: SpeakerDriver[]): SpeakerDriver[] {
-  const existingIds = new Set(drivers.map((driver) => driver.id));
-  const existingNames = new Set(drivers.map((driver) => driver.name.trim().toLowerCase()));
+  const enrichedDrivers = drivers.map(enrichPresetDriver);
+  const existingIds = new Set(enrichedDrivers.map((driver) => driver.id));
+  const existingNames = new Set(enrichedDrivers.map((driver) => driver.name.trim().toLowerCase()));
   const missingPresets = PRESET_DRIVERS.filter((preset) =>
     !existingIds.has(preset.id) && !existingNames.has(preset.name.trim().toLowerCase()),
   );
-  return [...drivers, ...missingPresets];
+  return [...enrichedDrivers, ...missingPresets];
+}
+
+function enrichPresetDriver(driver: SpeakerDriver): SpeakerDriver {
+  const preset = PRESET_DRIVERS.find((item) =>
+    item.id === driver.id || item.name.trim().toLowerCase() === driver.name.trim().toLowerCase(),
+  );
+  if (!preset?.source) {
+    return driver;
+  }
+  return {
+    ...driver,
+    source: preset.source,
+  };
 }
 
 function loadLanguage(): Language {

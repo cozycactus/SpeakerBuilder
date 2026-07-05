@@ -21,6 +21,16 @@ export interface SpeakerDriver {
   peW?: number;
   mmsG?: number;
   blTm?: number;
+  source?: DriverSource;
+}
+
+export type DriverSourceNote = "usherPeRms" | "sbXmaxPeakToPeak";
+
+export interface DriverSource {
+  title: string;
+  url?: string;
+  verified?: boolean;
+  notes?: DriverSourceNote[];
 }
 
 export interface BoxDesign {
@@ -241,6 +251,12 @@ export const PRESET_DRIVERS: SpeakerDriver[] = [
     peW: 70,
     mmsG: 14.5948,
     blTm: 6.9338,
+    source: {
+      title: "Usher 8945P",
+      url: "https://www.audioalchemy.ro/difuzoare/usher/296-602.pdf",
+      verified: true,
+      notes: ["usherPeRms"],
+    },
   },
   {
     id: "dayton-rs180-8",
@@ -257,6 +273,11 @@ export const PRESET_DRIVERS: SpeakerDriver[] = [
     peW: 60,
     mmsG: 17.9,
     blTm: 7.82,
+    source: {
+      title: "Dayton Audio RS180-8",
+      url: "https://www.daytonaudio.com/images/resources/295-355--dayton-audio-rs180-8-reference-woofer-8-ohm-specifications.pdf",
+      verified: true,
+    },
   },
   {
     id: "sb17nrxc35-8",
@@ -273,6 +294,12 @@ export const PRESET_DRIVERS: SpeakerDriver[] = [
     peW: 60,
     mmsG: 11,
     blTm: 5.9,
+    source: {
+      title: "SB Acoustics SB17NRXC35-8",
+      url: "https://sbacoustics.com/product/6in-sb17nrxc35-8/",
+      verified: true,
+      notes: ["sbXmaxPeakToPeak"],
+    },
   },
   {
     id: "scan-speak-18w-8545-01",
@@ -289,6 +316,11 @@ export const PRESET_DRIVERS: SpeakerDriver[] = [
     peW: 100,
     mmsG: 18,
     blTm: 8.4,
+    source: {
+      title: "Scan-Speak 18W/8545-01",
+      url: "https://www.scan-speak.dk/product/18w-8545-01/",
+      verified: true,
+    },
   },
 ];
 

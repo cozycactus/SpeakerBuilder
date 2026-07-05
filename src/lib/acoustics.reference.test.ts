@@ -84,6 +84,25 @@ describe("acoustic reference scenarios", () => {
     });
   });
 
+  it("keeps verified datasheet source metadata on datasheet-backed presets", () => {
+    const expectedSources = {
+      "usher-8945p": "https://www.audioalchemy.ro/difuzoare/usher/296-602.pdf",
+      "dayton-rs180-8": "https://www.daytonaudio.com/images/resources/295-355--dayton-audio-rs180-8-reference-woofer-8-ohm-specifications.pdf",
+      "sb17nrxc35-8": "https://sbacoustics.com/product/6in-sb17nrxc35-8/",
+      "scan-speak-18w-8545-01": "https://www.scan-speak.dk/product/18w-8545-01/",
+    };
+
+    for (const [id, url] of Object.entries(expectedSources)) {
+      const driver = presetById(id);
+
+      expect(driver.source?.verified).toBe(true);
+      expect(driver.source?.url).toBe(url);
+      expect(driver.source?.title).toBeTruthy();
+    }
+    expect(presetById("usher-8945p").source?.notes).toContain("usherPeRms");
+    expect(presetById("sb17nrxc35-8").source?.notes).toContain("sbXmaxPeakToPeak");
+  });
+
   it("can simulate each datasheet-backed preset without invalid metrics", () => {
     for (const id of ["usher-8945p", "dayton-rs180-8", "sb17nrxc35-8", "scan-speak-18w-8545-01"]) {
       const driver = presetById(id);

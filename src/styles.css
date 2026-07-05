@@ -285,6 +285,103 @@ h2 {
   margin-top: 10px;
 }
 
+.driver-source {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  border: 1px solid #d6e0ea;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 10px;
+  color: #18212f;
+}
+
+.driver-source.verified {
+  border-color: #99d7ca;
+  background: #f1fbf8;
+}
+
+.driver-source-head,
+.driver-source-head div,
+.driver-source-body,
+.driver-source-body a,
+.driver-source-notes {
+  min-width: 0;
+}
+
+.driver-source-head,
+.driver-source-body {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.driver-source-head div {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #0f766e;
+}
+
+.driver-source h3 {
+  margin: 0;
+  color: #18212f;
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.driver-source-head span {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: #e6f5f1;
+  color: #0f766e;
+  padding: 4px 7px;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.driver-source-body > span {
+  overflow: hidden;
+  color: #35445a;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.driver-source-body a {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  color: #0f766e;
+  font-size: 12px;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.driver-source-body a:hover {
+  text-decoration: underline;
+}
+
+.driver-source-notes {
+  display: grid;
+  gap: 6px;
+}
+
+.driver-source-notes span {
+  border-radius: 6px;
+  background: #e7f2ef;
+  color: #345043;
+  padding: 6px 7px;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.25;
+}
+
 .driver-analysis {
   display: grid;
   gap: 8px;
