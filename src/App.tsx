@@ -524,6 +524,23 @@ const UI_TEXT = {
     analysisCurrent: "Метрики актуальны",
     analysisCalculating: "Расчет...",
     analysisStale: "Метрики и оптимизатор ждут пересчета",
+    calculationPassport: {
+      empty: "Нет рассчитанной активной конфигурации.",
+      groups: {
+        alignment: "Настройка",
+        drive: "Вход",
+        limits: "Ограничения",
+        warnings: "Предупреждения",
+      },
+      labels: {
+        electricalPower: "Эл. мощность",
+        peakReduction: "Снижение пика",
+        voltage: "Напряжение",
+        zPeak: "Пик Z",
+      },
+      stale: "Паспорт показывает последний ручной пересчет.",
+      title: "Паспорт расчета",
+    },
     aperiodicDamping: "Демпф. Ql",
     aperiodicEffectiveQ: "Qeff",
     aperiodicFlowResistance: "σ потока",
@@ -864,6 +881,23 @@ const UI_TEXT = {
     analysisCurrent: "Metrics are current",
     analysisCalculating: "Calculating...",
     analysisStale: "Metrics and optimizer need recalculation",
+    calculationPassport: {
+      empty: "No calculated active configuration.",
+      groups: {
+        alignment: "Alignment",
+        drive: "Input",
+        limits: "Limits",
+        warnings: "Warnings",
+      },
+      labels: {
+        electricalPower: "Electrical power",
+        peakReduction: "Peak reduction",
+        voltage: "Voltage",
+        zPeak: "Z peak",
+      },
+      stale: "Passport shows the last manual recalculation.",
+      title: "Calculation passport",
+    },
     aperiodicDamping: "Damping Ql",
     aperiodicEffectiveQ: "Qeff",
     aperiodicFlowResistance: "Flow σ",
@@ -1306,6 +1340,9 @@ function App() {
       `${displayDesignName(result.design.name, text)}: ${translateNote(note, text)}`,
     ),
   );
+  const focusedAnalysisResult =
+    analysisResults.find((result) => result.design.id === focusedDesignId) ??
+    analysisResults[0];
 
   useEffect(() => {
     const requestId = simulationRequestIdRef.current.chart + 1;
@@ -2401,6 +2438,14 @@ function App() {
                 {text.recalculate}
               </button>
             </div>
+            <CalculationPassport
+              driver={analysisSnapshot.driver}
+              powerW={analysisSnapshot.powerW}
+              result={focusedAnalysisResult}
+              splInputMode={analysisSnapshot.splInputMode}
+              stale={analysisStale}
+              text={text}
+            />
             <OptimizerPanel
               disabled={analysisStale}
               candidates={optimizerCandidates}
@@ -3747,6 +3792,125 @@ function OptimizerPanel({
       </div>
     </section>
   );
+}
+
+function CalculationPassport({
+  driver,
+  powerW,
+  result,
+  splInputMode,
+  stale,
+  text,
+}: {
+  driver: SpeakerDriver;
+  powerW: number;
+  result?: SimulationResult;
+  splInputMode: SplInputMode;
+  stale: boolean;
+  text: UiText;
+}) {
+  if (!result) {
+    return (
+      <section className="calculation-passport">
+        <div className="mini-panel-head">
+          <h3>{text.calculationPassport.title}</h3>
+          <span>{text.calculationPassport.empty}</span>
+        </div>
+      </section>
+    );
+  }
+
+  const driveInput = resolveDriveInput(driver, { powerW, splInputMode });
+  const metrics = result.metrics;
+  const translatedNotes = metrics.notes.map((note) => translateNote(note, text));
+  const alignmentRows = compactRows([
+    { label: text.design, value: displayDesignName(result.design.name, text) },
+    { label: text.type, value: text.boxLabels[result.design.kind] },
+    { label: text.table.vb, value: `${fmt(result.design.vbLiters, 1)} L` },
+    { label: text.table.tune, value: formatTune(result, text) },
+    metrics.qtc !== undefined ? { label: "Qtc", value: fmt(metrics.qtc, 2) } : undefined,
+    metrics.fcHz !== undefined ? { label: "Fc", value: formatHz(metrics.fcHz) } : undefined,
+    metrics.effectiveQ !== undefined ? { label: text.aperiodicEffectiveQ, value: fmt(metrics.effectiveQ, 2) } : undefined,
+    metrics.impedancePeakReductionDb !== undefined
+      ? { label: text.calculationPassport.labels.peakReduction, value: `${fmt(metrics.impedancePeakReductionDb, 1)} dB` }
+      : undefined,
+  ]);
+  const driveRows = compactRows([
+    { label: text.splInputMode, value: text.splInputModes[splInputMode] },
+    { label: text.calculationPassport.labels.electricalPower, value: `${fmt(driveInput.electricalPowerW, 2)} W` },
+    { label: text.calculationPassport.labels.voltage, value: `${fmt(driveInput.voltageRms, 2)} Vrms` },
+    { label: "Re / Znom", value: `${fmt(driver.reOhm, 2)} / ${fmt(driveInput.nominalOhm, 0)} Ω` },
+    driver.sensitivityDb !== undefined ? { label: "Sens.", value: `${fmt(driver.sensitivityDb, 1)} dB` } : undefined,
+  ]);
+  const limitRows = compactRows([
+    { label: "F3 / F6", value: `${formatHz(metrics.f3Hz)} / ${formatHz(metrics.f6Hz)}` },
+    { label: text.table.peak, value: `${fmt(metrics.peakDb, 1)} dB @ ${formatHz(metrics.peakHz)}` },
+    { label: text.table.spl, value: `${fmt(metrics.spl50HzDb, 1)} / ${fmt(metrics.spl80HzDb, 1)} dB` },
+    { label: text.table.maxSpl, value: formatMaxSpl(metrics, text), tone: metrics.maxUsableSplReason ? "warning" as const : undefined },
+    { label: text.table.excursion, value: `${fmt(metrics.maxExcursionMm, 1)} mm @ ${formatHz(metrics.maxExcursionHz)}` },
+    metrics.maxPassiveRadiatorExcursionMm !== undefined
+      ? { label: text.passiveRadiatorExcursion, value: `${fmt(metrics.maxPassiveRadiatorExcursionMm, 1)} mm @ ${formatHz(metrics.maxPassiveRadiatorExcursionHz)}` }
+      : undefined,
+    metrics.maxPortMach !== undefined || metrics.maxPassiveRadiatorExcursionMm !== undefined
+      ? { label: text.table.port, value: formatPort(result) }
+      : undefined,
+    { label: text.table.zmin, value: `${fmt(metrics.minImpedanceOhm, 1)} Ω` },
+    metrics.impedancePeakOhm !== undefined
+      ? { label: text.calculationPassport.labels.zPeak, value: `${fmt(metrics.impedancePeakOhm, 1)} Ω` }
+      : undefined,
+  ]);
+
+  return (
+    <section className="calculation-passport">
+      <div className="mini-panel-head">
+        <h3>{text.calculationPassport.title}</h3>
+        <span>{displayDesignName(result.design.name, text)}</span>
+      </div>
+      {stale ? <div className="passport-stale">{text.calculationPassport.stale}</div> : null}
+      <div className="passport-grid">
+        <PassportGroup label={text.calculationPassport.groups.alignment} rows={alignmentRows} />
+        <PassportGroup label={text.calculationPassport.groups.drive} rows={driveRows} />
+        <PassportGroup label={text.calculationPassport.groups.limits} rows={limitRows} />
+        <div className="passport-group warnings">
+          <h4>{text.calculationPassport.groups.warnings}</h4>
+          {translatedNotes.length > 0 ? (
+            <div className="passport-note-list">
+              {translatedNotes.slice(0, 5).map((note) => <span key={note}>{note}</span>)}
+            </div>
+          ) : (
+            <div className="passport-row">
+              <span>{text.warnings}</span>
+              <strong>—</strong>
+            </div>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function PassportGroup({
+  label,
+  rows,
+}: {
+  label: string;
+  rows: Array<{ label: string; tone?: "warning"; value: string }>;
+}) {
+  return (
+    <div className="passport-group">
+      <h4>{label}</h4>
+      {rows.map((row) => (
+        <div className={`passport-row ${row.tone ?? ""}`} key={`${label}-${row.label}`}>
+          <span>{row.label}</span>
+          <strong>{row.value}</strong>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function compactRows<T>(rows: Array<T | undefined>): T[] {
+  return rows.filter((row): row is T => row !== undefined);
 }
 
 function MetricsTable({

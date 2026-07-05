@@ -1407,6 +1407,101 @@ h2 {
   font-size: 12px;
 }
 
+.calculation-passport {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #e7ecf2;
+}
+
+.passport-stale {
+  border: 1px solid #fed7aa;
+  border-radius: 8px;
+  background: #fff7ed;
+  color: #9a3412;
+  padding: 8px 10px;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.passport-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 10px;
+}
+
+.passport-group {
+  display: grid;
+  align-content: start;
+  gap: 7px;
+  min-width: 0;
+  border: 1px solid #e2e8ef;
+  border-radius: 8px;
+  background: #fbfcfe;
+  padding: 10px;
+}
+
+.passport-group h4 {
+  margin: 0;
+  color: #506074;
+  font-size: 12px;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.passport-row {
+  display: grid;
+  grid-template-columns: minmax(84px, 0.7fr) minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  min-width: 0;
+  border-radius: 6px;
+  background: #eef2f6;
+  padding: 6px 8px;
+  font-size: 13px;
+}
+
+.passport-row.warning {
+  background: #fff7ed;
+  color: #9a3412;
+}
+
+.passport-row span,
+.passport-row strong {
+  min-width: 0;
+}
+
+.passport-row span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #66758a;
+  font-weight: 650;
+}
+
+.passport-row strong {
+  color: #243043;
+  font-weight: 750;
+  overflow-wrap: anywhere;
+}
+
+.passport-note-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.passport-note-list span {
+  border: 1px solid #fed7aa;
+  border-radius: 7px;
+  background: #fff7ed;
+  color: #9a3412;
+  padding: 6px 8px;
+  font-size: 12px;
+  font-weight: 650;
+}
+
 .warning-strip {
   display: flex;
   flex-wrap: wrap;
