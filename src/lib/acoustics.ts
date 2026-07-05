@@ -42,7 +42,10 @@ export interface BoxDesign {
   vbLiters: number;
   fbHz?: number;
   ql?: number;
+  portShape?: "round" | "slot";
   portDiameterCm?: number;
+  portWidthCm?: number;
+  portHeightCm?: number;
   portCount?: number;
   color: string;
 }
@@ -104,6 +107,7 @@ export interface SimulationResult {
     maxExcursionHz: number;
     maxPortMach?: number;
     portLengthCm?: number;
+    portResonanceHz?: number;
     minImpedanceOhm: number;
     qtc?: number;
     fcHz?: number;
@@ -358,6 +362,7 @@ export function createDefaultDesigns(driver: SpeakerDriver): BoxDesign[] {
       ql: 7,
       portDiameterCm: 7,
       portCount: 1,
+      portShape: "round",
       color: DESIGN_COLORS[2],
     },
     {
@@ -370,6 +375,7 @@ export function createDefaultDesigns(driver: SpeakerDriver): BoxDesign[] {
       ql: 7,
       portDiameterCm: 8,
       portCount: 1,
+      portShape: "round",
       color: DESIGN_COLORS[3],
     },
     {
@@ -390,6 +396,7 @@ export function createDefaultDesigns(driver: SpeakerDriver): BoxDesign[] {
       ql: 7,
       portDiameterCm: 7,
       portCount: 1,
+      portShape: "round",
       color: DESIGN_COLORS[5],
     },
     {
@@ -402,6 +409,7 @@ export function createDefaultDesigns(driver: SpeakerDriver): BoxDesign[] {
       ql: 6,
       portDiameterCm: 8,
       portCount: 1,
+      portShape: "round",
       color: DESIGN_COLORS[6],
     },
     {
@@ -414,6 +422,7 @@ export function createDefaultDesigns(driver: SpeakerDriver): BoxDesign[] {
       ql: 9,
       portDiameterCm: 12,
       portCount: 1,
+      portShape: "round",
       color: DESIGN_COLORS[7],
     },
     {
@@ -435,6 +444,7 @@ export function createDefaultDesigns(driver: SpeakerDriver): BoxDesign[] {
       ql: 0.74,
       portDiameterCm: 7,
       portCount: 1,
+      portShape: "round",
       color: DESIGN_COLORS[9],
     },
   ];
@@ -559,6 +569,7 @@ export function simulateDesign(
   let qtc: number | undefined;
   let fcHz: number | undefined;
   let portLengthCm: number | undefined;
+  let portResonanceHz: number | undefined;
 
   if (needsMetrics) {
     f3Hz = findCutoff(responseDb, -3);
@@ -584,6 +595,9 @@ export function simulateDesign(
       : undefined;
     fcHz = qtc ? driver.fsHz * Math.sqrt(1 + driver.vasL / design.vbLiters) : undefined;
     portLengthCm = design.kind === "vented" ? portLength(design) : undefined;
+    portResonanceHz = portLengthCm !== undefined && portLengthCm > 0
+      ? roundTo(SPEED_OF_SOUND / (2 * (portLengthCm / 100)), 0)
+      : undefined;
 
     if (driver.xmaxMm && maxExcursion.y > driver.xmaxMm) {
       notes.push(`Xmax exceeded at ${roundTo(maxExcursion.x, 1)} Hz`);
@@ -611,9 +625,10 @@ export function simulateDesign(
     }
     if (design.kind === "vented") {
       const pistonDiameterCm = Math.sqrt((Math.max(1, driver.sdCm2) * 4) / Math.PI);
-      const portDiameterCm = design.portDiameterCm ?? 0;
+      const portAreaM2 = getPortAreaM2(design);
+      const equivalentPortDiameterCm = portAreaM2 > 0 ? Math.sqrt((portAreaM2 * 4) / Math.PI) * 100 : 0;
       const boxCubeSideCm = Math.cbrt(Math.max(0.001, design.vbLiters / 1000)) * 100;
-      if (portDiameterCm > 0 && portDiameterCm < pistonDiameterCm * 0.22) {
+      if (equivalentPortDiameterCm > 0 && equivalentPortDiameterCm < pistonDiameterCm * 0.22) {
         notes.push("Port diameter is small for cone area");
       }
       if (portLengthCm !== undefined && portLengthCm > 60) {
@@ -624,6 +639,9 @@ export function simulateDesign(
       }
       if ((design.portCount ?? 1) > 1 && portLengthCm !== undefined && portLengthCm > 40) {
         notes.push("Multiple ports make the tuning tube long");
+      }
+      if (portResonanceHz !== undefined && portResonanceHz < 700) {
+        notes.push(`Low port resonance: ${roundTo(portResonanceHz, 0)} Hz`);
       }
     }
     if ((design.kind === "vented" || design.kind === "passive") && driver.qts > 0.58) {
@@ -666,6 +684,7 @@ export function simulateDesign(
       maxExcursionHz: maxExcursion.x,
       maxPortMach: needsMetrics && design.kind === "vented" ? maxPort.y : undefined,
       portLengthCm,
+      portResonanceHz,
       minImpedanceOhm: minImpedance.y,
       qtc,
       fcHz,
@@ -1257,17 +1276,15 @@ function ventedBaseVolumeFactor(qts: number): number {
 
 function portLength(design: BoxDesign): number | undefined {
   const fb = design.fbHz;
-  const diameterM = (design.portDiameterCm ?? 0) / 100;
+  const geometry = getPortGeometry(design);
   const count = Math.max(1, design.portCount ?? 1);
-  if (!fb || diameterM <= 0 || design.vbLiters <= 0) {
+  if (!fb || !geometry || design.vbLiters <= 0) {
     return undefined;
   }
-  const radiusM = diameterM / 2;
-  const singleArea = Math.PI * radiusM * radiusM;
-  const totalArea = singleArea * count;
+  const totalArea = geometry.singleAreaM2 * count;
   const vbM3 = design.vbLiters / 1000;
   const effectiveLength = totalArea / (vbM3 * Math.pow((TWO_PI * fb) / SPEED_OF_SOUND, 2));
-  const physicalLength = effectiveLength - 1.46 * radiusM;
+  const physicalLength = effectiveLength - 1.46 * geometry.equivalentRadiusM;
   return roundTo(Math.max(0, physicalLength * 100), 1);
 }
 
@@ -1275,12 +1292,34 @@ function getPortAreaM2(design: BoxDesign): number {
   if (design.kind !== "vented") {
     return 0;
   }
-  const diameterM = (design.portDiameterCm ?? 0) / 100;
+  const geometry = getPortGeometry(design);
   const count = Math.max(1, design.portCount ?? 1);
-  if (diameterM <= 0) {
-    return 0;
+  return geometry ? geometry.singleAreaM2 * count : 0;
+}
+
+function getPortGeometry(design: BoxDesign): { equivalentRadiusM: number; singleAreaM2: number } | null {
+  if (design.portShape === "slot") {
+    const widthM = (design.portWidthCm ?? 0) / 100;
+    const heightM = (design.portHeightCm ?? 0) / 100;
+    if (widthM <= 0 || heightM <= 0) {
+      return null;
+    }
+    const singleAreaM2 = widthM * heightM;
+    return {
+      equivalentRadiusM: Math.sqrt(singleAreaM2 / Math.PI),
+      singleAreaM2,
+    };
   }
-  return Math.PI * Math.pow(diameterM / 2, 2) * count;
+
+  const diameterM = (design.portDiameterCm ?? 0) / 100;
+  if (diameterM <= 0) {
+    return null;
+  }
+  const radiusM = diameterM / 2;
+  return {
+    equivalentRadiusM: radiusM,
+    singleAreaM2: Math.PI * radiusM * radiusM,
+  };
 }
 
 function normalizeDriver(input: unknown): SpeakerDriver | null {

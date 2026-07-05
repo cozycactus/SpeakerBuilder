@@ -3,11 +3,14 @@ import {
   Copy,
   Download,
   ExternalLink,
+  FileText,
   FileCheck2,
+  Filter,
   Gauge,
   Languages,
   Plus,
   RefreshCw,
+  Search,
   SlidersHorizontal,
   Speaker,
   Target,
@@ -75,6 +78,7 @@ interface Series {
   color: string;
   points: Point[];
   focused?: boolean;
+  measurement?: boolean;
   muted?: boolean;
 }
 
@@ -87,12 +91,44 @@ interface FrozenReference {
 
 type ReferenceByTab = Partial<Record<ChartTab, FrozenReference>>;
 
+type DriverFilterStatus = "all" | "verified" | "modified" | "user";
+
+interface LibraryFilters {
+  maxFsHz?: number;
+  maxQts?: number;
+  maxVasL?: number;
+  minSdCm2?: number;
+  minXmaxMm?: number;
+  query: string;
+  status: DriverFilterStatus;
+}
+
+interface MeasurementTrace {
+  color: string;
+  id: string;
+  name: string;
+  points: Point[];
+  tab: ChartTab;
+}
+
+interface AcousticOptions {
+  baffleStepDb: number;
+  baffleStepHz: number;
+  roomGainDb: number;
+  roomGainStartHz: number;
+}
+
 interface ProjectState {
+  acousticOptions: AcousticOptions;
   activeTab: ChartTab;
+  compareDriverIds: string[];
+  compareEnabled: boolean;
   designs: BoxDesign[];
   drivers: SpeakerDriver[];
   focusedDesignId: string;
   language: Language;
+  libraryFilters: LibraryFilters;
+  measurements: MeasurementTrace[];
   optimizerGoal: OptimizerGoal;
   powerW: number;
   referenceByTab: ReferenceByTab;
@@ -110,6 +146,8 @@ type DriverIssue =
   | "qtsHigh"
   | "qesNotAboveQts"
   | "qmsNotAboveQts"
+  | "qtsFormulaMismatch"
+  | "fsMmsVasMismatch"
   | "xmaxInvalid"
   | "powerInvalid";
 
@@ -135,6 +173,16 @@ const RIGHT_PANEL_STORAGE_KEY = "speaker-builder-right-panel-width-v1";
 const LEFT_PANEL_LIMITS = { min: 240, max: 540, defaultValue: 320 };
 const RIGHT_PANEL_LIMITS = { min: 260, max: 560, defaultValue: 340 };
 const RESIZE_KEY_STEP = 16;
+const DEFAULT_LIBRARY_FILTERS: LibraryFilters = {
+  query: "",
+  status: "all",
+};
+const DEFAULT_ACOUSTIC_OPTIONS: AcousticOptions = {
+  baffleStepDb: 0,
+  baffleStepHz: 450,
+  roomGainDb: 0,
+  roomGainStartHz: 80,
+};
 
 const driverFields: Array<{
   key: keyof SpeakerDriver;
@@ -229,6 +277,8 @@ const UI_TEXT = {
         powerInvalid: "Pe должен быть больше нуля или пустым",
         qesNotAboveQts: "Qes должен быть больше Qts",
         qmsNotAboveQts: "Qms должен быть больше Qts",
+        qtsFormulaMismatch: "Qts не согласуется с Qes и Qms",
+        fsMmsVasMismatch: "Fs, Mms, Vas и Sd дают заметно другую резонансную частоту",
         qtsHigh: "Qts высокий: ФИ может давать большой пик или длинный порт",
         qtsLow: "Qts очень низкий: проверьте данные или рассчитывайте на крупный ФИ",
         xmaxInvalid: "Xmax должен быть больше нуля или пустым",
@@ -257,9 +307,43 @@ const UI_TEXT = {
         sbXmaxPeakToPeak: "Xmax внесен как 5.5 mm в одну сторону из 11 mm пик-пик",
       } satisfies Record<DriverSourceNote, string>,
     },
+    library: {
+      title: "Библиотека",
+      search: "Поиск",
+      status: "Статус",
+      all: "Все",
+      verified: "Проверенные",
+      modified: "Измененные",
+      user: "Пользовательские",
+      maxFs: "Fs до",
+      maxQts: "Qts до",
+      maxVas: "Vas до",
+      minSd: "Sd от",
+      minXmax: "Xmax от",
+      visible: (visible: number, total: number) => `${visible} / ${total}`,
+    },
+    compare: {
+      title: "Сравнение динамиков",
+      enable: "Сравнивать",
+      hint: "Одна выбранная конфигурация для отмеченных динамиков",
+    },
+    measurements: {
+      title: "Измерения",
+      import: "Импорт FRD/ZMA",
+      imported: (count: number) => `Измерений: ${count}`,
+      clear: "Очистить",
+    },
+    corrections: {
+      title: "Поправки графика",
+      roomGain: "Room gain",
+      roomStart: "Ниже",
+      baffleStep: "Baffle step",
+      baffleHz: "Частота",
+    },
     duplicate: "Дублировать",
     excursion: "Ход",
     exportJson: "Экспорт проекта JSON",
+    exportReport: "Экспорт отчета HTML",
     exportPng: "Экспорт PNG",
     exportSvg: "Экспорт SVG",
     freezeReference: "Запомнить эталон",
@@ -275,6 +359,13 @@ const UI_TEXT = {
     model: "Модель",
     noActiveDesigns: "Нет активных конфигураций.",
     portDiameter: "Порт Ø",
+    portHeight: "Высота",
+    portShape: "Порт",
+    portShapes: {
+      round: "Круглый",
+      slot: "Щелевой",
+    },
+    portWidth: "Ширина",
     ports: "Порты",
     power: "Мощность",
     projectImported: "Проект загружен",
@@ -322,6 +413,7 @@ const UI_TEXT = {
       portDiameterSmall: "Диаметр порта мал для площади диффузора",
       portMayNotFit: "Порт может не поместиться в корпус",
       portNearNoise: (mach: string) => `Скорость воздуха близка к шумовому пределу: Mach ${mach}`,
+      portResonanceLow: (frequency: string) => `Низкая первая резонансная частота порта: ${frequency} Hz`,
       portVeryLong: "Порт очень длинный для этого корпуса",
       qesEstimated: "Qes оценен по Qts",
       qmsEstimated: "Qms оценен по Qts/Qes",
@@ -400,6 +492,8 @@ const UI_TEXT = {
         powerInvalid: "Pe must be above zero or empty",
         qesNotAboveQts: "Qes must be greater than Qts",
         qmsNotAboveQts: "Qms must be greater than Qts",
+        qtsFormulaMismatch: "Qts does not match Qes and Qms",
+        fsMmsVasMismatch: "Fs, Mms, Vas, and Sd imply a noticeably different resonance",
         qtsHigh: "High Qts: vented boxes may peak or need a long port",
         qtsLow: "Very low Qts: verify the data or expect a large vented box",
         xmaxInvalid: "Xmax must be above zero or empty",
@@ -428,9 +522,43 @@ const UI_TEXT = {
         sbXmaxPeakToPeak: "Xmax is entered as 5.5 mm one-way from 11 mm peak-to-peak travel",
       } satisfies Record<DriverSourceNote, string>,
     },
+    library: {
+      title: "Library",
+      search: "Search",
+      status: "Status",
+      all: "All",
+      verified: "Verified",
+      modified: "Modified",
+      user: "User",
+      maxFs: "Fs max",
+      maxQts: "Qts max",
+      maxVas: "Vas max",
+      minSd: "Sd min",
+      minXmax: "Xmax min",
+      visible: (visible: number, total: number) => `${visible} / ${total}`,
+    },
+    compare: {
+      title: "Driver comparison",
+      enable: "Compare",
+      hint: "One selected enclosure for checked drivers",
+    },
+    measurements: {
+      title: "Measurements",
+      import: "Import FRD/ZMA",
+      imported: (count: number) => `Measurements: ${count}`,
+      clear: "Clear",
+    },
+    corrections: {
+      title: "Chart corrections",
+      roomGain: "Room gain",
+      roomStart: "Below",
+      baffleStep: "Baffle step",
+      baffleHz: "Frequency",
+    },
     duplicate: "Duplicate",
     excursion: "Excursion",
     exportJson: "Export project JSON",
+    exportReport: "Export HTML report",
     exportPng: "Export PNG",
     exportSvg: "Export SVG",
     freezeReference: "Freeze reference",
@@ -446,6 +574,13 @@ const UI_TEXT = {
     model: "Model",
     noActiveDesigns: "No active configurations.",
     portDiameter: "Port Ø",
+    portHeight: "Height",
+    portShape: "Port",
+    portShapes: {
+      round: "Round",
+      slot: "Slot",
+    },
+    portWidth: "Width",
     ports: "Ports",
     power: "Power",
     projectImported: "Project loaded",
@@ -493,6 +628,7 @@ const UI_TEXT = {
       portDiameterSmall: "Port diameter is small for cone area",
       portMayNotFit: "Port may not fit inside the box",
       portNearNoise: (mach: string) => `Port air speed near noise limit: Mach ${mach}`,
+      portResonanceLow: (frequency: string) => `Low first port resonance: ${frequency} Hz`,
       portVeryLong: "Port is very long for this box",
       qesEstimated: "Qes estimated from Qts",
       qmsEstimated: "Qms estimated from Qts/Qes",
@@ -530,6 +666,7 @@ function App() {
   const initialProject = initialProjectRef.current;
   const [language, setLanguage] = useState<Language>(() => initialProject.language);
   const [drivers, setDrivers] = useState<SpeakerDriver[]>(() => initialProject.drivers);
+  const [libraryFilters, setLibraryFilters] = useState<LibraryFilters>(() => initialProject.libraryFilters);
   const [selectedDriverId, setSelectedDriverId] = useState(() => initialProject.selectedDriverId);
   const selectedDriver = drivers.find((driver) => driver.id === selectedDriverId) ?? drivers[0];
   const deferredSelectedDriver = useDeferredValue(selectedDriver);
@@ -548,6 +685,10 @@ function App() {
   const [optimizerGoal, setOptimizerGoal] = useState<OptimizerGoal>(initialProject.optimizerGoal);
   const [powerW, setPowerW] = useState(initialProject.powerW);
   const [referenceByTab, setReferenceByTab] = useState<ReferenceByTab>(() => initialProject.referenceByTab);
+  const [compareEnabled, setCompareEnabled] = useState(initialProject.compareEnabled);
+  const [compareDriverIds, setCompareDriverIds] = useState<string[]>(() => initialProject.compareDriverIds);
+  const [measurements, setMeasurements] = useState<MeasurementTrace[]>(() => initialProject.measurements);
+  const [acousticOptions, setAcousticOptions] = useState<AcousticOptions>(() => initialProject.acousticOptions);
   const deferredPowerW = useDeferredValue(powerW);
   const [status, setStatus] = useState("");
   const [leftPanelWidth, setLeftPanelWidth] = useState(() =>
@@ -558,6 +699,7 @@ function App() {
   );
   const [resizeState, setResizeState] = useState<ResizeState | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const measurementInputRef = useRef<HTMLInputElement>(null);
   const chartSvgRef = useRef<SVGSVGElement>(null);
   const simulationWorkerRef = useRef<Worker | null>(null);
   const simulationRequestIdRef = useRef({ analysis: 0, chart: 0 });
@@ -621,11 +763,16 @@ function App() {
       PROJECT_STORAGE_KEY,
       JSON.stringify(
         createProjectFile({
+          acousticOptions,
           activeTab,
+          compareDriverIds,
+          compareEnabled,
           designs,
           drivers,
           focusedDesignId,
           language,
+          libraryFilters,
+          measurements,
           optimizerGoal,
           powerW,
           referenceByTab,
@@ -634,11 +781,16 @@ function App() {
       ),
     );
   }, [
+    acousticOptions,
     activeTab,
+    compareDriverIds,
+    compareEnabled,
     designs,
     drivers,
     focusedDesignId,
     language,
+    libraryFilters,
+    measurements,
     optimizerGoal,
     powerW,
     referenceByTab,
@@ -706,6 +858,12 @@ function App() {
 
   const templates = useMemo(() => getDesignTemplates(selectedDriver), [selectedDriver]);
   const driverProfile = useMemo(() => analyzeDriver(selectedDriver), [selectedDriver]);
+  const filteredDrivers = useMemo(() => filterDrivers(drivers, libraryFilters), [drivers, libraryFilters]);
+  const driverSelectOptions = useMemo(() => {
+    return filteredDrivers.some((driver) => driver.id === selectedDriver.id)
+      ? filteredDrivers
+      : [selectedDriver, ...filteredDrivers];
+  }, [filteredDrivers, selectedDriver]);
   const activeDesignCount = designs.filter((design) => design.enabled).length;
   const liveChartDesigns = useMemo(() => {
     return deferredDesigns.filter((design) => design.enabled);
@@ -749,6 +907,51 @@ function App() {
       outputs,
     });
   }, [activeTab, deferredPowerW, deferredSelectedDriver, liveChartDesigns]);
+
+  const adjustedChartResults = useMemo(
+    () => applyAcousticOptionsToResults(chartResults, acousticOptions),
+    [acousticOptions, chartResults],
+  );
+  const compareChartResults = useMemo(() => {
+    if (!compareEnabled) {
+      return [];
+    }
+    const focusedDesign = designs.find((design) => design.id === focusedDesignId) ??
+      designs.find((design) => design.enabled) ??
+      designs[0];
+    if (!focusedDesign) {
+      return [];
+    }
+    const outputs = outputsForChartTab(activeTab);
+    const selectedCompareDrivers = compareDriverIds
+      .map((id) => drivers.find((driver) => driver.id === id))
+      .filter(Boolean) as SpeakerDriver[];
+    const compareDrivers = selectedCompareDrivers.length > 0 ? selectedCompareDrivers : [selectedDriver];
+    return applyAcousticOptionsToResults(
+      compareDrivers.map((driver, index) =>
+        simulateDesign(driver, {
+          ...focusedDesign,
+          id: driver.id,
+          name: displayDriverName(driver, text),
+          color: DESIGN_COLORS[index % DESIGN_COLORS.length],
+          enabled: true,
+        }, { powerW, outputs }),
+      ),
+      acousticOptions,
+    );
+  }, [activeTab, acousticOptions, compareDriverIds, compareEnabled, designs, drivers, focusedDesignId, powerW, selectedDriver, text]);
+  const chartDisplayResults = compareEnabled ? compareChartResults : adjustedChartResults;
+  const measurementSeries = useMemo(
+    () => measurements
+      .filter((measurement) => measurement.tab === activeTab)
+      .map((measurement) => ({
+        color: measurement.color,
+        measurement: true,
+        name: measurement.name,
+        points: measurement.points,
+      })),
+    [activeTab, measurements],
+  );
 
   useEffect(() => {
     const requestId = simulationRequestIdRef.current.analysis + 1;
@@ -875,13 +1078,44 @@ function App() {
     }
   }
 
+  async function importMeasurementFile(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) {
+      return;
+    }
+    try {
+      const trace = parseMeasurementTrace(file.name, await file.text(), measurements.length);
+      if (!trace) {
+        setStatus(text.requiredFieldsMissing);
+        return;
+      }
+      setMeasurements((current) => [...current, trace]);
+      setActiveTab(trace.tab);
+      setStatus(text.measurements.imported(measurements.length + 1));
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : text.importError);
+    }
+  }
+
+  function toggleCompareDriver(id: string) {
+    setCompareDriverIds((current) =>
+      current.includes(id) ? current.filter((item) => item !== id) : [...current, id],
+    );
+  }
+
   function applyProject(project: ProjectState) {
+    setAcousticOptions(project.acousticOptions);
     setLanguage(project.language);
     setDrivers(project.drivers);
+    setLibraryFilters(project.libraryFilters);
     setSelectedDriverId(project.selectedDriverId);
     setDesigns(project.designs);
     setFocusedDesignId(project.focusedDesignId);
     setActiveTab(project.activeTab);
+    setCompareEnabled(project.compareEnabled);
+    setCompareDriverIds(project.compareDriverIds);
+    setMeasurements(project.measurements);
     setOptimizerGoal(project.optimizerGoal);
     setPowerW(project.powerW);
     setReferenceByTab(project.referenceByTab);
@@ -896,11 +1130,16 @@ function App() {
     const blob = new Blob([
       JSON.stringify(
         createProjectFile({
+          acousticOptions,
           activeTab,
+          compareDriverIds,
+          compareEnabled,
           designs,
           drivers,
           focusedDesignId,
           language,
+          libraryFilters,
+          measurements,
           optimizerGoal,
           powerW,
           referenceByTab,
@@ -918,6 +1157,22 @@ function App() {
     link.download = "speaker-builder-project.json";
     link.click();
     URL.revokeObjectURL(url);
+  }
+
+  function exportReportHtml() {
+    const svg = chartSvgRef.current;
+    const report = createReportHtml({
+      acousticOptions,
+      chartSvg: svg ? serializeSvg(svg) : "",
+      driver: selectedDriver,
+      measurements,
+      powerW,
+      results: analysisResults,
+      text,
+      title: chartProps.title,
+      warnings: allWarnings,
+    });
+    downloadBlob(new Blob([report], { type: "text/html;charset=utf-8" }), "speaker-builder-report.html");
   }
 
   function exportChartSvg() {
@@ -1073,7 +1328,7 @@ function App() {
     );
   }
 
-  const chartProps = getChartProps(activeTab, chartResults, deferredSelectedDriver, focusedDesignId, text);
+  const chartProps = getChartProps(activeTab, chartDisplayResults, deferredSelectedDriver, focusedDesignId, text, measurementSeries);
   const currentReference = referenceByTab[activeTab];
   const layoutStyle = {
     "--left-panel-width": `${leftPanelWidth}px`,
@@ -1167,6 +1422,9 @@ function App() {
           <button type="button" className="icon-button" onClick={exportProject} title={text.exportJson}>
             <Download size={18} />
           </button>
+          <button type="button" className="icon-button" onClick={exportReportHtml} title={text.exportReport}>
+            <FileText size={18} />
+          </button>
         </div>
       </header>
 
@@ -1202,12 +1460,19 @@ function App() {
               accept=".json,.csv,text/csv,application/json"
               onChange={importDrivers}
             />
+            <DriverLibraryFilters
+              filters={libraryFilters}
+              text={text}
+              total={drivers.length}
+              visible={filteredDrivers.length}
+              onChange={setLibraryFilters}
+            />
             <select
               className="driver-select"
               value={selectedDriver.id}
               onChange={(event) => changeSelectedDriver(event.target.value)}
             >
-              {drivers.map((driver) => (
+              {driverSelectOptions.map((driver) => (
                 <option key={driver.id} value={driver.id}>
                   {displayDriverName(driver, text)}
                 </option>
@@ -1307,9 +1572,20 @@ function App() {
                     <Download size={16} />
                     PNG
                   </button>
+                  <button type="button" className="text-button" onClick={() => measurementInputRef.current?.click()} title={text.measurements.import}>
+                    <Upload size={16} />
+                    FRD/ZMA
+                  </button>
                 </div>
               </div>
             </div>
+            <input
+              ref={measurementInputRef}
+              className="hidden-input"
+              type="file"
+              accept=".frd,.zma,.txt,.csv,text/plain,text/csv"
+              onChange={importMeasurementFile}
+            />
 
             <div className="chart-workbench">
               <div className="chart-stage">
@@ -1373,6 +1649,26 @@ function App() {
                   ))}
                 </div>
               </aside>
+            </div>
+            <div className="chart-control-strip">
+              <AcousticCorrectionsPanel
+                options={acousticOptions}
+                text={text}
+                onChange={setAcousticOptions}
+              />
+              <MeasurementPanel
+                count={measurements.length}
+                text={text}
+                onClear={() => setMeasurements([])}
+              />
+              <DriverComparePanel
+                drivers={drivers}
+                enabled={compareEnabled}
+                selectedIds={compareDriverIds}
+                text={text}
+                onEnabledChange={setCompareEnabled}
+                onToggleDriver={toggleCompareDriver}
+              />
             </div>
           </div>
 
@@ -1461,6 +1757,91 @@ function ResizeHandle({
   );
 }
 
+function DriverLibraryFilters({
+  filters,
+  text,
+  total,
+  visible,
+  onChange,
+}: {
+  filters: LibraryFilters;
+  text: UiText;
+  total: number;
+  visible: number;
+  onChange: (filters: LibraryFilters) => void;
+}) {
+  const update = (patch: Partial<LibraryFilters>) => onChange({ ...filters, ...patch });
+  const updateNumber = (key: keyof LibraryFilters, value: string) => {
+    const parsed = Number.parseFloat(value);
+    update({ [key]: Number.isFinite(parsed) ? parsed : undefined } as Partial<LibraryFilters>);
+  };
+
+  return (
+    <div className="library-panel">
+      <div className="library-head">
+        <span>
+          <Filter size={14} />
+          {text.library.title}
+        </span>
+        <em>{text.library.visible(visible, total)}</em>
+      </div>
+      <label className="field span-2">
+        <span>{text.library.search}</span>
+        <div className="search-field">
+          <Search size={14} />
+          <input
+            type="search"
+            value={filters.query}
+            onChange={(event) => update({ query: event.target.value })}
+          />
+        </div>
+      </label>
+      <div className="library-grid">
+        <label className="field">
+          <span>{text.library.status}</span>
+          <select value={filters.status} onChange={(event) => update({ status: event.target.value as DriverFilterStatus })}>
+            <option value="all">{text.library.all}</option>
+            <option value="verified">{text.library.verified}</option>
+            <option value="modified">{text.library.modified}</option>
+            <option value="user">{text.library.user}</option>
+          </select>
+        </label>
+        <FilterNumber label={text.library.maxFs} unit="Hz" value={filters.maxFsHz} onChange={(value) => updateNumber("maxFsHz", value)} />
+        <FilterNumber label={text.library.maxQts} unit="" value={filters.maxQts} onChange={(value) => updateNumber("maxQts", value)} />
+        <FilterNumber label={text.library.maxVas} unit="L" value={filters.maxVasL} onChange={(value) => updateNumber("maxVasL", value)} />
+        <FilterNumber label={text.library.minSd} unit="cm²" value={filters.minSdCm2} onChange={(value) => updateNumber("minSdCm2", value)} />
+        <FilterNumber label={text.library.minXmax} unit="mm" value={filters.minXmaxMm} onChange={(value) => updateNumber("minXmaxMm", value)} />
+      </div>
+    </div>
+  );
+}
+
+function FilterNumber({
+  label,
+  unit,
+  value,
+  onChange,
+}: {
+  label: string;
+  unit: string;
+  value?: number;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="field">
+      <span>
+        {label}
+        {unit ? <em>{unit}</em> : null}
+      </span>
+      <input
+        type="number"
+        value={value ?? ""}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    </label>
+  );
+}
+
 function DesignEditor({
   boxLabels,
   design,
@@ -1528,13 +1909,42 @@ function DesignEditor({
         ) : null}
         {hasPort ? (
           <>
-            <NumberField
-              label={text.portDiameter}
-              unit="cm"
-              value={design.portDiameterCm ?? 7}
-              step="0.1"
-              onChange={(portDiameterCm) => onChange({ portDiameterCm })}
-            />
+            <label className="field">
+              <span>{text.portShape}</span>
+              <select
+                value={design.portShape ?? "round"}
+                onChange={(event) => onChange({ portShape: event.target.value as BoxDesign["portShape"] })}
+              >
+                <option value="round">{text.portShapes.round}</option>
+                <option value="slot">{text.portShapes.slot}</option>
+              </select>
+            </label>
+            {(design.portShape ?? "round") === "slot" ? (
+              <>
+                <NumberField
+                  label={text.portWidth}
+                  unit="cm"
+                  value={design.portWidthCm ?? 20}
+                  step="0.1"
+                  onChange={(portWidthCm) => onChange({ portWidthCm })}
+                />
+                <NumberField
+                  label={text.portHeight}
+                  unit="cm"
+                  value={design.portHeightCm ?? 3}
+                  step="0.1"
+                  onChange={(portHeightCm) => onChange({ portHeightCm })}
+                />
+              </>
+            ) : (
+              <NumberField
+                label={text.portDiameter}
+                unit="cm"
+                value={design.portDiameterCm ?? 7}
+                step="0.1"
+                onChange={(portDiameterCm) => onChange({ portDiameterCm })}
+              />
+            )}
             <NumberField
               label={text.ports}
               unit=""
@@ -1634,6 +2044,95 @@ function DriverSourcePanel({
         </div>
       ) : null}
     </div>
+  );
+}
+
+function AcousticCorrectionsPanel({
+  options,
+  text,
+  onChange,
+}: {
+  options: AcousticOptions;
+  text: UiText;
+  onChange: (options: AcousticOptions) => void;
+}) {
+  const update = (patch: Partial<AcousticOptions>) => onChange({ ...options, ...patch });
+  return (
+    <section className="mini-panel">
+      <div className="mini-panel-head">
+        <h3>{text.corrections.title}</h3>
+      </div>
+      <div className="mini-grid">
+        <NumberField label={text.corrections.roomGain} unit="dB" value={options.roomGainDb} step="0.5" onChange={(roomGainDb) => update({ roomGainDb })} />
+        <NumberField label={text.corrections.roomStart} unit="Hz" value={options.roomGainStartHz} step="5" onChange={(roomGainStartHz) => update({ roomGainStartHz })} />
+        <NumberField label={text.corrections.baffleStep} unit="dB" value={options.baffleStepDb} step="0.5" onChange={(baffleStepDb) => update({ baffleStepDb })} />
+        <NumberField label={text.corrections.baffleHz} unit="Hz" value={options.baffleStepHz} step="10" onChange={(baffleStepHz) => update({ baffleStepHz })} />
+      </div>
+    </section>
+  );
+}
+
+function MeasurementPanel({
+  count,
+  text,
+  onClear,
+}: {
+  count: number;
+  text: UiText;
+  onClear: () => void;
+}) {
+  return (
+    <section className="mini-panel measurement-panel">
+      <div className="mini-panel-head">
+        <h3>{text.measurements.title}</h3>
+        <span>{text.measurements.imported(count)}</span>
+      </div>
+      <button type="button" className="text-button" disabled={count === 0} onClick={onClear}>
+        <RefreshCw size={16} />
+        {text.measurements.clear}
+      </button>
+    </section>
+  );
+}
+
+function DriverComparePanel({
+  drivers,
+  enabled,
+  selectedIds,
+  text,
+  onEnabledChange,
+  onToggleDriver,
+}: {
+  drivers: SpeakerDriver[];
+  enabled: boolean;
+  selectedIds: string[];
+  text: UiText;
+  onEnabledChange: (enabled: boolean) => void;
+  onToggleDriver: (id: string) => void;
+}) {
+  return (
+    <section className="mini-panel compare-panel">
+      <div className="mini-panel-head">
+        <h3>{text.compare.title}</h3>
+        <label className="switch-control">
+          <input type="checkbox" checked={enabled} onChange={(event) => onEnabledChange(event.target.checked)} />
+          <span>{text.compare.enable}</span>
+        </label>
+      </div>
+      <p>{text.compare.hint}</p>
+      <div className="compare-list">
+        {drivers.map((driver) => (
+          <label key={driver.id} className="compare-item">
+            <input
+              type="checkbox"
+              checked={selectedIds.includes(driver.id)}
+              onChange={() => onToggleDriver(driver.id)}
+            />
+            <span>{displayDriverName(driver, text)}</span>
+          </label>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -1804,7 +2303,7 @@ function MetricsTable({
               </td>
               <td>
                 {result.metrics.maxPortMach !== undefined
-                  ? `M ${fmt(result.metrics.maxPortMach, 2)} / ${fmt(result.metrics.portLengthCm, 1)} cm`
+                  ? formatPort(result)
                   : "—"}
               </td>
               <td>{fmt(result.metrics.minImpedanceOhm, 1)} Ω</td>
@@ -1969,7 +2468,7 @@ function LineChart({
         {series.map((item) => (
           <path
             key={item.name}
-            className={`series-line ${item.focused ? "focused" : ""} ${item.muted ? "muted" : ""}`}
+            className={`series-line ${item.focused ? "focused" : ""} ${item.muted ? "muted" : ""} ${item.measurement ? "measurement" : ""}`}
             d={pathForSeries(item.points, scaleX, scaleY, xDomain, yDomain)}
             stroke={item.color}
           />
@@ -2007,7 +2506,7 @@ function LineChart({
           </span>
         ) : null}
         {series.map((item) => (
-          <span className={`${item.focused ? "focused" : ""} ${item.muted ? "muted" : ""}`} key={item.name}>
+          <span className={`${item.focused ? "focused" : ""} ${item.muted ? "muted" : ""} ${item.measurement ? "measurement" : ""}`} key={item.name}>
             <i style={{ background: item.color }} />
             {item.name}
           </span>
@@ -2057,6 +2556,7 @@ function getChartProps(
   driver: SpeakerDriver,
   focusedDesignId: string,
   text: UiText,
+  measurementSeries: Series[] = [],
 ): Parameters<typeof LineChart>[0] {
   const base = {
     xDomain: [10, 500] as [number, number],
@@ -2077,11 +2577,14 @@ function getChartProps(
         { y: -3, label: "-3" },
         { y: -6, label: "-6" },
       ],
-      series: toSeriesList(results, "responseDb", focusedDesignId, text),
+      series: [...toSeriesList(results, "responseDb", focusedDesignId, text), ...measurementSeries],
     };
   }
   if (tab === "spl") {
-    const points = results.flatMap((result) => result.splDb);
+    const points = [
+      ...results.flatMap((result) => result.splDb),
+      ...measurementSeries.flatMap((series) => series.points),
+    ];
     const domain = splDomain(points.map((point) => point.y));
     return {
       ...base,
@@ -2092,7 +2595,7 @@ function getChartProps(
         { y: 85, label: "85 dB" },
         { y: 100, label: "100" },
       ].filter((line) => line.y >= domain[0] && line.y <= domain[1]),
-      series: toSeriesList(results, "splDb", focusedDesignId, text),
+      series: [...toSeriesList(results, "splDb", focusedDesignId, text), ...measurementSeries],
     };
   }
   if (tab === "excursion") {
@@ -2143,14 +2646,17 @@ function getChartProps(
     };
   }
   if (tab === "impedance") {
-    const points = results.flatMap((result) => result.impedanceOhm);
+    const points = [
+      ...results.flatMap((result) => result.impedanceOhm),
+      ...measurementSeries.flatMap((series) => series.points),
+    ];
     const max = Math.max(...points.map((point) => point.y), driver.reOhm * 2);
     return {
       ...base,
       title: text.chartTitles.impedance,
       yLabel: "Ω",
       yDomain: [0, niceCeil(max * 1.1)],
-      series: toSeriesList(results, "impedanceOhm", focusedDesignId, text),
+      series: [...toSeriesList(results, "impedanceOhm", focusedDesignId, text), ...measurementSeries],
     };
   }
   const points = results.flatMap((result) => result.portMach);
@@ -2211,6 +2717,11 @@ function translateNote(note: string, text: UiText): string {
   const ventNearNoise = note.match(/^Port air speed near noise limit: Mach ([\d.]+)$/);
   if (ventNearNoise) {
     return text.notes.portNearNoise(ventNearNoise[1]);
+  }
+
+  const portResonance = note.match(/^Low port resonance: ([\d.]+) Hz$/);
+  if (portResonance) {
+    return text.notes.portResonanceLow(portResonance[1]);
   }
 
   const powerExceeded = note.match(/^Power exceeds Pe: ([\d.]+) W$/);
@@ -2280,7 +2791,8 @@ function formatPort(result: SimulationResult): string {
     return "—";
   }
 
-  return `M ${fmt(result.metrics.maxPortMach, 2)} / ${fmt(result.metrics.portLengthCm, 1)} cm`;
+  const resonance = result.metrics.portResonanceHz ? ` / ${fmt(result.metrics.portResonanceHz, 0)} Hz` : "";
+  return `M ${fmt(result.metrics.maxPortMach, 2)} / ${fmt(result.metrics.portLengthCm, 1)} cm${resonance}`;
 }
 
 function formatMaxSpl(metrics: SimulationResult["metrics"], text: UiText): string {
@@ -2353,8 +2865,126 @@ function createSvgStyleElement(): SVGStyleElement {
     }
     .series-line.focused { stroke-width: 4.4; }
     .series-line.muted { opacity: 0.28; stroke-width: 1.8; }
+    .series-line.measurement { stroke-dasharray: 4 5; stroke-width: 2; }
   `;
   return style;
+}
+
+function filterDrivers(drivers: SpeakerDriver[], filters: LibraryFilters): SpeakerDriver[] {
+  const query = filters.query.trim().toLowerCase();
+  return drivers.filter((driver) => {
+    if (query && !driver.name.toLowerCase().includes(query)) {
+      return false;
+    }
+    if (filters.status !== "all" && driverStatus(driver) !== filters.status) {
+      return false;
+    }
+    if (filters.maxFsHz !== undefined && driver.fsHz > filters.maxFsHz) {
+      return false;
+    }
+    if (filters.maxQts !== undefined && driver.qts > filters.maxQts) {
+      return false;
+    }
+    if (filters.maxVasL !== undefined && driver.vasL > filters.maxVasL) {
+      return false;
+    }
+    if (filters.minSdCm2 !== undefined && driver.sdCm2 < filters.minSdCm2) {
+      return false;
+    }
+    if (filters.minXmaxMm !== undefined && (driver.xmaxMm ?? 0) < filters.minXmaxMm) {
+      return false;
+    }
+    return true;
+  });
+}
+
+function driverStatus(driver: SpeakerDriver): DriverFilterStatus {
+  if (driver.source?.modified) {
+    return "modified";
+  }
+  if (driver.source?.verified) {
+    return "verified";
+  }
+  return "user";
+}
+
+function applyAcousticOptionsToResults(
+  results: SimulationResult[],
+  options: AcousticOptions,
+): SimulationResult[] {
+  if (options.roomGainDb === 0 && options.baffleStepDb === 0) {
+    return results;
+  }
+  return results.map((result) => ({
+    ...result,
+    responseDb: applyAcousticOptionsToPoints(result.responseDb, options, false),
+    splDb: applyAcousticOptionsToPoints(result.splDb, options, true),
+  }));
+}
+
+function applyAcousticOptionsToPoints(points: Point[], options: AcousticOptions, absolute: boolean): Point[] {
+  if (points.length === 0) {
+    return points;
+  }
+  const adjusted = points.map((point) => ({
+    x: point.x,
+    y: point.y + acousticCorrectionDb(point.x, options),
+  }));
+  if (absolute) {
+    return adjusted;
+  }
+  const reference = pointValueAt(adjusted, 200) ?? adjusted[adjusted.length - 1]?.y ?? 0;
+  return adjusted.map((point) => ({ ...point, y: point.y - reference }));
+}
+
+function pointValueAt(points: Point[], x: number): number | undefined {
+  if (points.length === 0) {
+    return undefined;
+  }
+  for (let index = 1; index < points.length; index += 1) {
+    const left = points[index - 1];
+    const right = points[index];
+    if (left.x <= x && right.x >= x) {
+      const ratio = (x - left.x) / Math.max(0.000001, right.x - left.x);
+      return left.y + (right.y - left.y) * ratio;
+    }
+  }
+  return points[points.length - 1].y;
+}
+
+function acousticCorrectionDb(frequency: number, options: AcousticOptions): number {
+  const roomStart = Math.max(10, options.roomGainStartHz);
+  const roomGain = frequency < roomStart
+    ? options.roomGainDb * (1 - Math.log10(Math.max(10, frequency)) / Math.log10(roomStart))
+    : 0;
+  const baffleHz = Math.max(20, options.baffleStepHz);
+  const baffle = options.baffleStepDb > 0
+    ? -options.baffleStepDb / (1 + Math.pow(baffleHz / Math.max(1, frequency), 2))
+    : 0;
+  return roomGain + baffle;
+}
+
+function parseMeasurementTrace(name: string, content: string, index: number): MeasurementTrace | null {
+  const lower = name.toLowerCase();
+  const tab: ChartTab = lower.endsWith(".zma") ? "impedance" : "response";
+  const points = content
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith("#") && !line.startsWith("*") && !line.startsWith(";"))
+    .map((line) => line.split(/[,\s;]+/).map(Number))
+    .filter((columns) => columns.length >= 2 && Number.isFinite(columns[0]) && Number.isFinite(columns[1]))
+    .map(([x, y]) => ({ x, y }))
+    .filter((point) => point.x > 0);
+  if (points.length < 2) {
+    return null;
+  }
+  return {
+    color: DESIGN_COLORS[(index + 6) % DESIGN_COLORS.length],
+    id: newId("measurement"),
+    name,
+    points,
+    tab,
+  };
 }
 
 function downloadBlob(blob: Blob, filename: string) {
@@ -2442,6 +3072,88 @@ function createProjectFile(state: ProjectState): ProjectFile {
   };
 }
 
+function createReportHtml({
+  acousticOptions,
+  chartSvg,
+  driver,
+  measurements,
+  powerW,
+  results,
+  text,
+  title,
+  warnings,
+}: {
+  acousticOptions: AcousticOptions;
+  chartSvg: string;
+  driver: SpeakerDriver;
+  measurements: MeasurementTrace[];
+  powerW: number;
+  results: SimulationResult[];
+  text: UiText;
+  title: string;
+  warnings: string[];
+}): string {
+  const rows = results.map((result) => `
+    <tr>
+      <td>${escapeHtml(displayDesignName(result.design.name, text))}</td>
+      <td>${fmt(result.design.vbLiters, 1)} L</td>
+      <td>${formatTune(result, text)}</td>
+      <td>${formatHz(result.metrics.f3Hz)} / ${formatHz(result.metrics.f6Hz)}</td>
+      <td>${fmt(result.metrics.peakDb, 1)} dB</td>
+      <td>${formatMaxSpl(result.metrics, text)}</td>
+      <td>${formatPort(result)}</td>
+    </tr>
+  `).join("");
+  const warningItems = warnings.map((warning) => `<li>${escapeHtml(warning)}</li>`).join("");
+  const source = driver.source?.url
+    ? `<a href="${escapeHtml(driver.source.url)}">${escapeHtml(driver.source.title)}</a>`
+    : escapeHtml(driver.source?.title ?? text.driverSource.sourceUnknown);
+  return `<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <title>${escapeHtml(text.appTitle)} - ${escapeHtml(displayDriverName(driver, text))}</title>
+  <style>
+    body { margin: 32px; color: #18212f; font: 14px Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    h1, h2 { margin: 0 0 10px; }
+    section { margin-top: 22px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+    th, td { border: 1px solid #d8e0ea; padding: 8px; text-align: left; }
+    th { background: #f3f6f9; }
+    .chart svg { max-width: 100%; height: auto; }
+    .meta { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 18px; }
+  </style>
+</head>
+<body>
+  <h1>${escapeHtml(text.appTitle)}</h1>
+  <div class="meta">
+    <div><strong>${escapeHtml(text.model)}:</strong> ${escapeHtml(displayDriverName(driver, text))}</div>
+    <div><strong>${escapeHtml(text.driverSource.title)}:</strong> ${source}</div>
+    <div><strong>${escapeHtml(text.power)}:</strong> ${fmt(powerW, 1)} W</div>
+    <div><strong>${escapeHtml(text.corrections.title)}:</strong> room ${fmt(acousticOptions.roomGainDb, 1)} dB, baffle ${fmt(acousticOptions.baffleStepDb, 1)} dB</div>
+    <div><strong>${escapeHtml(text.measurements.title)}:</strong> ${measurements.length}</div>
+  </div>
+  <section class="chart">${chartSvg}</section>
+  <section>
+    <h2>${escapeHtml(text.metrics)}</h2>
+    <table>
+      <thead><tr><th>${escapeHtml(text.table.design)}</th><th>${escapeHtml(text.table.vb)}</th><th>${escapeHtml(text.table.tune)}</th><th>F3 / F6</th><th>${escapeHtml(text.table.peak)}</th><th>${escapeHtml(text.table.maxSpl)}</th><th>${escapeHtml(text.table.port)}</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  </section>
+  ${warnings.length ? `<section><h2>Warnings</h2><ul>${warningItems}</ul></section>` : ""}
+</body>
+</html>`;
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
 function analyzeDriver(driver: SpeakerDriver): DriverProfile {
   const issues: DriverIssue[] = [];
   const hasInvalidRequired =
@@ -2470,6 +3182,19 @@ function analyzeDriver(driver: SpeakerDriver): DriverProfile {
   }
   if (driver.peW !== undefined && driver.peW <= 0) {
     issues.push("powerInvalid");
+  }
+  if (driver.qes !== undefined && driver.qms !== undefined && driver.qes > 0 && driver.qms > 0) {
+    const expectedQts = (driver.qes * driver.qms) / (driver.qes + driver.qms);
+    if (Math.abs(expectedQts - driver.qts) / Math.max(0.01, driver.qts) > 0.08) {
+      issues.push("qtsFormulaMismatch");
+    }
+  }
+  if (driver.mmsG !== undefined && driver.mmsG > 0 && driver.sdCm2 > 0 && driver.vasL > 0) {
+    const cms = (driver.vasL / 1000) / (1.204 * 343 * 343 * Math.pow(driver.sdCm2 / 10000, 2));
+    const expectedFs = 1 / (Math.PI * 2 * Math.sqrt((driver.mmsG / 1000) * cms));
+    if (Number.isFinite(expectedFs) && Math.abs(expectedFs - driver.fsHz) / Math.max(1, driver.fsHz) > 0.18) {
+      issues.push("fsMmsVasMismatch");
+    }
   }
 
   const ebp = driver.qes && driver.qes > 0 ? driver.fsHz / driver.qes : undefined;
@@ -2508,11 +3233,16 @@ function loadProjectState(): ProjectState {
   const focusedDesignId = designs.find((design) => design.enabled)?.id ?? designs[0]?.id ?? "";
 
   return {
+    acousticOptions: DEFAULT_ACOUSTIC_OPTIONS,
     activeTab: "response",
+    compareDriverIds: [selectedDriver.id],
+    compareEnabled: false,
     designs,
     drivers,
     focusedDesignId,
     language: loadLanguage(),
+    libraryFilters: DEFAULT_LIBRARY_FILTERS,
+    measurements: [],
     optimizerGoal: "balanced",
     powerW: 25,
     referenceByTab: {},
@@ -2549,11 +3279,20 @@ function parseProjectFile(content: string): ProjectState | null {
       : normalizedDesigns.find((design) => design.enabled)?.id ?? normalizedDesigns[0]?.id ?? "";
 
     return {
+      acousticOptions: normalizeAcousticOptions(parsed.acousticOptions),
       activeTab: isChartTab(parsed.activeTab) ? parsed.activeTab : "response",
+      compareDriverIds: Array.isArray(parsed.compareDriverIds)
+        ? parsed.compareDriverIds.filter((id): id is string => typeof id === "string" && drivers.some((driver) => driver.id === id))
+        : [selectedDriverId],
+      compareEnabled: parsed.compareEnabled === true,
       designs: normalizedDesigns,
       drivers,
       focusedDesignId,
       language: parsed.language === "en" ? "en" : "ru",
+      libraryFilters: normalizeLibraryFilters(parsed.libraryFilters),
+      measurements: Array.isArray(parsed.measurements)
+        ? parsed.measurements.filter(isMeasurementTrace)
+        : [],
       optimizerGoal: isOptimizerGoal(parsed.optimizerGoal) ? parsed.optimizerGoal : "balanced",
       powerW: typeof parsed.powerW === "number" && Number.isFinite(parsed.powerW)
         ? Math.max(0.1, parsed.powerW)
@@ -2581,6 +3320,58 @@ function loadDrivers(): SpeakerDriver[] {
   } catch {
     return PRESET_DRIVERS;
   }
+}
+
+function normalizeLibraryFilters(value: unknown): LibraryFilters {
+  if (!isPlainRecord(value)) {
+    return DEFAULT_LIBRARY_FILTERS;
+  }
+  const status = value.status === "verified" || value.status === "modified" || value.status === "user"
+    ? value.status
+    : "all";
+  return {
+    maxFsHz: finiteOptional(value.maxFsHz),
+    maxQts: finiteOptional(value.maxQts),
+    maxVasL: finiteOptional(value.maxVasL),
+    minSdCm2: finiteOptional(value.minSdCm2),
+    minXmaxMm: finiteOptional(value.minXmaxMm),
+    query: typeof value.query === "string" ? value.query : "",
+    status,
+  };
+}
+
+function normalizeAcousticOptions(value: unknown): AcousticOptions {
+  if (!isPlainRecord(value)) {
+    return DEFAULT_ACOUSTIC_OPTIONS;
+  }
+  return {
+    baffleStepDb: finiteOptional(value.baffleStepDb) ?? DEFAULT_ACOUSTIC_OPTIONS.baffleStepDb,
+    baffleStepHz: finiteOptional(value.baffleStepHz) ?? DEFAULT_ACOUSTIC_OPTIONS.baffleStepHz,
+    roomGainDb: finiteOptional(value.roomGainDb) ?? DEFAULT_ACOUSTIC_OPTIONS.roomGainDb,
+    roomGainStartHz: finiteOptional(value.roomGainStartHz) ?? DEFAULT_ACOUSTIC_OPTIONS.roomGainStartHz,
+  };
+}
+
+function finiteOptional(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function isMeasurementTrace(value: unknown): value is MeasurementTrace {
+  return isPlainRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.name === "string" &&
+    typeof value.color === "string" &&
+    isChartTab(value.tab) &&
+    Array.isArray(value.points) &&
+    value.points.every(isPoint);
+}
+
+function isPoint(value: unknown): value is Point {
+  return isPlainRecord(value) &&
+    typeof value.x === "number" &&
+    Number.isFinite(value.x) &&
+    typeof value.y === "number" &&
+    Number.isFinite(value.y);
 }
 
 function mergePresetDrivers(drivers: SpeakerDriver[]): SpeakerDriver[] {
@@ -2692,7 +3483,10 @@ function normalizeDesign(design: BoxDesign): BoxDesign {
     vbLiters: Math.max(0.1, design.vbLiters || 0.1),
     fbHz: design.fbHz !== undefined ? Math.max(1, design.fbHz) : undefined,
     ql: design.ql !== undefined ? Math.max(0.1, design.ql) : undefined,
+    portShape: design.portShape === "slot" ? "slot" : "round",
     portDiameterCm: design.portDiameterCm !== undefined ? Math.max(0.1, design.portDiameterCm) : undefined,
+    portHeightCm: design.portHeightCm !== undefined ? Math.max(0.1, design.portHeightCm) : undefined,
+    portWidthCm: design.portWidthCm !== undefined ? Math.max(0.1, design.portWidthCm) : undefined,
     portCount: design.portCount !== undefined ? Math.max(1, Math.round(design.portCount)) : undefined,
   };
 }
