@@ -106,6 +106,15 @@ h2 {
   font-size: 13px;
 }
 
+.chart-header span,
+.config-rail-header span {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .topbar-actions {
   flex-wrap: wrap;
   justify-content: flex-end;
@@ -598,6 +607,10 @@ h2 {
   display: grid;
   gap: 2px;
   min-width: 140px;
+}
+
+.config-rail-header > div:first-child {
+  min-width: 0;
 }
 
 .chart-tools {

@@ -327,6 +327,8 @@ const UI_TEXT = {
       title: "Сравнение динамиков",
       enable: "Сравнивать",
       hint: "Одна выбранная конфигурация для отмеченных динамиков",
+      mode: "Динамики",
+      focusedConfig: (name: string) => `на графике: ${name}`,
     },
     measurements: {
       title: "Измерения",
@@ -542,6 +544,8 @@ const UI_TEXT = {
       title: "Driver comparison",
       enable: "Compare",
       hint: "One selected enclosure for checked drivers",
+      mode: "Drivers",
+      focusedConfig: (name: string) => `chart: ${name}`,
     },
     measurements: {
       title: "Measurements",
@@ -866,6 +870,11 @@ function App() {
       : [selectedDriver, ...filteredDrivers];
   }, [filteredDrivers, selectedDriver]);
   const activeDesignCount = designs.filter((design) => design.enabled).length;
+  const focusedDesign = useMemo(() => {
+    return designs.find((design) => design.id === focusedDesignId) ??
+      designs.find((design) => design.enabled) ??
+      designs[0];
+  }, [designs, focusedDesignId]);
   const liveChartDesigns = useMemo(() => {
     return deferredDesigns.filter((design) => design.enabled);
   }, [deferredDesigns]);
@@ -917,9 +926,6 @@ function App() {
     if (!compareEnabled) {
       return [];
     }
-    const focusedDesign = designs.find((design) => design.id === focusedDesignId) ??
-      designs.find((design) => design.enabled) ??
-      designs[0];
     if (!focusedDesign) {
       return [];
     }
@@ -940,7 +946,7 @@ function App() {
       ),
       acousticOptions,
     );
-  }, [activeTab, acousticOptions, compareDriverIds, compareEnabled, designs, drivers, focusedDesignId, powerW, selectedDriver, text]);
+  }, [activeTab, acousticOptions, compareDriverIds, compareEnabled, drivers, focusedDesign, powerW, selectedDriver, text]);
   const chartDisplayResults = compareEnabled ? compareChartResults : adjustedChartResults;
   const measurementSeries = useMemo(
     () => measurements
@@ -1330,6 +1336,13 @@ function App() {
   }
 
   const chartProps = getChartProps(activeTab, chartDisplayResults, deferredSelectedDriver, focusedDesignId, text, powerW, measurementSeries);
+  const focusedDesignName = focusedDesign ? displayDesignName(focusedDesign.name, text) : "";
+  const chartSubtitle = compareEnabled && focusedDesign
+    ? `${text.compare.mode} · ${focusedDesignName}`
+    : displayDriverName(selectedDriver, text);
+  const configStatusText = compareEnabled && focusedDesign
+    ? text.compare.focusedConfig(focusedDesignName)
+    : text.activeCount(activeDesignCount, designs.length);
   const currentReference = referenceByTab[activeTab];
   const layoutStyle = {
     "--left-panel-width": `${leftPanelWidth}px`,
@@ -1533,7 +1546,7 @@ function App() {
               <div>
                 <h2>{chartProps.title}</h2>
                 <span>
-                  {displayDriverName(selectedDriver, text)}
+                  {chartSubtitle}
                   {chartPending ? ` · ${text.analysisCalculating}` : ""}
                 </span>
               </div>
@@ -1612,7 +1625,7 @@ function App() {
                 <div className="config-rail-header">
                   <div>
                     <h2>{text.configs}</h2>
-                    <span>{text.activeCount(activeDesignCount, designs.length)}</span>
+                    <span>{configStatusText}</span>
                   </div>
                   <SlidersHorizontal size={18} />
                 </div>
