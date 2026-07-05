@@ -32,6 +32,41 @@ function nearestY(points: Array<{ x: number; y: number }>, x: number): number {
   return point.y;
 }
 
+function median(values: number[]): number {
+  const sorted = [...values].sort((left, right) => left - right);
+  return sorted[Math.floor(sorted.length / 2)];
+}
+
+function sealedHighPassMagnitude(frequency: number, fcHz: number, qtc: number): number {
+  const x = frequency / fcHz;
+  return (x * x) / Math.hypot(1 - x * x, x / qtc);
+}
+
+function db(value: number): number {
+  return 20 * Math.log10(Math.max(1e-12, value));
+}
+
+function valueAt(points: Array<{ x: number; y: number }>, x: number): number {
+  for (let index = 1; index < points.length; index += 1) {
+    const previous = points[index - 1];
+    const current = points[index];
+    if (x >= previous.x && x <= current.x) {
+      const ratio = (x - previous.x) / (current.x - previous.x || 1);
+      return previous.y + ratio * (current.y - previous.y);
+    }
+  }
+  return points[points.length - 1]?.y ?? 0;
+}
+
+function acousticPortTuningHz(vbLiters: number, portDiameterCm: number, lengthCm: number): number {
+  const c = 343;
+  const areaM2 = Math.PI * Math.pow(portDiameterCm / 200, 2);
+  const radiusM = portDiameterCm / 200;
+  const vbM3 = vbLiters / 1000;
+  const effectiveLengthM = lengthCm / 100 + 1.46 * radiusM;
+  return (c / (2 * Math.PI)) * Math.sqrt(areaM2 / (vbM3 * effectiveLengthM));
+}
+
 describe("acoustic reference scenarios", () => {
   it("keeps datasheet-backed preset T/S parameters in expected units", () => {
     expect(presetById("usher-8945p")).toMatchObject({
@@ -150,6 +185,88 @@ describe("acoustic reference scenarios", () => {
     }
   });
 
+  it("matches the closed-box second-order high-pass reference shape", () => {
+    const driver = {
+      id: "reference-sealed-driver",
+      name: "Reference sealed driver",
+      fsHz: 40,
+      qts: 0.4,
+      qes: 0.45,
+      qms: 3.6,
+      vasL: 30,
+      sdCm2: 130,
+      reOhm: 6,
+      leMh: 0,
+    };
+    const targetQtc = 0.707;
+    const vbLiters = driver.vasL / (Math.pow(targetQtc / driver.qts, 2) - 1);
+    const fcHz = driver.fsHz * Math.sqrt(1 + driver.vasL / vbLiters);
+    const result = simulateDesign(driver, {
+      id: "sealed-reference",
+      name: "Sealed reference",
+      kind: "sealed",
+      enabled: true,
+      vbLiters,
+      color: "#000000",
+    }, { powerW: 1, frequencyMaxHz: 1000, outputs: ["response", "metrics"] });
+    const analyticRaw = result.responseDb.map((point) => ({
+      x: point.x,
+      y: db(sealedHighPassMagnitude(point.x, fcHz, targetQtc)),
+    }));
+    const analyticReference = median(analyticRaw
+      .filter((point) => point.x >= 120 && point.x <= 260)
+      .map((point) => point.y));
+    const analytic = analyticRaw.map((point) => ({ ...point, y: point.y - analyticReference }));
+
+    for (const frequency of [20, 30, 40, 50, 80, 120]) {
+      expectNear(nearestY(result.responseDb, frequency), valueAt(analytic, frequency), 0.35);
+    }
+    expectNear(result.metrics.qtc, targetQtc, 0.002);
+    expectNear(result.metrics.fcHz, fcHz, 0.2);
+    expectNear(result.metrics.f3Hz, fcHz, 1.5);
+  });
+
+  it("matches the Usher 8945P free-air impedance peak from the datasheet curve", () => {
+    const driver = presetById("usher-8945p");
+    const result = simulateDesign(driver, {
+      id: "usher-free-air",
+      name: "Usher free air",
+      kind: "infinite",
+      enabled: true,
+      vbLiters: 1,
+      color: "#000000",
+    }, { powerW: 1, frequencyMaxHz: 200, outputs: ["impedance", "metrics"] });
+    const peak = result.impedanceOhm.reduce((best, point) => point.y > best.y ? point : best, result.impedanceOhm[0]);
+
+    expectNear(peak.x, 34, 2);
+    expectNear(peak.y, 43, 4);
+    expectNear(result.metrics.minImpedanceOhm, 5.8, 0.7);
+  });
+
+  it("keeps vent length inverse-consistent with Helmholtz tuning", () => {
+    const { design, driver } = designByName(3, "Vented QB3");
+    const result = simulateDesign(driver, design, { powerW: 1 });
+    expect(result.metrics.portLengthCm).toBeDefined();
+    expect(design.fbHz).toBeDefined();
+
+    const invertedFb = acousticPortTuningHz(design.vbLiters, design.portDiameterCm ?? 7, result.metrics.portLengthCm!);
+    expectNear(invertedFb, design.fbHz!, 0.2);
+  });
+
+  it("marks approximate enclosure types as approximate in analysis notes", () => {
+    const driver = presetById("usher-8945p");
+    const designs = createDefaultDesigns(driver);
+    const passive = designs.find((item) => item.name === "Passive radiator");
+    const bandpass = designs.find((item) => item.name === "Bandpass 4th order");
+    expect(passive).toBeDefined();
+    expect(bandpass).toBeDefined();
+
+    expect(simulateDesign(driver, passive!, { powerW: 1 }).metrics.notes)
+      .toContain("Passive radiator uses equivalent vent approximation");
+    expect(simulateDesign(driver, bandpass!, { powerW: 1 }).metrics.notes)
+      .toContain("Bandpass model is approximate");
+  });
+
   it("keeps the 6.5 inch sealed Butterworth alignment stable", () => {
     const { design, driver } = designByName(0, "Closed Butterworth Qtc 0.71");
     const result = simulateDesign(driver, design, { powerW: 25 });
@@ -234,6 +351,7 @@ describe("acoustic reference scenarios", () => {
     expect(lightMaterial.metrics.qtc).toBeUndefined();
     expect(lightMaterial.metrics.effectiveQ).toBeGreaterThan(0);
     expect(lightMaterial.metrics.impedancePeakReductionDb).toBeGreaterThan(0);
+    expect(lightMaterial.metrics.impedancePeakReductionDb).toBeGreaterThan(denseMaterial.metrics.impedancePeakReductionDb ?? 0);
     expect(Math.abs(nearestY(lightMaterial.responseDb, driver.fsHz) - nearestY(denseMaterial.responseDb, driver.fsHz))).toBeGreaterThan(0.15);
   });
 

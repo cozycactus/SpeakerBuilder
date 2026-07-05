@@ -620,7 +620,9 @@ const UI_TEXT = {
       maxSplLimitedByPe: (frequency: string) => `SPL ограничен Pe на ${frequency} Гц`,
       maxSplLimitedByPort: (frequency: string) => `SPL ограничен портом на ${frequency} Гц`,
       maxSplLimitedByXmax: (frequency: string) => `SPL ограничен Xmax на ${frequency} Гц`,
+      bandpassApproximate: "Бандпасс пока считается приближенно: задняя закрытая камера + ФНЧ, без полной модели камер",
       multiplePortsLong: "Несколько портов сильно увеличивают требуемую длину",
+      passiveEquivalentVent: "Пассивный радиатор пока считается как эквивалентный порт, без массы и хода PR",
       powerExceeded: (power: string) => `Заданная мощность выше Pe: ${power} W`,
       portDiameterSmall: "Диаметр порта мал для площади диффузора",
       portMayNotFit: "Порт может не поместиться в корпус",
@@ -948,7 +950,9 @@ const UI_TEXT = {
       maxSplLimitedByPe: (frequency: string) => `Max SPL limited by Pe at ${frequency} Hz`,
       maxSplLimitedByPort: (frequency: string) => `Max SPL limited by port at ${frequency} Hz`,
       maxSplLimitedByXmax: (frequency: string) => `Max SPL limited by Xmax at ${frequency} Hz`,
+      bandpassApproximate: "Bandpass is approximate: rear sealed + low-pass, not a full chamber model",
       multiplePortsLong: "Multiple ports make the tuning tube long",
+      passiveEquivalentVent: "Passive radiator uses an equivalent vent approximation, without PR mass and excursion",
       powerExceeded: (power: string) => `Power exceeds Pe: ${power} W`,
       portDiameterSmall: "Port diameter is small for cone area",
       portMayNotFit: "Port may not fit inside the box",
@@ -4599,6 +4603,12 @@ function translateNote(note: string, text: UiText): string {
   }
   if (note === "Multiple ports make the tuning tube long") {
     return text.notes.multiplePortsLong;
+  }
+  if (note === "Passive radiator uses equivalent vent approximation") {
+    return text.notes.passiveEquivalentVent;
+  }
+  if (note === "Bandpass model is approximate") {
+    return text.notes.bandpassApproximate;
   }
 
   return note;

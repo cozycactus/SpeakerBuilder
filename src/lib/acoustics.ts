@@ -693,6 +693,12 @@ export function simulateDesign(
       effectiveQ = impedanceSummary.effectiveQ;
       impedancePeakOhm = impedanceSummary.peakOhm;
     }
+    if (design.kind === "passive") {
+      notes.push("Passive radiator uses equivalent vent approximation");
+    }
+    if (design.kind === "bandpass") {
+      notes.push("Bandpass model is approximate");
+    }
     if (driver.peW && driveInput.electricalPowerW > driver.peW) {
       notes.push(`Power exceeds Pe: ${roundTo(driveInput.electricalPowerW, 1)} W`);
     }
