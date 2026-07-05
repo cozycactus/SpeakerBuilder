@@ -972,7 +972,10 @@ function App() {
     const selectedCompareDrivers = compareDriverIds
       .map((id) => drivers.find((driver) => driver.id === id))
       .filter(Boolean) as SpeakerDriver[];
-    const compareDrivers = selectedCompareDrivers.length > 0 ? selectedCompareDrivers : [selectedDriver];
+    const compareDrivers = [
+      selectedDriver,
+      ...selectedCompareDrivers.filter((driver) => driver.id !== selectedDriver.id),
+    ];
     return applyAcousticOptionsToResults(
       compareDrivers.map((driver, index) =>
         simulateDesign(driver, {
@@ -1419,7 +1422,8 @@ function App() {
     setChartPanelOrder((current) => reorderPanelBefore(current, dragged.id as ChartToolPanelId, targetId));
   }
 
-  const chartProps = getChartProps(activeTab, chartDisplayResults, selectedDriver, focusedDesignId, text, powerW, measurementSeries);
+  const chartFocusedSeriesId = compareEnabled ? selectedDriver.id : focusedDesignId;
+  const chartProps = getChartProps(activeTab, chartDisplayResults, selectedDriver, chartFocusedSeriesId, text, powerW, measurementSeries);
   const focusedDesignName = focusedDesign ? displayDesignName(focusedDesign.name, text) : "";
   const chartSubtitle = compareEnabled && focusedDesign
     ? `${text.compare.mode} · ${focusedDesignName}`
@@ -1578,6 +1582,7 @@ function App() {
         dragHandle={dragHandle}
         drivers={drivers}
         enabled={compareEnabled}
+        activeDriverId={selectedDriver.id}
         selectedIds={compareDriverIds}
         text={text}
         onEnabledChange={setCompareEnabled}
@@ -2369,6 +2374,7 @@ function DriverComparePanel({
   dragHandle,
   drivers,
   enabled,
+  activeDriverId,
   selectedIds,
   text,
   onEnabledChange,
@@ -2379,6 +2385,7 @@ function DriverComparePanel({
   dragHandle?: ReactNode;
   drivers: SpeakerDriver[];
   enabled: boolean;
+  activeDriverId: string;
   selectedIds: string[];
   text: UiText;
   onEnabledChange: (enabled: boolean) => void;
@@ -2398,16 +2405,20 @@ function DriverComparePanel({
       </div>
       <p>{text.compare.hint}</p>
       <div className="compare-list">
-        {drivers.map((driver) => (
-          <label key={driver.id} className="compare-item">
-            <input
-              type="checkbox"
-              checked={selectedIds.includes(driver.id)}
-              onChange={() => onToggleDriver(driver.id)}
-            />
-            <span>{displayDriverName(driver, text)}</span>
-          </label>
-        ))}
+        {drivers.map((driver) => {
+          const isActiveDriver = driver.id === activeDriverId;
+          return (
+            <label key={driver.id} className={`compare-item ${isActiveDriver ? "active" : ""}`}>
+              <input
+                type="checkbox"
+                checked={isActiveDriver || selectedIds.includes(driver.id)}
+                disabled={isActiveDriver}
+                onChange={() => onToggleDriver(driver.id)}
+              />
+              <span>{displayDriverName(driver, text)}</span>
+            </label>
+          );
+        })}
       </div>
     </section>
   );
