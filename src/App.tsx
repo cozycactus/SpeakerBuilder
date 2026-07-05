@@ -3020,16 +3020,57 @@ function LineChart({
   svgRef?: Ref<SVGSVGElement>;
 }) {
   const width = 960;
-  const height = 390;
+  const [chartHeight, setChartHeight] = useState(540);
+  const height = chartHeight;
   const margin = { top: 20, right: 24, bottom: 62, left: 58 };
   const innerWidth = width - margin.left - margin.right;
   const innerHeight = height - margin.top - margin.bottom;
+  const chartBoxRef = useRef<HTMLDivElement>(null);
   const [hover, setHover] = useState<{
     svgX: number;
     svgY: number;
     xValue: number;
     values: Array<{ color: string; name: string; x: number; y: number }>;
   } | null>(null);
+
+  useEffect(() => {
+    const chartBox = chartBoxRef.current;
+    if (!chartBox) {
+      return undefined;
+    }
+
+    const updateChartHeight = () => {
+      const chartStage = chartBox.parentElement;
+      const renderedWidth = chartBox.getBoundingClientRect().width;
+      const stageHeight = chartStage?.getBoundingClientRect().height ?? 0;
+      if (renderedWidth <= 0 || stageHeight <= 0) {
+        return;
+      }
+
+      const legendHeight = chartBox.querySelector(".legend")?.getBoundingClientRect().height ?? 28;
+      const targetSvgHeight = clampNumber(stageHeight - legendHeight - 10, 320, 680);
+      const nextHeight = Math.round(clampNumber((targetSvgHeight / renderedWidth) * width, 220, 960));
+      setChartHeight((currentHeight) => (Math.abs(currentHeight - nextHeight) > 1 ? nextHeight : currentHeight));
+    };
+
+    updateChartHeight();
+
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(updateChartHeight);
+    observer?.observe(chartBox);
+    if (chartBox.parentElement) {
+      observer?.observe(chartBox.parentElement);
+    }
+    const legend = chartBox.querySelector(".legend");
+    if (legend) {
+      observer?.observe(legend);
+    }
+    window.addEventListener("resize", updateChartHeight);
+
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", updateChartHeight);
+    };
+  }, [referenceSeries.length, series.length]);
   const xTicks = xScale === "log" ? logTicks(xDomain) : linearTicks(xDomain, 6);
   const yTicks = linearTicks(yDomain, 7);
   const scaleX = (x: number) => {
@@ -3096,7 +3137,7 @@ function LineChart({
   const tooltipY = hover ? Math.max(8, Math.min(height - tooltipHeight - 8, hover.svgY - 18)) : 0;
 
   return (
-    <div className="chart-box">
+    <div className="chart-box" ref={chartBoxRef}>
       <svg
         ref={svgRef}
         viewBox={`0 0 ${width} ${height}`}

@@ -900,23 +900,30 @@ h2 {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 16px var(--right-panel-width, 340px);
   gap: 0;
-  align-items: start;
+  align-items: stretch;
 }
 
 .chart-stage {
+  display: flex;
   min-width: 0;
+  height: 540px;
 }
 
 .chart-resizer {
-  min-height: 390px;
+  min-height: 540px;
 }
 
 .chart-box {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
+  min-height: 0;
+  width: 100%;
   overflow: hidden;
 }
 
 .chart-box svg {
+  flex: 0 0 auto;
   display: block;
   width: 100%;
   height: auto;
@@ -1527,6 +1534,10 @@ h2 {
   .chart-workbench {
     grid-template-columns: 1fr;
     gap: 16px;
+  }
+
+  .chart-stage {
+    height: 460px;
   }
 
   .chart-control-strip {
