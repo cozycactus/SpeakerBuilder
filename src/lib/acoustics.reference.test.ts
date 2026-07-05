@@ -18,7 +18,87 @@ function designByName(driverIndex: number, name: string) {
   return { design: design!, driver };
 }
 
+function presetById(id: string) {
+  const driver = PRESET_DRIVERS.find((item) => item.id === id);
+  expect(driver).toBeDefined();
+  return driver!;
+}
+
 describe("acoustic reference scenarios", () => {
+  it("keeps datasheet-backed preset T/S parameters in expected units", () => {
+    expect(presetById("usher-8945p")).toMatchObject({
+      fsHz: 34.012,
+      qts: 0.335,
+      qes: 0.388,
+      qms: 2.441,
+      vasL: 37.1679,
+      sdCm2: 136,
+      reOhm: 5.8,
+      leMh: 0.237,
+      xmaxMm: 6,
+      peW: 70,
+      mmsG: 14.5948,
+      blTm: 6.9338,
+    });
+    expect(presetById("dayton-rs180-8")).toMatchObject({
+      fsHz: 35.7,
+      qts: 0.31,
+      qes: 0.42,
+      qms: 1.22,
+      vasL: 24.4,
+      sdCm2: 124.7,
+      reOhm: 6.4,
+      leMh: 0.73,
+      xmaxMm: 6,
+      peW: 60,
+      mmsG: 17.9,
+      blTm: 7.82,
+    });
+    expect(presetById("sb17nrxc35-8")).toMatchObject({
+      fsHz: 32,
+      qts: 0.34,
+      qes: 0.36,
+      qms: 5,
+      vasL: 44.5,
+      sdCm2: 118,
+      reOhm: 5.7,
+      leMh: 0.15,
+      xmaxMm: 5.5,
+      peW: 60,
+      mmsG: 11,
+      blTm: 5.9,
+    });
+    expect(presetById("scan-speak-18w-8545-01")).toMatchObject({
+      fsHz: 25,
+      qts: 0.2,
+      qes: 0.22,
+      qms: 1.55,
+      vasL: 68.6,
+      sdCm2: 145,
+      reOhm: 5.7,
+      leMh: 0.39,
+      xmaxMm: 6.5,
+      peW: 100,
+      mmsG: 18,
+      blTm: 8.4,
+    });
+  });
+
+  it("can simulate each datasheet-backed preset without invalid metrics", () => {
+    for (const id of ["usher-8945p", "dayton-rs180-8", "sb17nrxc35-8", "scan-speak-18w-8545-01"]) {
+      const driver = presetById(id);
+      const design = createDefaultDesigns(driver).find((item) => item.name === "Vented QB3");
+      expect(design).toBeDefined();
+      const result = simulateDesign(driver, design!, { powerW: 25 });
+
+      expect(result.metrics.f3Hz).toBeGreaterThan(10);
+      expect(result.metrics.f3Hz).toBeLessThan(120);
+      expect(result.metrics.maxUsableSplDb).toBeGreaterThan(80);
+      expect(result.metrics.maxExcursionMm).toBeGreaterThan(0);
+      expect(result.metrics.minImpedanceOhm).toBeGreaterThan(0);
+    }
+  });
+
   it("keeps the 6.5 inch sealed Butterworth alignment stable", () => {
     const { design, driver } = designByName(0, "Closed Butterworth Qtc 0.71");
     const result = simulateDesign(driver, design, { powerW: 25 });

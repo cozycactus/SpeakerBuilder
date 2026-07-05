@@ -2415,10 +2415,11 @@ function parseProjectFile(content: string): ProjectState | null {
       return null;
     }
 
-    const drivers = parsed.drivers.filter(isSpeakerDriver);
-    if (drivers.length === 0) {
+    const projectDrivers = parsed.drivers.filter(isSpeakerDriver);
+    if (projectDrivers.length === 0) {
       return null;
     }
+    const drivers = mergePresetDrivers(projectDrivers);
 
     const selectedDriverId = typeof parsed.selectedDriverId === "string" &&
       drivers.some((driver) => driver.id === parsed.selectedDriverId)
@@ -2459,10 +2460,21 @@ function loadDrivers(): SpeakerDriver[] {
       return PRESET_DRIVERS;
     }
     const parsed = JSON.parse(raw) as SpeakerDriver[];
-    return Array.isArray(parsed) && parsed.length > 0 ? parsed : PRESET_DRIVERS;
+    return Array.isArray(parsed) && parsed.length > 0
+      ? mergePresetDrivers(parsed.filter(isSpeakerDriver))
+      : PRESET_DRIVERS;
   } catch {
     return PRESET_DRIVERS;
   }
+}
+
+function mergePresetDrivers(drivers: SpeakerDriver[]): SpeakerDriver[] {
+  const existingIds = new Set(drivers.map((driver) => driver.id));
+  const existingNames = new Set(drivers.map((driver) => driver.name.trim().toLowerCase()));
+  const missingPresets = PRESET_DRIVERS.filter((preset) =>
+    !existingIds.has(preset.id) && !existingNames.has(preset.name.trim().toLowerCase()),
+  );
+  return [...drivers, ...missingPresets];
 }
 
 function loadLanguage(): Language {
