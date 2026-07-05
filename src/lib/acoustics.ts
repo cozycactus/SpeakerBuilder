@@ -1,0 +1,896 @@
+export type BoxKind =
+  | "sealed"
+  | "vented"
+  | "passive"
+  | "aperiodic"
+  | "infinite"
+  | "bandpass";
+
+export interface SpeakerDriver {
+  id: string;
+  name: string;
+  fsHz: number;
+  qts: number;
+  qes?: number;
+  qms?: number;
+  vasL: number;
+  sdCm2: number;
+  reOhm: number;
+  leMh?: number;
+  xmaxMm?: number;
+  peW?: number;
+  mmsG?: number;
+  blTm?: number;
+}
+
+export interface BoxDesign {
+  id: string;
+  name: string;
+  kind: BoxKind;
+  enabled: boolean;
+  vbLiters: number;
+  fbHz?: number;
+  ql?: number;
+  portDiameterCm?: number;
+  portCount?: number;
+  color: string;
+}
+
+export interface SimulationOptions {
+  powerW: number;
+}
+
+export interface Point {
+  x: number;
+  y: number;
+}
+
+export interface SimulationResult {
+  design: BoxDesign;
+  responseDb: Point[];
+  phaseDeg: Point[];
+  groupDelayMs: Point[];
+  excursionMm: Point[];
+  portMach: Point[];
+  impedanceOhm: Point[];
+  step: Point[];
+  metrics: {
+    f3Hz?: number;
+    f6Hz?: number;
+    peakDb: number;
+    peakHz: number;
+    groupDelay30Ms?: number;
+    groupDelay40Ms?: number;
+    groupDelayAtF3Ms?: number;
+    maxExcursionMm: number;
+    maxExcursionHz: number;
+    maxPortMach?: number;
+    portLengthCm?: number;
+    minImpedanceOhm: number;
+    qtc?: number;
+    fcHz?: number;
+    notes: string[];
+  };
+}
+
+interface Complex {
+  re: number;
+  im: number;
+}
+
+interface DerivedDriver {
+  fsHz: number;
+  qts: number;
+  qes: number;
+  qms: number;
+  vasM3: number;
+  sdM2: number;
+  reOhm: number;
+  leH: number;
+  xmaxM?: number;
+  peW?: number;
+  cms: number;
+  mms: number;
+  rms: number;
+  bl: number;
+  warnings: string[];
+}
+
+interface ResponseAtFrequency {
+  acoustic: Complex;
+  coneVelocity: Complex;
+  portVolumeVelocity: Complex;
+  inputImpedance: Complex;
+}
+
+const RHO = 1.204;
+const SPEED_OF_SOUND = 343;
+const TWO_PI = Math.PI * 2;
+
+export const FREQUENCIES = logspace(10, 500, 220);
+
+export const DESIGN_COLORS = [
+  "#0f766e",
+  "#c2410c",
+  "#4338ca",
+  "#b45309",
+  "#be123c",
+  "#047857",
+  "#7c3aed",
+  "#0369a1",
+  "#a21caf",
+  "#4d7c0f",
+];
+
+export const PRESET_DRIVERS: SpeakerDriver[] = [
+  {
+    id: "midwoofer-65",
+    name: "6.5 inch midwoofer",
+    fsHz: 42,
+    qts: 0.38,
+    qes: 0.43,
+    qms: 5.2,
+    vasL: 24,
+    sdCm2: 132,
+    reOhm: 5.8,
+    leMh: 0.45,
+    xmaxMm: 5,
+    peW: 80,
+  },
+  {
+    id: "woofer-10",
+    name: "10 inch woofer",
+    fsHz: 27,
+    qts: 0.34,
+    qes: 0.38,
+    qms: 4.5,
+    vasL: 92,
+    sdCm2: 346,
+    reOhm: 6.1,
+    leMh: 1.05,
+    xmaxMm: 8,
+    peW: 180,
+  },
+  {
+    id: "subwoofer-12",
+    name: "12 inch subwoofer",
+    fsHz: 22,
+    qts: 0.41,
+    qes: 0.47,
+    qms: 6.1,
+    vasL: 138,
+    sdCm2: 530,
+    reOhm: 3.6,
+    leMh: 1.7,
+    xmaxMm: 14,
+    peW: 500,
+  },
+];
+
+export function createDefaultDesigns(driver: SpeakerDriver): BoxDesign[] {
+  const sealedB2 = sealedForQtc(driver, 0.577);
+  const sealedBw = sealedForQtc(driver, 0.707);
+  const sealedCompact = sealedForQtc(driver, 0.9);
+  const ventedBase = ventedBaseVolumeFactor(driver.qts);
+
+  const designs: BoxDesign[] = [
+    {
+      id: newId("sealed-bessel"),
+      name: "Closed Bessel Qtc 0.58",
+      kind: "sealed",
+      enabled: true,
+      vbLiters: sealedB2,
+      color: DESIGN_COLORS[0],
+    },
+    {
+      id: newId("sealed-butterworth"),
+      name: "Closed Butterworth Qtc 0.71",
+      kind: "sealed",
+      enabled: true,
+      vbLiters: sealedBw,
+      color: DESIGN_COLORS[1],
+    },
+    {
+      id: newId("vented-qb3"),
+      name: "Vented QB3",
+      kind: "vented",
+      enabled: true,
+      vbLiters: driver.vasL * ventedBase * 0.72,
+      fbHz: driver.fsHz * 1.03,
+      ql: 7,
+      portDiameterCm: 7,
+      portCount: 1,
+      color: DESIGN_COLORS[2],
+    },
+    {
+      id: newId("vented-ebs"),
+      name: "Vented EBS",
+      kind: "vented",
+      enabled: true,
+      vbLiters: driver.vasL * ventedBase * 1.75,
+      fbHz: driver.fsHz * 0.68,
+      ql: 7,
+      portDiameterCm: 8,
+      portCount: 1,
+      color: DESIGN_COLORS[3],
+    },
+    {
+      id: newId("sealed-compact"),
+      name: "Closed compact Qtc 0.90",
+      kind: "sealed",
+      enabled: false,
+      vbLiters: sealedCompact,
+      color: DESIGN_COLORS[4],
+    },
+    {
+      id: newId("vented-bb4"),
+      name: "Vented BB4",
+      kind: "vented",
+      enabled: false,
+      vbLiters: driver.vasL * ventedBase * 1.05,
+      fbHz: driver.fsHz * 0.92,
+      ql: 7,
+      portDiameterCm: 7,
+      portCount: 1,
+      color: DESIGN_COLORS[5],
+    },
+    {
+      id: newId("vented-sbb4"),
+      name: "Vented SBB4",
+      kind: "vented",
+      enabled: false,
+      vbLiters: driver.vasL * ventedBase * 1.32,
+      fbHz: driver.fsHz * 0.82,
+      ql: 6,
+      portDiameterCm: 8,
+      portCount: 1,
+      color: DESIGN_COLORS[6],
+    },
+    {
+      id: newId("passive-radiator"),
+      name: "Passive radiator",
+      kind: "passive",
+      enabled: false,
+      vbLiters: driver.vasL * ventedBase * 1.2,
+      fbHz: driver.fsHz * 0.78,
+      ql: 9,
+      portDiameterCm: 12,
+      portCount: 1,
+      color: DESIGN_COLORS[7],
+    },
+    {
+      id: newId("aperiodic"),
+      name: "Aperiodic damped",
+      kind: "aperiodic",
+      enabled: false,
+      vbLiters: sealedBw * 0.68,
+      ql: 1.7,
+      color: DESIGN_COLORS[8],
+    },
+    {
+      id: newId("bandpass"),
+      name: "Bandpass 4th order",
+      kind: "bandpass",
+      enabled: false,
+      vbLiters: Math.max(sealedBw * 0.75, driver.vasL * 0.18),
+      fbHz: driver.fsHz * 1.15,
+      ql: 0.74,
+      portDiameterCm: 7,
+      portCount: 1,
+      color: DESIGN_COLORS[9],
+    },
+  ];
+
+  return designs.map((design) => ({
+    ...design,
+    vbLiters: roundTo(Math.max(0.5, design.vbLiters), 1),
+    fbHz: design.fbHz ? roundTo(design.fbHz, 1) : undefined,
+  }));
+}
+
+export function createDesignFromTemplate(
+  template: string,
+  driver: SpeakerDriver,
+  index: number,
+): BoxDesign {
+  const designs = createDefaultDesigns(driver);
+  const byName = designs.find((design) => slug(design.name) === template);
+  const base = byName ?? designs[0];
+  return {
+    ...base,
+    id: newId(template),
+    enabled: true,
+    color: DESIGN_COLORS[index % DESIGN_COLORS.length],
+  };
+}
+
+export function getDesignTemplates(driver: SpeakerDriver): BoxDesign[] {
+  return createDefaultDesigns(driver).map((design) => ({ ...design, enabled: true }));
+}
+
+export function simulateDesign(
+  driver: SpeakerDriver,
+  design: BoxDesign,
+  options: SimulationOptions,
+): SimulationResult {
+  const derived = deriveDriver(driver);
+  const notes = [...derived.warnings];
+  const voltageRms = Math.sqrt(Math.max(0.1, options.powerW) * derived.reOhm);
+  const raw = FREQUENCIES.map((frequency) => ({
+    frequency,
+    response: responseAtFrequency(derived, design, frequency),
+  }));
+
+  const refMagnitude = getReferenceMagnitude(raw.map((item) => ({
+    frequency: item.frequency,
+    magnitude: cabs(item.response.acoustic),
+  })));
+
+  const responseDb = raw.map((item) => ({
+    x: item.frequency,
+    y: db(cabs(item.response.acoustic) / refMagnitude),
+  }));
+  const phaseRad = unwrapPhase(raw.map((item) => carg(item.response.acoustic)));
+  const phaseDeg = raw.map((item, index) => ({
+    x: item.frequency,
+    y: (phaseRad[index] * 180) / Math.PI,
+  }));
+  const groupDelayMs = raw.map((item, index) => ({
+    x: item.frequency,
+    y: groupDelayAt(index, raw.map((point) => point.frequency), phaseRad),
+  }));
+  const excursionMm = raw.map((item) => {
+    const omega = TWO_PI * item.frequency;
+    return {
+      x: item.frequency,
+      y: (cabs(item.response.coneVelocity) * voltageRms * 1000) / omega,
+    };
+  });
+  const portArea = getPortAreaM2(design);
+  const portMach = raw.map((item) => {
+    const velocity =
+      portArea > 0
+        ? (cabs(item.response.portVolumeVelocity) * voltageRms) / portArea
+        : 0;
+    return { x: item.frequency, y: velocity / SPEED_OF_SOUND };
+  });
+  const impedanceOhm = raw.map((item) => ({
+    x: item.frequency,
+    y: cabs(item.response.inputImpedance),
+  }));
+  const step = createStepResponse(derived, design, refMagnitude);
+  const f3Hz = findCutoff(responseDb, -3);
+  const f6Hz = findCutoff(responseDb, -6);
+  const peak = maxPoint(responseDb, (point) => point.y);
+  const maxExcursion = maxPoint(excursionMm, (point) => point.y);
+  const maxPort = maxPoint(portMach, (point) => point.y);
+  const minImpedance = minPoint(impedanceOhm, (point) => point.y);
+  const qtc = design.kind === "sealed" || design.kind === "aperiodic"
+    ? sealedQtc(driver, design.vbLiters)
+    : undefined;
+  const fcHz = qtc ? driver.fsHz * Math.sqrt(1 + driver.vasL / design.vbLiters) : undefined;
+  const portLengthCm = design.kind === "vented" ? portLength(design) : undefined;
+
+  if (driver.xmaxMm && maxExcursion.y > driver.xmaxMm) {
+    notes.push(`Xmax exceeded at ${roundTo(maxExcursion.x, 1)} Hz`);
+  }
+  if (design.kind === "vented" && maxPort.y > 0.16) {
+    notes.push(`High vent air speed: Mach ${roundTo(maxPort.y, 2)}`);
+  }
+  if (design.kind === "vented" && portLengthCm !== undefined && portLengthCm <= 1) {
+    notes.push("Vent is too short for this diameter/tuning");
+  }
+  if ((design.kind === "vented" || design.kind === "passive") && driver.qts > 0.58) {
+    notes.push("High Qts driver may prefer sealed or aperiodic loading");
+  }
+  if (design.vbLiters <= 0 || Number.isNaN(design.vbLiters)) {
+    notes.push("Invalid box volume");
+  }
+
+  return {
+    design,
+    responseDb,
+    phaseDeg,
+    groupDelayMs,
+    excursionMm,
+    portMach,
+    impedanceOhm,
+    step,
+    metrics: {
+      f3Hz,
+      f6Hz,
+      peakDb: peak.y,
+      peakHz: peak.x,
+      groupDelay30Ms: valueAt(groupDelayMs, 30),
+      groupDelay40Ms: valueAt(groupDelayMs, 40),
+      groupDelayAtF3Ms: f3Hz ? valueAt(groupDelayMs, f3Hz) : undefined,
+      maxExcursionMm: maxExcursion.y,
+      maxExcursionHz: maxExcursion.x,
+      maxPortMach: design.kind === "vented" ? maxPort.y : undefined,
+      portLengthCm,
+      minImpedanceOhm: minImpedance.y,
+      qtc,
+      fcHz,
+      notes,
+    },
+  };
+}
+
+export function parseDriversFromFile(name: string, content: string): SpeakerDriver[] {
+  const ext = name.toLowerCase().split(".").pop();
+  if (ext === "json") {
+    const parsed = JSON.parse(content) as unknown;
+    const items = Array.isArray(parsed)
+      ? parsed
+      : isRecord(parsed) && Array.isArray(parsed.drivers)
+        ? parsed.drivers
+        : [parsed];
+    return items.map(normalizeDriver).filter(Boolean) as SpeakerDriver[];
+  }
+
+  const rows = parseCsv(content);
+  return rows.map(normalizeDriver).filter(Boolean) as SpeakerDriver[];
+}
+
+function responseAtFrequency(
+  driver: DerivedDriver,
+  design: BoxDesign,
+  frequency: number,
+): ResponseAtFrequency {
+  if (design.kind === "bandpass") {
+    const rear = responseAtFrequency(driver, { ...design, kind: "sealed" }, frequency);
+    const fb = Math.max(8, design.fbHz ?? driver.fsHz * 1.2);
+    const q = clamp(design.ql ?? 0.74, 0.35, 1.5);
+    const x = frequency / fb;
+    const lowPass = cdiv(
+      c(1, 0),
+      c(1 - x * x, x / q),
+    );
+    return {
+      ...rear,
+      acoustic: cmul(rear.acoustic, lowPass),
+      portVolumeVelocity: c(0, 0),
+    };
+  }
+
+  const omega = TWO_PI * frequency;
+  const s = c(0, omega);
+  const ze = cadd(c(driver.reOhm, 0), cmul(s, c(driver.leH, 0)));
+  const zms = cadd(
+    cadd(c(driver.rms, 0), cmul(s, c(driver.mms, 0))),
+    cdiv(c(1, 0), cmul(s, c(driver.cms, 0))),
+  );
+  const load = enclosureLoad(driver, design, frequency);
+  const zMechanical = cadd(zms, load.zload);
+  const reflected = cdiv(c(driver.bl * driver.bl, 0), ze);
+  const denominator = cadd(zMechanical, reflected);
+  const coneVelocity = cdiv(cdiv(c(driver.bl, 0), ze), denominator);
+  const inputImpedance = cadd(ze, cdiv(c(driver.bl * driver.bl, 0), zMechanical));
+  const frontVolumeVelocity = cmul(c(driver.sdM2, 0), coneVelocity);
+
+  if (design.kind === "vented" || design.kind === "passive") {
+    const boxInflow = cmul(c(-1, 0), frontVolumeVelocity);
+    const pressure = cmul(boxInflow, load.zAcoustic);
+    const portVolumeVelocity = load.zPort ? cdiv(pressure, load.zPort) : c(0, 0);
+    const totalVolumeVelocity = cadd(frontVolumeVelocity, portVolumeVelocity);
+    return {
+      acoustic: pressureProxy(totalVolumeVelocity, frequency),
+      coneVelocity,
+      portVolumeVelocity,
+      inputImpedance,
+    };
+  }
+
+  return {
+    acoustic: pressureProxy(frontVolumeVelocity, frequency),
+    coneVelocity,
+    portVolumeVelocity: c(0, 0),
+    inputImpedance,
+  };
+}
+
+function enclosureLoad(
+  driver: DerivedDriver,
+  design: BoxDesign,
+  frequency: number,
+): { zload: Complex; zAcoustic: Complex; zPort?: Complex } {
+  if (design.kind === "infinite") {
+    return { zload: c(0, 0), zAcoustic: c(0, 0) };
+  }
+
+  const omega = TWO_PI * frequency;
+  const s = c(0, omega);
+  const vbM3 = Math.max(0.001, design.vbLiters / 1000);
+  const cab = vbM3 / (RHO * SPEED_OF_SOUND * SPEED_OF_SOUND);
+
+  if (design.kind === "vented" || design.kind === "passive") {
+    const fb = Math.max(5, design.fbHz ?? driver.fsHz);
+    const ql = clamp(design.ql ?? 7, 2, 30);
+    const map = 1 / (Math.pow(TWO_PI * fb, 2) * cab);
+    const rap = (TWO_PI * fb * map) / ql;
+    const zPort = cadd(c(rap, 0), cmul(s, c(map, 0)));
+    const yBox = cmul(s, c(cab, 0));
+    const yPort = cdiv(c(1, 0), zPort);
+    const zAcoustic = cdiv(c(1, 0), cadd(yBox, yPort));
+    return {
+      zload: cmul(c(driver.sdM2 * driver.sdM2, 0), zAcoustic),
+      zAcoustic,
+      zPort,
+    };
+  }
+
+  const yBox = cmul(s, c(cab, 0));
+  const ql = design.kind === "aperiodic" ? clamp(design.ql ?? 1.7, 0.5, 5) : 0;
+  const leakAdmittance = ql > 0 ? c((TWO_PI * driver.fsHz * cab) / ql, 0) : c(0, 0);
+  const zAcoustic = cdiv(c(1, 0), cadd(yBox, leakAdmittance));
+  return {
+    zload: cmul(c(driver.sdM2 * driver.sdM2, 0), zAcoustic),
+    zAcoustic,
+  };
+}
+
+function deriveDriver(driver: SpeakerDriver): DerivedDriver {
+  const warnings: string[] = [];
+  const fsHz = Math.max(1, driver.fsHz);
+  const qts = clamp(driver.qts, 0.05, 2);
+  let qes = driver.qes && driver.qes > qts ? driver.qes : undefined;
+  let qms = driver.qms && driver.qms > qts ? driver.qms : undefined;
+
+  if (!qes && qms) {
+    qes = 1 / (1 / qts - 1 / qms);
+  }
+  if (!qms && qes) {
+    qms = 1 / (1 / qts - 1 / qes);
+  }
+  if (!qes || !Number.isFinite(qes)) {
+    qes = qts * 1.15;
+    warnings.push("Qes estimated from Qts");
+  }
+  if (!qms || !Number.isFinite(qms)) {
+    qms = Math.max(2.5, 1 / (1 / qts - 1 / qes));
+    warnings.push("Qms estimated from Qts/Qes");
+  }
+
+  const vasM3 = Math.max(0.001, driver.vasL / 1000);
+  const sdM2 = Math.max(0.001, driver.sdCm2 / 10000);
+  const reOhm = Math.max(0.2, driver.reOhm);
+  const leH = Math.max(0, (driver.leMh ?? 0) / 1000);
+  const omegaS = TWO_PI * fsHz;
+  const cms = vasM3 / (RHO * SPEED_OF_SOUND * SPEED_OF_SOUND * sdM2 * sdM2);
+  const mms = driver.mmsG ? driver.mmsG / 1000 : 1 / (omegaS * omegaS * cms);
+  const rms = (omegaS * mms) / qms;
+  const bl = driver.blTm && driver.blTm > 0
+    ? driver.blTm
+    : Math.sqrt(Math.max(0.0001, (omegaS * mms * reOhm) / qes));
+
+  return {
+    fsHz,
+    qts,
+    qes,
+    qms,
+    vasM3,
+    sdM2,
+    reOhm,
+    leH,
+    xmaxM: driver.xmaxMm ? driver.xmaxMm / 1000 : undefined,
+    peW: driver.peW,
+    cms,
+    mms,
+    rms,
+    bl,
+    warnings,
+  };
+}
+
+function createStepResponse(
+  driver: DerivedDriver,
+  design: BoxDesign,
+  refMagnitude: number,
+): Point[] {
+  const sampleRate = 2048;
+  const n = 1024;
+  const maxSamples = Math.floor(sampleRate * 0.25);
+  const spectrum: Complex[] = Array.from({ length: n }, () => c(0, 0));
+
+  for (let k = 1; k <= n / 2; k += 1) {
+    const frequency = (k * sampleRate) / n;
+    const response = responseAtFrequency(driver, design, Math.max(0.1, frequency)).acoustic;
+    const normalized = cdiv(response, c(refMagnitude, 0));
+    const taper = 1 / (1 + Math.pow(frequency / 650, 6));
+    spectrum[k] = cmul(normalized, c(taper, 0));
+    if (k < n / 2) {
+      spectrum[n - k] = c(spectrum[k].re, -spectrum[k].im);
+    }
+  }
+
+  const impulse: number[] = [];
+  for (let sample = 0; sample < maxSamples; sample += 1) {
+    let value = spectrum[0].re;
+    for (let k = 1; k < n / 2; k += 1) {
+      const angle = (TWO_PI * k * sample) / n;
+      value += 2 * (spectrum[k].re * Math.cos(angle) - spectrum[k].im * Math.sin(angle));
+    }
+    value += spectrum[n / 2].re * Math.cos(Math.PI * sample);
+    impulse.push(value / n);
+  }
+
+  let running = 0;
+  const step = impulse.map((value, index) => {
+    running += value;
+    return { x: (index / sampleRate) * 1000, y: running };
+  });
+  const maxAbs = Math.max(0.000001, ...step.map((point) => Math.abs(point.y)));
+  return step.map((point) => ({ x: point.x, y: point.y / maxAbs }));
+}
+
+function getReferenceMagnitude(points: { frequency: number; magnitude: number }[]): number {
+  const passband = points
+    .filter((point) => point.frequency >= 120 && point.frequency <= 260)
+    .map((point) => point.magnitude)
+    .filter((value) => value > 0);
+  if (passband.length > 0) {
+    passband.sort((a, b) => a - b);
+    return Math.max(1e-12, passband[Math.floor(passband.length / 2)]);
+  }
+  return Math.max(1e-12, ...points.map((point) => point.magnitude));
+}
+
+function findCutoff(points: Point[], targetDb: number): number | undefined {
+  for (let index = 1; index < points.length; index += 1) {
+    const previous = points[index - 1];
+    const current = points[index];
+    if (previous.y <= targetDb && current.y >= targetDb) {
+      const ratio = (targetDb - previous.y) / (current.y - previous.y || 1);
+      return previous.x + ratio * (current.x - previous.x);
+    }
+  }
+  return undefined;
+}
+
+function groupDelayAt(index: number, frequencies: number[], phases: number[]): number {
+  const previous = Math.max(0, index - 1);
+  const next = Math.min(frequencies.length - 1, index + 1);
+  if (previous === next) {
+    return 0;
+  }
+  const phaseDelta = phases[next] - phases[previous];
+  const omegaDelta = TWO_PI * (frequencies[next] - frequencies[previous]);
+  return Math.max(0, (-phaseDelta / omegaDelta) * 1000);
+}
+
+function valueAt(points: Point[], x: number): number | undefined {
+  if (x < points[0].x || x > points[points.length - 1].x) {
+    return undefined;
+  }
+  for (let index = 1; index < points.length; index += 1) {
+    const previous = points[index - 1];
+    const current = points[index];
+    if (x >= previous.x && x <= current.x) {
+      const ratio = (x - previous.x) / (current.x - previous.x || 1);
+      return previous.y + ratio * (current.y - previous.y);
+    }
+  }
+  return undefined;
+}
+
+function sealedForQtc(driver: SpeakerDriver, qtc: number): number {
+  const ratio = Math.pow(qtc / Math.max(0.05, driver.qts), 2) - 1;
+  if (ratio <= 0) {
+    return driver.vasL * 4;
+  }
+  return driver.vasL / ratio;
+}
+
+function sealedQtc(driver: SpeakerDriver, vbLiters: number): number {
+  return driver.qts * Math.sqrt(1 + driver.vasL / Math.max(0.1, vbLiters));
+}
+
+function ventedBaseVolumeFactor(qts: number): number {
+  return clamp(12 * Math.pow(clamp(qts, 0.18, 0.65), 2.4), 0.25, 1.7);
+}
+
+function portLength(design: BoxDesign): number | undefined {
+  const fb = design.fbHz;
+  const diameterM = (design.portDiameterCm ?? 0) / 100;
+  const count = Math.max(1, design.portCount ?? 1);
+  if (!fb || diameterM <= 0 || design.vbLiters <= 0) {
+    return undefined;
+  }
+  const radiusM = diameterM / 2;
+  const singleArea = Math.PI * radiusM * radiusM;
+  const totalArea = singleArea * count;
+  const vbM3 = design.vbLiters / 1000;
+  const effectiveLength = totalArea / (vbM3 * Math.pow((TWO_PI * fb) / SPEED_OF_SOUND, 2));
+  const physicalLength = effectiveLength - 1.46 * radiusM;
+  return roundTo(Math.max(0, physicalLength * 100), 1);
+}
+
+function getPortAreaM2(design: BoxDesign): number {
+  if (design.kind !== "vented") {
+    return 0;
+  }
+  const diameterM = (design.portDiameterCm ?? 0) / 100;
+  const count = Math.max(1, design.portCount ?? 1);
+  if (diameterM <= 0) {
+    return 0;
+  }
+  return Math.PI * Math.pow(diameterM / 2, 2) * count;
+}
+
+function normalizeDriver(input: unknown): SpeakerDriver | null {
+  if (!isRecord(input)) {
+    return null;
+  }
+  const get = (...keys: string[]) => {
+    for (const key of keys) {
+      const found = Object.entries(input).find(([candidate]) =>
+        candidate.toLowerCase().replace(/[^a-z0-9]/g, "") === key,
+      );
+      if (found) {
+        return found[1];
+      }
+    }
+    return undefined;
+  };
+  const fsHz = toNumber(get("fs", "fshz"));
+  const qts = toNumber(get("qts"));
+  const vasL = toNumber(get("vas", "vasl"));
+  const sdCm2 = toNumber(get("sd", "sdcm2"));
+  const reOhm = toNumber(get("re", "reohm", "revc"));
+
+  if (!fsHz || !qts || !vasL || !sdCm2 || !reOhm) {
+    return null;
+  }
+
+  return {
+    id: newId("driver"),
+    name: String(get("name", "model", "driver") ?? "Imported driver"),
+    fsHz,
+    qts,
+    qes: toNumber(get("qes")),
+    qms: toNumber(get("qms")),
+    vasL,
+    sdCm2,
+    reOhm,
+    leMh: toNumber(get("le", "lemh")),
+    xmaxMm: toNumber(get("xmax", "xmaxmm")),
+    peW: toNumber(get("pe", "power", "powerw")),
+    mmsG: toNumber(get("mms", "mmsg")),
+    blTm: toNumber(get("bl", "bltm")),
+  };
+}
+
+function parseCsv(content: string): Record<string, string>[] {
+  const lines = content.split(/\r?\n/).filter((line) => line.trim().length > 0);
+  if (lines.length < 2) {
+    return [];
+  }
+  const headers = splitCsvLine(lines[0]);
+  return lines.slice(1).map((line) => {
+    const values = splitCsvLine(line);
+    return Object.fromEntries(headers.map((header, index) => [header, values[index] ?? ""]));
+  });
+}
+
+function splitCsvLine(line: string): string[] {
+  const values: string[] = [];
+  let current = "";
+  let quoted = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    if (char === '"') {
+      quoted = !quoted;
+    } else if (char === "," && !quoted) {
+      values.push(current.trim());
+      current = "";
+    } else {
+      current += char;
+    }
+  }
+  values.push(current.trim());
+  return values.map((value) => value.replace(/^"|"$/g, ""));
+}
+
+function toNumber(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const normalized = value.replace(",", ".").replace(/[^\d.+-]/g, "");
+    const parsed = Number.parseFloat(normalized);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+}
+
+function logspace(start: number, end: number, count: number): number[] {
+  const min = Math.log10(start);
+  const max = Math.log10(end);
+  return Array.from({ length: count }, (_, index) => {
+    const ratio = index / (count - 1);
+    return Math.pow(10, min + ratio * (max - min));
+  });
+}
+
+function unwrapPhase(phases: number[]): number[] {
+  if (phases.length === 0) {
+    return [];
+  }
+  const unwrapped = [phases[0]];
+  let offset = 0;
+  for (let index = 1; index < phases.length; index += 1) {
+    const delta = phases[index] - phases[index - 1];
+    if (delta > Math.PI) {
+      offset -= TWO_PI;
+    } else if (delta < -Math.PI) {
+      offset += TWO_PI;
+    }
+    unwrapped.push(phases[index] + offset);
+  }
+  return unwrapped;
+}
+
+function maxPoint(points: Point[], selector: (point: Point) => number): Point {
+  return points.reduce((best, point) => (selector(point) > selector(best) ? point : best), points[0]);
+}
+
+function minPoint(points: Point[], selector: (point: Point) => number): Point {
+  return points.reduce((best, point) => (selector(point) < selector(best) ? point : best), points[0]);
+}
+
+function db(value: number): number {
+  return 20 * Math.log10(Math.max(1e-9, value));
+}
+
+function c(re: number, im: number): Complex {
+  return { re, im };
+}
+
+function cadd(a: Complex, b: Complex): Complex {
+  return { re: a.re + b.re, im: a.im + b.im };
+}
+
+function cmul(a: Complex, b: Complex): Complex {
+  return { re: a.re * b.re - a.im * b.im, im: a.re * b.im + a.im * b.re };
+}
+
+function cdiv(a: Complex, b: Complex): Complex {
+  const denominator = b.re * b.re + b.im * b.im || 1e-18;
+  return {
+    re: (a.re * b.re + a.im * b.im) / denominator,
+    im: (a.im * b.re - a.re * b.im) / denominator,
+  };
+}
+
+function cabs(a: Complex): number {
+  return Math.hypot(a.re, a.im);
+}
+
+function pressureProxy(volumeVelocity: Complex, frequency: number): Complex {
+  return cmul(c(0, TWO_PI * frequency), volumeVelocity);
+}
+
+function carg(a: Complex): number {
+  return Math.atan2(a.im, a.re);
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function roundTo(value: number, decimals: number): number {
+  const factor = 10 ** decimals;
+  return Math.round(value * factor) / factor;
+}
+
+function newId(prefix: string): string {
+  return `${prefix}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+function slug(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
