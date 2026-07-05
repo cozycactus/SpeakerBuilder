@@ -4247,20 +4247,92 @@ function pathForSeries(
   yDomain: [number, number],
 ): string {
   let path = "";
-  for (const point of points) {
+  let lastDrawnPoint: Point | null = null;
+
+  for (let index = 1; index < points.length; index += 1) {
+    const previous = points[index - 1];
+    const current = points[index];
     if (
-      !Number.isFinite(point.x) ||
-      !Number.isFinite(point.y) ||
-      point.x < xDomain[0] ||
-      point.x > xDomain[1]
+      !Number.isFinite(previous.x) ||
+      !Number.isFinite(previous.y) ||
+      !Number.isFinite(current.x) ||
+      !Number.isFinite(current.y)
     ) {
+      lastDrawnPoint = null;
       continue;
     }
-    const x = scaleX(point.x);
-    const y = scaleY(Math.max(yDomain[0], Math.min(yDomain[1], point.y)));
-    path += path ? ` L ${x.toFixed(2)} ${y.toFixed(2)}` : `M ${x.toFixed(2)} ${y.toFixed(2)}`;
+
+    const segment = clipSegmentToDomain(previous, current, xDomain, yDomain);
+    if (!segment) {
+      lastDrawnPoint = null;
+      continue;
+    }
+
+    const [start, end] = segment;
+    if (!lastDrawnPoint || !samePoint(lastDrawnPoint, start)) {
+      path += ` M ${scaleX(start.x).toFixed(2)} ${scaleY(start.y).toFixed(2)}`;
+    }
+    path += ` L ${scaleX(end.x).toFixed(2)} ${scaleY(end.y).toFixed(2)}`;
+    lastDrawnPoint = end;
   }
-  return path;
+
+  return path.trim();
+}
+
+function clipSegmentToDomain(
+  start: Point,
+  end: Point,
+  xDomain: [number, number],
+  yDomain: [number, number],
+): [Point, Point] | null {
+  // Clip segments to the plot rectangle so hidden data does not draw along an edge.
+  const [xMin, xMax] = xDomain;
+  const [yMin, yMax] = yDomain;
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  let t0 = 0;
+  let t1 = 1;
+
+  const clip = (p: number, q: number) => {
+    if (p === 0) {
+      return q >= 0;
+    }
+    const ratio = q / p;
+    if (p < 0) {
+      if (ratio > t1) {
+        return false;
+      }
+      if (ratio > t0) {
+        t0 = ratio;
+      }
+      return true;
+    }
+    if (ratio < t0) {
+      return false;
+    }
+    if (ratio < t1) {
+      t1 = ratio;
+    }
+    return true;
+  };
+
+  if (
+    !clip(-dx, start.x - xMin) ||
+    !clip(dx, xMax - start.x) ||
+    !clip(-dy, start.y - yMin) ||
+    !clip(dy, yMax - start.y)
+  ) {
+    return null;
+  }
+
+  return [
+    { x: start.x + t0 * dx, y: start.y + t0 * dy },
+    { x: start.x + t1 * dx, y: start.y + t1 * dy },
+  ];
+}
+
+function samePoint(left: Point, right: Point): boolean {
+  return Math.abs(left.x - right.x) < 1e-9 && Math.abs(left.y - right.y) < 1e-9;
 }
 
 function createProjectFile(state: ProjectState): ProjectFile {
