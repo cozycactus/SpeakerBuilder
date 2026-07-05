@@ -93,6 +93,13 @@ interface Series {
   muted?: boolean;
 }
 
+interface ChartMarker {
+  color: string;
+  label: string;
+  x: number;
+  y: number;
+}
+
 interface FrozenReference {
   capturedAt: string;
   label: string;
@@ -308,6 +315,16 @@ const UI_TEXT = {
       warning: "Выше 500 Гц T/S расчет не заменяет измеренную FRD: не учитываются резонансы диффузора, направленность и детали конструкции.",
       yMax: "Y макс",
       yMin: "Y мин",
+    },
+    chartMarkers: {
+      f3: "F3",
+      f6: "F6",
+      fb: "Fb",
+      maxExcursion: "Макс. ход",
+      maxPort: "Макс. порт",
+      maxSpl: "Макс. SPL",
+      minZ: "Zmin",
+      peak: "Пик",
     },
     axisLabels: {
       frequency: "Частота, Гц",
@@ -585,6 +602,16 @@ const UI_TEXT = {
       warning: "Above 500 Hz, T/S modeling does not replace measured FRD: breakup, directivity, and cone details are not modeled.",
       yMax: "Y max",
       yMin: "Y min",
+    },
+    chartMarkers: {
+      f3: "F3",
+      f6: "F6",
+      fb: "Fb",
+      maxExcursion: "Max excursion",
+      maxPort: "Max port",
+      maxSpl: "Max SPL",
+      minZ: "Zmin",
+      peak: "Peak",
     },
     axisLabels: {
       frequency: "Frequency, Hz",
@@ -2970,6 +2997,7 @@ function LineChart({
   series,
   referenceLabel = "Reference",
   referenceSeries = [],
+  markers = [],
   xDomain,
   yDomain,
   xScale = "log",
@@ -2982,6 +3010,7 @@ function LineChart({
   series: Series[];
   referenceLabel?: string;
   referenceSeries?: Series[];
+  markers?: ChartMarker[];
   xDomain: [number, number];
   yDomain: [number, number];
   xScale?: ScaleMode;
@@ -3131,6 +3160,30 @@ function LineChart({
             stroke={item.color}
           />
         ))}
+        {markers
+          .filter((marker) =>
+            Number.isFinite(marker.x) &&
+            Number.isFinite(marker.y) &&
+            marker.x >= xDomain[0] &&
+            marker.x <= xDomain[1] &&
+            marker.y >= yDomain[0] &&
+            marker.y <= yDomain[1],
+          )
+          .map((marker, index) => {
+            const markerX = scaleX(marker.x);
+            const markerY = scaleY(marker.y);
+            const labelX = clampNumber(markerX + 8, margin.left + 14, width - margin.right - 22);
+            const labelY = clampNumber(markerY - 8 - (index % 2) * 12, margin.top + 14, height - margin.bottom - 8);
+            return (
+              <g className="chart-marker" key={`${marker.label}-${marker.x}-${marker.y}-${index}`}>
+                <line x1={markerX} x2={markerX} y1={markerY} y2={height - margin.bottom} />
+                <circle cx={markerX} cy={markerY} r="5" fill={marker.color} />
+                <text x={labelX} y={labelY}>
+                  {marker.label}
+                </text>
+              </g>
+            );
+          })}
         <rect
           className="plot-hitbox"
           x={margin.left}
@@ -3230,6 +3283,7 @@ function getChartProps(
   measurementSeries: Series[] = [],
 ): Parameters<typeof LineChart>[0] {
   const base = {
+    markers: chartMarkersForTab(tab, results, focusedDesignId, text),
     xDomain: chartFrequencyDomain,
     xLabel: text.axisLabels.frequency,
     xScale: "log" as ScaleMode,
@@ -3361,6 +3415,127 @@ function visibleReferenceLines(
   yDomain: [number, number],
 ): Array<{ y: number; label: string }> {
   return lines.filter((line) => line.y >= yDomain[0] && line.y <= yDomain[1]);
+}
+
+function chartMarkersForTab(
+  tab: ChartTab,
+  results: SimulationResult[],
+  focusedDesignId: string,
+  text: UiText,
+): ChartMarker[] {
+  const result = results.find((item) => item.design.id === focusedDesignId) ?? results[0];
+  if (!result) {
+    return [];
+  }
+
+  const color = result.design.color;
+  const markers: Array<ChartMarker | undefined> = [];
+  const addFb = (points: Point[]) => {
+    if (result.design.fbHz) {
+      markers.push(pointMarker(points, result.design.fbHz, text.chartMarkers.fb, color));
+    }
+  };
+
+  if (tab === "response") {
+    const f3Hz = cutoffFrequency(result.responseDb, -3);
+    const f6Hz = cutoffFrequency(result.responseDb, -6);
+    const peak = extremumPoint(result.responseDb, "max");
+    if (f3Hz) {
+      markers.push({ color, label: text.chartMarkers.f3, x: f3Hz, y: -3 });
+    }
+    if (f6Hz) {
+      markers.push({ color, label: text.chartMarkers.f6, x: f6Hz, y: -6 });
+    }
+    if (peak) {
+      markers.push({ ...peak, color, label: text.chartMarkers.peak });
+    }
+    addFb(result.responseDb);
+  } else if (tab === "spl") {
+    const peak = extremumPoint(result.splDb, "max");
+    const f3Hz = peak ? cutoffFrequency(result.splDb, peak.y - 3) : undefined;
+    const f6Hz = peak ? cutoffFrequency(result.splDb, peak.y - 6) : undefined;
+    if (f3Hz) {
+      markers.push(pointMarker(result.splDb, f3Hz, text.chartMarkers.f3, color));
+    }
+    if (f6Hz) {
+      markers.push(pointMarker(result.splDb, f6Hz, text.chartMarkers.f6, color));
+    }
+    if (peak) {
+      markers.push({ ...peak, color, label: text.chartMarkers.maxSpl });
+    }
+    addFb(result.splDb);
+  } else if (tab === "excursion") {
+    const maxExcursion = extremumPoint(result.excursionMm, "max");
+    if (maxExcursion) {
+      markers.push({ ...maxExcursion, color, label: text.chartMarkers.maxExcursion });
+    }
+    addFb(result.excursionMm);
+  } else if (tab === "groupDelay") {
+    if (result.metrics.f3Hz && result.metrics.groupDelayAtF3Ms !== undefined) {
+      markers.push({
+        color,
+        label: text.chartMarkers.f3,
+        x: result.metrics.f3Hz,
+        y: result.metrics.groupDelayAtF3Ms,
+      });
+    }
+    addFb(result.groupDelayMs);
+  } else if (tab === "phase") {
+    addFb(result.phaseDeg);
+  } else if (tab === "impedance") {
+    const minZ = extremumPoint(result.impedanceOhm, "min");
+    if (minZ) {
+      markers.push({ ...minZ, color, label: text.chartMarkers.minZ });
+    }
+  } else if (tab === "port") {
+    const maxPort = result.design.kind === "vented" ? extremumPoint(result.portMach, "max") : undefined;
+    if (maxPort) {
+      markers.push({ ...maxPort, color, label: text.chartMarkers.maxPort });
+    }
+    addFb(result.portMach);
+  }
+
+  return markers.filter(Boolean) as ChartMarker[];
+}
+
+function pointMarker(points: Point[], x: number, label: string, color: string): ChartMarker | undefined {
+  const point = nearestPoint(points, x, "log");
+  return point ? { color, label, x: point.x, y: point.y } : undefined;
+}
+
+function cutoffFrequency(points: Point[], targetY: number): number | undefined {
+  for (let index = 1; index < points.length; index += 1) {
+    const previous = points[index - 1];
+    const current = points[index];
+    const crossesTarget =
+      (previous.y <= targetY && current.y >= targetY) ||
+      (previous.y >= targetY && current.y <= targetY);
+    if (
+      Number.isFinite(previous.x) &&
+      Number.isFinite(previous.y) &&
+      Number.isFinite(current.x) &&
+      Number.isFinite(current.y) &&
+      crossesTarget
+    ) {
+      const ratio = (targetY - previous.y) / (current.y - previous.y || 1);
+      return previous.x + ratio * (current.x - previous.x);
+    }
+  }
+  return undefined;
+}
+
+function extremumPoint(points: Point[], mode: "min" | "max"): Point | undefined {
+  const validPoints = points.filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
+  if (validPoints.length === 0) {
+    return undefined;
+  }
+
+  return validPoints.reduce((best, point) => {
+    if (mode === "max") {
+      return point.y > best.y ? point : best;
+    }
+    return point.y < best.y ? point : best;
+  }, validPoints[0]);
 }
 
 function toSeriesList(

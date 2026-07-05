@@ -991,6 +991,33 @@ h2 {
   stroke-width: 2;
 }
 
+.chart-marker {
+  pointer-events: none;
+}
+
+.chart-marker line {
+  stroke: #64748b;
+  stroke-dasharray: 3 5;
+  stroke-width: 1;
+  opacity: 0.72;
+}
+
+.chart-marker circle {
+  stroke: #ffffff;
+  stroke-width: 2.2;
+  filter: drop-shadow(0 2px 4px rgba(24, 33, 47, 0.28));
+}
+
+.chart-marker text {
+  fill: #1f2937;
+  font-size: 12px;
+  font-weight: 800;
+  paint-order: stroke;
+  stroke: #ffffff;
+  stroke-linejoin: round;
+  stroke-width: 3px;
+}
+
 .chart-cursor {
   pointer-events: none;
 }
