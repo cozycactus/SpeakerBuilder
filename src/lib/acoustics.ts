@@ -19,6 +19,7 @@ export interface SpeakerDriver {
   leMh?: number;
   xmaxMm?: number;
   peW?: number;
+  sensitivityDb?: number;
   mmsG?: number;
   blTm?: number;
   source?: DriverSource;
@@ -254,6 +255,7 @@ export const PRESET_DRIVERS: SpeakerDriver[] = [
     leMh: 0.237,
     xmaxMm: 6,
     peW: 70,
+    sensitivityDb: 86,
     mmsG: 14.5948,
     blTm: 6.9338,
     source: {
@@ -276,6 +278,7 @@ export const PRESET_DRIVERS: SpeakerDriver[] = [
     leMh: 0.73,
     xmaxMm: 6,
     peW: 60,
+    sensitivityDb: 86.1,
     mmsG: 17.9,
     blTm: 7.82,
     source: {
@@ -297,6 +300,7 @@ export const PRESET_DRIVERS: SpeakerDriver[] = [
     leMh: 0.15,
     xmaxMm: 5.5,
     peW: 60,
+    sensitivityDb: 87.5,
     mmsG: 11,
     blTm: 5.9,
     source: {
@@ -319,6 +323,7 @@ export const PRESET_DRIVERS: SpeakerDriver[] = [
     leMh: 0.39,
     xmaxMm: 6.5,
     peW: 100,
+    sensitivityDb: 86.5,
     mmsG: 18,
     blTm: 8.4,
     source: {
@@ -510,12 +515,13 @@ export function simulateDesign(
         y: db(cabs(item.response.acoustic) / refMagnitude),
       }))
     : [];
-  const splDb = needsSpl
+  const uncalibratedSplDb = needsSpl
     ? raw.map((item) => ({
         x: item.frequency,
         y: splAtOneMeter(item.response.acoustic, voltageRms),
       }))
     : [];
+  const splDb = needsSpl ? calibrateSplDb(uncalibratedSplDb, driver, powerW) : [];
   const rawFrequencies = raw.map((point) => point.frequency);
   const phaseRad = needsPhase ? unwrapPhase(raw.map((item) => carg(item.response.acoustic))) : [];
   const phaseDeg = outputs.has("phase")
@@ -1139,6 +1145,26 @@ function getReferenceMagnitude(points: { frequency: number; magnitude: number }[
   return Math.max(1e-12, ...points.map((point) => point.magnitude));
 }
 
+function calibrateSplDb(points: Point[], driver: SpeakerDriver, powerW: number): Point[] {
+  if (!driver.sensitivityDb || points.length === 0) {
+    return points;
+  }
+
+  const referenceValues = points
+    .filter((point) => point.x >= 300 && point.x <= 600 && Number.isFinite(point.y))
+    .map((point) => point.y)
+    .sort((left, right) => left - right);
+  if (referenceValues.length === 0) {
+    return points;
+  }
+
+  const referenceDb = referenceValues[Math.floor(referenceValues.length / 2)];
+  const targetDb = driver.sensitivityDb + powerRatioDb(powerW);
+  const offsetDb = targetDb - referenceDb;
+
+  return points.map((point) => ({ ...point, y: point.y + offsetDb }));
+}
+
 function findCutoff(points: Point[], targetDb: number): number | undefined {
   for (let index = 1; index < points.length; index += 1) {
     const previous = points[index - 1];
@@ -1347,6 +1373,9 @@ function normalizeDriver(input: unknown): SpeakerDriver | null {
     return null;
   }
 
+  const sensitivityDb = toNumber(get("sensitivity", "sensitivitydb", "spl", "spldb", "dbwm"));
+  const sensitivity283Db = toNumber(get("sensitivity283v", "sensitivity2v83", "db283v"));
+
   return {
     id: newId("driver"),
     name: String(get("name", "model", "driver") ?? "Imported driver"),
@@ -1360,6 +1389,9 @@ function normalizeDriver(input: unknown): SpeakerDriver | null {
     leMh: toNumber(get("le", "lemh")),
     xmaxMm: toNumber(get("xmax", "xmaxmm")),
     peW: toNumber(get("pe", "power", "powerw")),
+    sensitivityDb: sensitivityDb ?? (
+      sensitivity283Db !== undefined ? sensitivity283Db + powerRatioDb(reOhm / (2.83 * 2.83)) : undefined
+    ),
     mmsG: toNumber(get("mms", "mmsg")),
     blTm: toNumber(get("bl", "bltm")),
   };

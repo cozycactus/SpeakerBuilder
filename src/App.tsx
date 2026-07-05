@@ -200,6 +200,7 @@ const driverFields: Array<{
   { key: "leMh", label: "Le", unit: "mH", step: "0.01" },
   { key: "xmaxMm", label: "Xmax", unit: "mm", step: "0.1" },
   { key: "peW", label: "Pe", unit: "W", step: "1" },
+  { key: "sensitivityDb", label: "Sens.", unit: "dB", step: "0.1" },
   { key: "mmsG", label: "Mms", unit: "g", step: "0.1" },
   { key: "blTm", label: "BL", unit: "Tm", step: "0.1" },
 ];
@@ -1328,7 +1329,7 @@ function App() {
     );
   }
 
-  const chartProps = getChartProps(activeTab, chartDisplayResults, deferredSelectedDriver, focusedDesignId, text, measurementSeries);
+  const chartProps = getChartProps(activeTab, chartDisplayResults, deferredSelectedDriver, focusedDesignId, text, powerW, measurementSeries);
   const currentReference = referenceByTab[activeTab];
   const layoutStyle = {
     "--left-panel-width": `${leftPanelWidth}px`,
@@ -2556,6 +2557,7 @@ function getChartProps(
   driver: SpeakerDriver,
   focusedDesignId: string,
   text: UiText,
+  powerW: number,
   measurementSeries: Series[] = [],
 ): Parameters<typeof LineChart>[0] {
   const base = {
@@ -2586,13 +2588,16 @@ function getChartProps(
       ...measurementSeries.flatMap((series) => series.points),
     ];
     const domain = splDomain(points.map((point) => point.y));
+    const sensitivityLine = driver.sensitivityDb !== undefined
+      ? driver.sensitivityDb + powerToDb(powerW)
+      : 85;
     return {
       ...base,
       title: text.chartTitles.spl,
       yLabel: "dB SPL",
       yDomain: domain,
       referenceLines: [
-        { y: 85, label: "85 dB" },
+        { y: sensitivityLine, label: `${fmt(sensitivityLine, 1)} dB` },
         { y: 100, label: "100" },
       ].filter((line) => line.y >= domain[0] && line.y <= domain[1]),
       series: [...toSeriesList(results, "splDb", focusedDesignId, text), ...measurementSeries],
@@ -3434,7 +3439,9 @@ function enrichPresetDriver(driver: SpeakerDriver): SpeakerDriver {
     };
   }
   return {
-    ...driver,
+    ...preset,
+    id: driver.id,
+    name: driver.name,
     source: preset.source,
   };
 }
@@ -3451,6 +3458,7 @@ function driverMatchesPreset(driver: SpeakerDriver, preset: SpeakerDriver): bool
     driver.leMh === preset.leMh &&
     driver.xmaxMm === preset.xmaxMm &&
     driver.peW === preset.peW &&
+    (driver.sensitivityDb === undefined || driver.sensitivityDb === preset.sensitivityDb) &&
     driver.mmsG === preset.mmsG &&
     driver.blTm === preset.blTm;
 }
@@ -3613,6 +3621,10 @@ function fmt(value?: number, decimals = 1): string {
     return "—";
   }
   return value.toFixed(decimals);
+}
+
+function powerToDb(powerW: number): number {
+  return 10 * Math.log10(Math.max(1e-9, powerW));
 }
 
 function roundTo(value: number, decimals: number): number {

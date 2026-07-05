@@ -37,6 +37,7 @@ describe("acoustic reference scenarios", () => {
       leMh: 0.237,
       xmaxMm: 6,
       peW: 70,
+      sensitivityDb: 86,
       mmsG: 14.5948,
       blTm: 6.9338,
     });
@@ -51,6 +52,7 @@ describe("acoustic reference scenarios", () => {
       leMh: 0.73,
       xmaxMm: 6,
       peW: 60,
+      sensitivityDb: 86.1,
       mmsG: 17.9,
       blTm: 7.82,
     });
@@ -65,6 +67,7 @@ describe("acoustic reference scenarios", () => {
       leMh: 0.15,
       xmaxMm: 5.5,
       peW: 60,
+      sensitivityDb: 87.5,
       mmsG: 11,
       blTm: 5.9,
     });
@@ -79,6 +82,7 @@ describe("acoustic reference scenarios", () => {
       leMh: 0.39,
       xmaxMm: 6.5,
       peW: 100,
+      sensitivityDb: 86.5,
       mmsG: 18,
       blTm: 8.4,
     });
@@ -115,6 +119,26 @@ describe("acoustic reference scenarios", () => {
       expect(result.metrics.maxUsableSplDb).toBeGreaterThan(80);
       expect(result.metrics.maxExcursionMm).toBeGreaterThan(0);
       expect(result.metrics.minImpedanceOhm).toBeGreaterThan(0);
+    }
+  });
+
+  it("calibrates datasheet-backed SPL to 1 W sensitivity", () => {
+    for (const id of ["usher-8945p", "dayton-rs180-8", "sb17nrxc35-8", "scan-speak-18w-8545-01"]) {
+      const driver = presetById(id);
+      expect(driver.sensitivityDb).toBeDefined();
+      const sensitivityDb = driver.sensitivityDb!;
+      const design = createDefaultDesigns(driver).find((item) => item.name === "Vented QB3");
+      expect(design).toBeDefined();
+
+      const result = simulateDesign(driver, design!, { powerW: 1 });
+      const referenceBand = result.splDb
+        .filter((point) => point.x >= 300 && point.x <= 600)
+        .map((point) => point.y)
+        .sort((left, right) => left - right);
+
+      expect(referenceBand.length).toBeGreaterThan(0);
+      expectNear(referenceBand[Math.floor(referenceBand.length / 2)], sensitivityDb, 0.1);
+      expect(result.metrics.spl50HzDb).toBeLessThan(sensitivityDb + 1);
     }
   });
 
