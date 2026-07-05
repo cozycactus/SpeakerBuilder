@@ -63,7 +63,7 @@ type Language = "ru" | "en";
 type ScaleMode = "linear" | "log";
 type ResizeTarget = "left" | "right";
 type SidebarPanelId = "drivers" | "model";
-type ChartToolPanelId = "corrections" | "measurements" | "compare";
+type ChartToolPanelId = "inputs" | "corrections" | "measurements" | "compare";
 type PanelArea = "sidebar" | "chartTools";
 type AnalysisSnapshot = {
   driver: SpeakerDriver;
@@ -173,6 +173,7 @@ type ProjectFile = Omit<ProjectState, "referenceByTab"> & {
 
 type DriverIssue =
   | "invalidRequired"
+  | "fieldOutOfRange"
   | "qtsLow"
   | "qtsHigh"
   | "qesNotAboveQts"
@@ -186,8 +187,22 @@ type DriverRecommendation = "sealed" | "vented" | "mixed" | "review";
 
 interface DriverProfile {
   ebp?: number;
+  fieldIssues: Partial<Record<keyof SpeakerDriver, DriverIssue[]>>;
   issues: DriverIssue[];
   recommendation: DriverRecommendation;
+}
+
+interface ChartInputItem {
+  label: string;
+  note?: string;
+  tone?: "warning" | "muted";
+  value: string;
+}
+
+interface ChartInputGroup {
+  id: keyof UiText["chartInputs"]["groups"];
+  items: ChartInputItem[];
+  label: string;
 }
 
 interface ResizeState {
@@ -224,7 +239,7 @@ const CHART_RANGE_PRESETS = [
   { label: "20-20k", minHz: 20, maxHz: 20000 },
 ];
 const DEFAULT_SIDEBAR_PANEL_ORDER: SidebarPanelId[] = ["drivers", "model"];
-const DEFAULT_CHART_PANEL_ORDER: ChartToolPanelId[] = ["corrections", "measurements", "compare"];
+const DEFAULT_CHART_PANEL_ORDER: ChartToolPanelId[] = ["inputs", "corrections", "measurements", "compare"];
 const DEFAULT_LIBRARY_FILTERS: LibraryFilters = {
   query: "",
   status: "all",
@@ -258,6 +273,7 @@ const driverFields: Array<{
   { key: "mmsG", label: "Mms", unit: "g", step: "0.1", min: 0.01, max: 10000 },
   { key: "blTm", label: "BL", unit: "Tm", step: "0.1", min: 0.01, max: 100 },
 ];
+const driverFieldByKey = new Map(driverFields.map((field) => [field.key, field]));
 const driverFieldLimits = new Map(driverFields.map((field) => [field.key, { min: field.min, max: field.max }]));
 const requiredDriverNumberFields = new Set<keyof SpeakerDriver>(["fsHz", "qts", "vasL", "sdCm2", "reOhm"]);
 
@@ -366,6 +382,7 @@ const UI_TEXT = {
     driverAnalysis: {
       ebp: "EBP",
       issues: {
+        fieldOutOfRange: "Одно или несколько значений вне рабочего диапазона поля",
         invalidRequired: "Проверьте Fs, Qts, Vas, Sd и Re: обязательные параметры должны быть больше нуля",
         powerInvalid: "Pe должен быть больше нуля или пустым",
         qesNotAboveQts: "Qes должен быть больше Qts",
@@ -385,6 +402,19 @@ const UI_TEXT = {
         vented: "Хороший кандидат для ФИ",
       } satisfies Record<DriverRecommendation, string>,
       title: "Проверка T/S",
+    },
+    chartInputs: {
+      title: "Входы графика",
+      groups: {
+        driver: "Динамик",
+        box: "Корпус",
+        global: "Режим",
+        corrections: "Коррекция",
+      },
+      notes: {
+        estimatedSensitivity: "Sens. пустой: SPL не привязан к даташитному 1 W/1 m",
+        noFocusedDesign: "Выберите конфигурацию",
+      },
     },
     driverImpact: {
       current: "текущий",
@@ -641,6 +671,7 @@ const UI_TEXT = {
     driverAnalysis: {
       ebp: "EBP",
       issues: {
+        fieldOutOfRange: "One or more values are outside the field range",
         invalidRequired: "Check Fs, Qts, Vas, Sd, and Re: required parameters must be above zero",
         powerInvalid: "Pe must be above zero or empty",
         qesNotAboveQts: "Qes must be greater than Qts",
@@ -660,6 +691,19 @@ const UI_TEXT = {
         vented: "Good vented candidate",
       } satisfies Record<DriverRecommendation, string>,
       title: "T/S check",
+    },
+    chartInputs: {
+      title: "Chart inputs",
+      groups: {
+        driver: "Driver",
+        box: "Box",
+        global: "Mode",
+        corrections: "Correction",
+      },
+      notes: {
+        estimatedSensitivity: "Sens. is empty: SPL is not calibrated to datasheet 1 W/1 m",
+        noFocusedDesign: "Select a configuration",
+      },
     },
     driverImpact: {
       current: "current",
@@ -1660,6 +1704,7 @@ function App() {
   const chartPanelLabels: Record<ChartToolPanelId, string> = {
     compare: text.compare.title,
     corrections: text.corrections.title,
+    inputs: text.chartInputs.title,
     measurements: text.measurements.title,
   };
 
@@ -1736,22 +1781,30 @@ function App() {
           />
         </label>
         <div className="driver-grid">
-          {driverFields.map((field) => (
-            <label className="field" key={field.key}>
-              <span>
-                {field.label}
-                {field.unit ? <em>{field.unit}</em> : null}
-              </span>
-              <input
-                type="number"
-                min={field.min}
-                max={field.max}
-                step={field.step}
-                value={String(selectedDriver[field.key] ?? "")}
-                onChange={(event) => updateDriverField(field.key, event.target.value)}
-              />
-            </label>
-          ))}
+          {driverFields.map((field) => {
+            const issues = driverProfile.fieldIssues[field.key] ?? [];
+            return (
+              <label
+                className={`field ${issues.length > 0 ? "invalid" : ""}`}
+                key={field.key}
+                title={issues.map((issue) => text.driverAnalysis.issues[issue]).join("\n")}
+              >
+                <span>
+                  {field.label}
+                  {field.unit ? <em>{field.unit}</em> : null}
+                  {issues.length > 0 ? <strong>!</strong> : null}
+                </span>
+                <input
+                  type="number"
+                  min={field.min}
+                  max={field.max}
+                  step={field.step}
+                  value={String(selectedDriver[field.key] ?? "")}
+                  onChange={(event) => updateDriverField(field.key, event.target.value)}
+                />
+              </label>
+            );
+          })}
         </div>
         <DriverImpactPanel activeTab={activeTab} text={text} />
         <DriverAnalysisPanel profile={driverProfile} text={text} />
@@ -1772,6 +1825,24 @@ function App() {
         onMoveUp={() => moveChartPanel(panelId, -1)}
       />
     );
+
+    if (panelId === "inputs") {
+      return (
+        <ChartInputsPanel
+          key={panelId}
+          activeTab={activeTab}
+          acousticOptions={acousticOptions}
+          design={focusedDesign}
+          dragHandle={dragHandle}
+          driver={selectedDriver}
+          powerW={powerW}
+          profile={driverProfile}
+          text={text}
+          onDragOver={(event) => dragPanelOver("chartTools", event)}
+          onDrop={(event) => dropChartPanel(panelId, event)}
+        />
+      );
+    }
 
     if (panelId === "corrections") {
       return (
@@ -2621,6 +2692,59 @@ function DriverSourcePanel({
   );
 }
 
+function ChartInputsPanel({
+  activeTab,
+  acousticOptions,
+  design,
+  dragHandle,
+  driver,
+  powerW,
+  profile,
+  text,
+  onDragOver,
+  onDrop,
+}: {
+  activeTab: ChartTab;
+  acousticOptions: AcousticOptions;
+  design?: BoxDesign;
+  dragHandle?: ReactNode;
+  driver: SpeakerDriver;
+  powerW: number;
+  profile: DriverProfile;
+  text: UiText;
+  onDragOver?: (event: ReactDragEvent<HTMLElement>) => void;
+  onDrop?: (event: ReactDragEvent<HTMLElement>) => void;
+}) {
+  const groups = chartInputGroups(activeTab, driver, design, powerW, acousticOptions, profile, text)
+    .filter((group) => group.items.length > 0);
+
+  return (
+    <section className="mini-panel chart-inputs-panel movable-panel" onDragOver={onDragOver} onDrop={onDrop}>
+      {dragHandle}
+      <div className="mini-panel-head">
+        <h3>{text.chartInputs.title}</h3>
+        <span>{text.chartTabs[activeTab]}</span>
+      </div>
+      <div className="chart-input-groups">
+        {groups.map((group) => (
+          <div className="chart-input-group" key={group.id}>
+            <h4>{group.label}</h4>
+            <div className="chart-input-list">
+              {group.items.map((item) => (
+                <div className={`chart-input-item ${item.tone ?? ""}`} key={`${group.id}-${item.label}`}>
+                  <span>{item.label}</span>
+                  <strong>{item.value}</strong>
+                  {item.note ? <em>{item.note}</em> : null}
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function AcousticCorrectionsPanel({
   dragHandle,
   options,
@@ -2899,6 +3023,129 @@ function DriverAnalysisPanel({
       )}
     </div>
   );
+}
+
+function chartInputGroups(
+  activeTab: ChartTab,
+  driver: SpeakerDriver,
+  design: BoxDesign | undefined,
+  powerW: number,
+  acousticOptions: AcousticOptions,
+  profile: DriverProfile,
+  text: UiText,
+): ChartInputGroup[] {
+  const groups = text.chartInputs.groups;
+  const driverItems = chartDriverKeys(activeTab).map((key) => {
+    const field = driverFieldByKey.get(key);
+    const value = driver[key];
+    const issues = profile.fieldIssues[key] ?? [];
+    const isMissingSensitivity = key === "sensitivityDb" && value === undefined;
+    return {
+      label: field?.label ?? String(key),
+      note: isMissingSensitivity ? text.chartInputs.notes.estimatedSensitivity : undefined,
+      tone: issues.length > 0 || isMissingSensitivity ? "warning" as const : undefined,
+      value: formatDriverInputValue(key, driver),
+    };
+  });
+
+  const boxItems = design
+    ? [
+        { label: text.design, value: text.boxLabels[design.kind] },
+        { label: "Vb", value: `${formatCompactNumber(design.vbLiters)} L` },
+        ...(design.fbHz !== undefined ? [{ label: "Fb", value: `${formatCompactNumber(design.fbHz)} Hz` }] : []),
+        ...(design.ql !== undefined ? [{ label: "Ql", value: formatCompactNumber(design.ql) }] : []),
+        ...(chartUsesPort(activeTab, design) ? portInputItems(design, text) : []),
+      ]
+    : [{ label: text.design, value: text.chartInputs.notes.noFocusedDesign, tone: "warning" as const }];
+
+  const globalItems: ChartInputItem[] = chartUsesPower(activeTab)
+    ? [{ label: text.power, value: `${formatCompactNumber(powerW)} W` }]
+    : [];
+
+  const correctionItems: ChartInputItem[] = chartUsesCorrections(activeTab)
+    ? [
+        { label: text.corrections.roomGain, value: `${formatCompactNumber(acousticOptions.roomGainDb)} dB` },
+        { label: text.corrections.roomStart, value: `${formatCompactNumber(acousticOptions.roomGainStartHz)} Hz` },
+        { label: text.corrections.baffleStep, value: `${formatCompactNumber(acousticOptions.baffleStepDb)} dB` },
+        { label: text.corrections.baffleHz, value: `${formatCompactNumber(acousticOptions.baffleStepHz)} Hz` },
+      ]
+    : [];
+
+  return [
+    { id: "driver", label: groups.driver, items: driverItems },
+    { id: "box", label: groups.box, items: boxItems },
+    { id: "global", label: groups.global, items: globalItems },
+    { id: "corrections", label: groups.corrections, items: correctionItems },
+  ];
+}
+
+function chartDriverKeys(activeTab: ChartTab): Array<keyof SpeakerDriver> {
+  if (activeTab === "spl") {
+    return ["sensitivityDb", "fsHz", "qts", "qes", "qms", "vasL", "sdCm2", "reOhm", "leMh", "mmsG", "blTm", "xmaxMm", "peW"];
+  }
+  if (activeTab === "excursion") {
+    return ["fsHz", "qts", "qes", "qms", "vasL", "sdCm2", "reOhm", "mmsG", "blTm", "xmaxMm"];
+  }
+  if (activeTab === "impedance") {
+    return ["reOhm", "leMh", "fsHz", "qts", "qes", "qms", "mmsG", "blTm", "vasL", "sdCm2"];
+  }
+  if (activeTab === "port") {
+    return ["fsHz", "qts", "qes", "qms", "vasL", "sdCm2"];
+  }
+  if (activeTab === "phase" || activeTab === "groupDelay" || activeTab === "step") {
+    return ["fsHz", "qts", "qes", "qms", "vasL", "sdCm2", "reOhm", "mmsG", "blTm"];
+  }
+  return ["fsHz", "qts", "qes", "qms", "vasL", "sdCm2", "reOhm", "leMh", "mmsG", "blTm"];
+}
+
+function chartUsesPower(activeTab: ChartTab): boolean {
+  return activeTab === "spl" || activeTab === "excursion" || activeTab === "port";
+}
+
+function chartUsesCorrections(activeTab: ChartTab): boolean {
+  return activeTab === "response" || activeTab === "spl";
+}
+
+function chartUsesPort(activeTab: ChartTab, design: BoxDesign): boolean {
+  return (activeTab === "port" || activeTab === "response" || activeTab === "spl" || activeTab === "impedance") &&
+    (design.kind === "vented" || design.kind === "passive" || design.kind === "bandpass");
+}
+
+function portInputItems(design: BoxDesign, text: UiText): ChartInputItem[] {
+  if (design.portShape === "slot") {
+    return [
+      { label: text.portWidth, value: `${formatCompactNumber(design.portWidthCm ?? 0)} cm` },
+      { label: text.portHeight, value: `${formatCompactNumber(design.portHeightCm ?? 0)} cm` },
+      { label: text.ports, value: formatCompactNumber(design.portCount ?? 1) },
+    ];
+  }
+
+  return [
+    { label: text.portDiameter, value: `${formatCompactNumber(design.portDiameterCm ?? 0)} cm` },
+    { label: text.ports, value: formatCompactNumber(design.portCount ?? 1) },
+  ];
+}
+
+function formatDriverInputValue(key: keyof SpeakerDriver, driver: SpeakerDriver): string {
+  const field = driverFieldByKey.get(key);
+  const value = driver[key];
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "—";
+  }
+  const unit = field?.unit ? ` ${field.unit}` : "";
+  return `${formatCompactNumber(value)}${unit}`;
+}
+
+function formatCompactNumber(value: number): string {
+  if (!Number.isFinite(value)) {
+    return "—";
+  }
+  const absValue = Math.abs(value);
+  const decimals = absValue < 1 ? 4 : absValue < 10 ? 3 : absValue < 100 ? 1 : 0;
+  const formatted = value.toFixed(decimals);
+  return formatted.includes(".")
+    ? formatted.replace(/0+$/, "").replace(/\.$/, "")
+    : formatted;
 }
 
 function OptimizerPanel({
@@ -4425,45 +4672,64 @@ function escapeHtml(value: string): string {
 }
 
 function analyzeDriver(driver: SpeakerDriver): DriverProfile {
-  const issues: DriverIssue[] = [];
-  const hasInvalidRequired =
-    driver.fsHz <= 0 ||
-    driver.qts <= 0 ||
-    driver.vasL <= 0 ||
-    driver.sdCm2 <= 0 ||
-    driver.reOhm <= 0;
-  if (hasInvalidRequired) {
-    issues.push("invalidRequired");
+  const issues = new Set<DriverIssue>();
+  const fieldIssues: Partial<Record<keyof SpeakerDriver, DriverIssue[]>> = {};
+  const addIssue = (issue: DriverIssue, fields: Array<keyof SpeakerDriver> = []) => {
+    issues.add(issue);
+    fields.forEach((field) => {
+      fieldIssues[field] = [...(fieldIssues[field] ?? []), issue];
+    });
+  };
+
+  driverFields.forEach((field) => {
+    const value = driver[field.key];
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+      if (requiredDriverNumberFields.has(field.key)) {
+        addIssue("invalidRequired", [field.key]);
+      }
+      return;
+    }
+    if (value < field.min || (field.max !== undefined && value > field.max)) {
+      addIssue("fieldOutOfRange", [field.key]);
+    }
+  });
+
+  const invalidRequiredFields = Array.from(requiredDriverNumberFields).filter((field) => {
+    const value = driver[field];
+    return typeof value !== "number" || !Number.isFinite(value) || value <= 0;
+  });
+  if (invalidRequiredFields.length > 0) {
+    addIssue("invalidRequired", invalidRequiredFields);
   }
   if (driver.qts < 0.18) {
-    issues.push("qtsLow");
+    addIssue("qtsLow", ["qts"]);
   }
   if (driver.qts > 0.7) {
-    issues.push("qtsHigh");
+    addIssue("qtsHigh", ["qts"]);
   }
   if (driver.qes !== undefined && driver.qes <= driver.qts) {
-    issues.push("qesNotAboveQts");
+    addIssue("qesNotAboveQts", ["qes", "qts"]);
   }
   if (driver.qms !== undefined && driver.qms <= driver.qts) {
-    issues.push("qmsNotAboveQts");
+    addIssue("qmsNotAboveQts", ["qms", "qts"]);
   }
   if (driver.xmaxMm !== undefined && driver.xmaxMm <= 0) {
-    issues.push("xmaxInvalid");
+    addIssue("xmaxInvalid", ["xmaxMm"]);
   }
   if (driver.peW !== undefined && driver.peW <= 0) {
-    issues.push("powerInvalid");
+    addIssue("powerInvalid", ["peW"]);
   }
   if (driver.qes !== undefined && driver.qms !== undefined && driver.qes > 0 && driver.qms > 0) {
     const expectedQts = (driver.qes * driver.qms) / (driver.qes + driver.qms);
     if (Math.abs(expectedQts - driver.qts) / Math.max(0.01, driver.qts) > 0.08) {
-      issues.push("qtsFormulaMismatch");
+      addIssue("qtsFormulaMismatch", ["qts", "qes", "qms"]);
     }
   }
   if (driver.mmsG !== undefined && driver.mmsG > 0 && driver.sdCm2 > 0 && driver.vasL > 0) {
     const cms = (driver.vasL / 1000) / (1.204 * 343 * 343 * Math.pow(driver.sdCm2 / 10000, 2));
     const expectedFs = 1 / (Math.PI * 2 * Math.sqrt((driver.mmsG / 1000) * cms));
     if (Number.isFinite(expectedFs) && Math.abs(expectedFs - driver.fsHz) / Math.max(1, driver.fsHz) > 0.18) {
-      issues.push("fsMmsVasMismatch");
+      addIssue("fsMmsVasMismatch", ["fsHz", "mmsG", "vasL", "sdCm2"]);
     }
   }
 
@@ -4479,7 +4745,8 @@ function analyzeDriver(driver: SpeakerDriver): DriverProfile {
 
   return {
     ebp,
-    issues: Array.from(new Set(issues)),
+    fieldIssues,
+    issues: Array.from(issues),
     recommendation,
   };
 }
