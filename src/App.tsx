@@ -2096,10 +2096,54 @@ function formatPort(result: SimulationResult): string {
 
 function serializeSvg(svg: SVGSVGElement): string {
   const clone = svg.cloneNode(true) as SVGSVGElement;
+  clone.querySelectorAll(".plot-hitbox, .chart-cursor").forEach((node) => node.remove());
   clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
   clone.setAttribute("width", "960");
   clone.setAttribute("height", "390");
+  clone.insertBefore(createSvgStyleElement(), clone.firstChild);
+  clone.insertBefore(createSvgBackgroundElement(), clone.firstChild);
   return new XMLSerializer().serializeToString(clone);
+}
+
+function createSvgBackgroundElement(): SVGRectElement {
+  const background = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+  background.setAttribute("class", "export-bg");
+  background.setAttribute("x", "0");
+  background.setAttribute("y", "0");
+  background.setAttribute("width", "960");
+  background.setAttribute("height", "390");
+  return background;
+}
+
+function createSvgStyleElement(): SVGStyleElement {
+  const style = document.createElementNS("http://www.w3.org/2000/svg", "style");
+  style.textContent = `
+    .export-bg { fill: #ffffff; }
+    .plot-bg { fill: #fbfcfd; }
+    .grid-line { stroke: #e4e9ef; stroke-width: 1; }
+    .axis-line { stroke: #7b8797; stroke-width: 1.2; }
+    .axis-text, .axis-label, .reference-text {
+      fill: #66758a;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 12px;
+    }
+    .axis-label { font-weight: 700; }
+    .reference-line { stroke: #a2adbb; stroke-dasharray: 5 5; stroke-width: 1.1; }
+    .series-line {
+      fill: none;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      stroke-width: 2.4;
+    }
+    .reference-series-line {
+      opacity: 0.48;
+      stroke-dasharray: 7 7;
+      stroke-width: 1.8;
+    }
+    .series-line.focused { stroke-width: 4.4; }
+    .series-line.muted { opacity: 0.28; stroke-width: 1.8; }
+  `;
+  return style;
 }
 
 function downloadBlob(blob: Blob, filename: string) {
