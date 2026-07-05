@@ -964,6 +964,16 @@ h2 {
   cursor: grabbing;
 }
 
+.y-axis-hitbox {
+  cursor: ns-resize;
+  fill: transparent;
+  pointer-events: all;
+}
+
+.chart-box.panning .y-axis-hitbox {
+  cursor: ns-resize;
+}
+
 .plot-bg {
   fill: #fbfcfd;
 }

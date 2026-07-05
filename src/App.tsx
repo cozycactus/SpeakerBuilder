@@ -1123,6 +1123,14 @@ function App() {
     setChartFrequencyMinHz(roundFrequencyForInput(nextMin));
     setChartFrequencyMaxHz(roundFrequencyForInput(nextMax));
   };
+  const updateChartYDomain = (domain: [number, number]) => {
+    const [nextMin, nextMax] = normalizeChartYDomain(domain[0], domain[1]);
+    updateActiveChartYScale({
+      auto: false,
+      min: roundChartYForInput(nextMin),
+      max: roundChartYForInput(nextMax),
+    });
+  };
   const analysisStale =
     analysisSnapshot.driver !== selectedDriver ||
     analysisSnapshot.designs !== designs ||
@@ -2070,6 +2078,8 @@ function App() {
                   onXDomainReset={activeTab === "step"
                     ? undefined
                     : () => updateChartFrequencyDomain([DEFAULT_CHART_FREQUENCY_MIN_HZ, DEFAULT_FREQUENCY_MAX_HZ])}
+                  onYDomainChange={updateChartYDomain}
+                  onYDomainReset={() => updateActiveChartYScale(defaultChartYScale(activeTab))}
                 />
               </div>
 
@@ -3055,6 +3065,8 @@ function LineChart({
   xLimit,
   onXDomainChange,
   onXDomainReset,
+  onYDomainChange,
+  onYDomainReset,
 }: {
   title: string;
   series: Series[];
@@ -3071,6 +3083,8 @@ function LineChart({
   xLimit?: [number, number];
   onXDomainChange?: (domain: [number, number]) => void;
   onXDomainReset?: () => void;
+  onYDomainChange?: (domain: [number, number]) => void;
+  onYDomainReset?: () => void;
 }) {
   const width = 960;
   const [chartHeight, setChartHeight] = useState(540);
@@ -3080,8 +3094,10 @@ function LineChart({
   const innerHeight = height - margin.top - margin.bottom;
   const chartBoxRef = useRef<HTMLDivElement>(null);
   const panDragRef = useRef<{
+    axis: "x" | "y";
     pointerId: number;
     startClientX: number;
+    startClientY: number;
     startDomain: [number, number];
   } | null>(null);
   const [hover, setHover] = useState<{
@@ -3202,20 +3218,74 @@ function LineChart({
     svgX <= width - margin.right &&
     svgY >= margin.top &&
     svgY <= height - margin.bottom;
+  const pointerInYAxis = (svgX: number, svgY: number) =>
+    svgX >= 0 &&
+    svgX <= margin.left + 16 &&
+    svgY >= margin.top &&
+    svgY <= height - margin.bottom;
+  const constrainedYDomain = (nextMin: number, nextMax: number): [number, number] => {
+    const minSpan = 0.001;
+    const maxSpan = CHART_Y_LIMIT * 2;
+    let span = clampNumber(nextMax - nextMin, minSpan, maxSpan);
+    let min = nextMin;
+    let max = min + span;
+
+    if (min < -CHART_Y_LIMIT) {
+      min = -CHART_Y_LIMIT;
+      max = min + span;
+    }
+    if (max > CHART_Y_LIMIT) {
+      max = CHART_Y_LIMIT;
+      min = max - span;
+    }
+
+    span = max - min;
+    if (span < minSpan) {
+      max = Math.min(CHART_Y_LIMIT, min + minSpan);
+      min = Math.max(-CHART_Y_LIMIT, max - minSpan);
+    }
+
+    return [min, max];
+  };
+  const emitYDomain = (nextMin: number, nextMax: number) => {
+    if (!onYDomainChange) {
+      return;
+    }
+    onYDomainChange(constrainedYDomain(nextMin, nextMax));
+  };
 
   function handlePointerDown(event: ReactPointerEvent<SVGSVGElement>) {
-    if (!onXDomainChange || event.button !== 0) {
+    if (event.button !== 0) {
       return;
     }
     const { svgX, svgY } = pointerPosition(event);
+    if (onYDomainChange && pointerInYAxis(svgX, svgY)) {
+      event.preventDefault();
+      panDragRef.current = {
+        axis: "y",
+        pointerId: event.pointerId,
+        startClientX: event.clientX,
+        startClientY: event.clientY,
+        startDomain: yDomain,
+      };
+      setIsPanning(true);
+      event.currentTarget.setPointerCapture(event.pointerId);
+      return;
+    }
+
+    if (!onXDomainChange) {
+      return;
+    }
     if (!pointerInPlot(svgX, svgY)) {
       return;
     }
 
     event.preventDefault();
     panDragRef.current = {
+      axis: "x",
       pointerId: event.pointerId,
       startClientX: event.clientX,
+      startClientY: event.clientY,
       startDomain: xDomain,
     };
     setIsPanning(true);
@@ -3224,7 +3294,15 @@ function LineChart({
 
   function handlePointerMove(event: ReactPointerEvent<SVGSVGElement>) {
     const drag = panDragRef.current;
-    if (drag && onXDomainChange) {
+    if (drag?.axis === "y" && onYDomainChange) {
+      event.preventDefault();
+      const deltaY = event.clientY - drag.startClientY;
+      const shift = (deltaY / innerHeight) * (drag.startDomain[1] - drag.startDomain[0]);
+      emitYDomain(drag.startDomain[0] + shift, drag.startDomain[1] + shift);
+      return;
+    }
+
+    if (drag?.axis === "x" && onXDomainChange) {
       event.preventDefault();
       const deltaX = event.clientX - drag.startClientX;
       const shift = (deltaX / innerWidth) * (domainToScaled(drag.startDomain[1]) - domainToScaled(drag.startDomain[0]));
@@ -3272,10 +3350,22 @@ function LineChart({
   }
 
   function handleWheel(event: ReactWheelEvent<SVGSVGElement>) {
+    const { svgX, svgY } = pointerPosition(event);
+    if (onYDomainChange && pointerInYAxis(svgX, svgY)) {
+      event.preventDefault();
+      const anchorRatio = 1 - (svgY - margin.top) / innerHeight;
+      const anchor = yDomain[0] + anchorRatio * (yDomain[1] - yDomain[0]);
+      const zoomFactor = Math.exp(clampNumber(event.deltaY, -240, 240) * 0.002);
+      emitYDomain(
+        anchor - (anchor - yDomain[0]) * zoomFactor,
+        anchor + (yDomain[1] - anchor) * zoomFactor,
+      );
+      return;
+    }
+
     if (!onXDomainChange) {
       return;
     }
-    const { svgX, svgY } = pointerPosition(event);
     if (!pointerInPlot(svgX, svgY)) {
       return;
     }
@@ -3292,10 +3382,16 @@ function LineChart({
   }
 
   function handleDoubleClick(event: ReactMouseEvent<SVGSVGElement>) {
+    const { svgX, svgY } = pointerPosition(event);
+    if (onYDomainReset && pointerInYAxis(svgX, svgY)) {
+      event.preventDefault();
+      onYDomainReset();
+      return;
+    }
+
     if (!onXDomainReset) {
       return;
     }
-    const { svgX, svgY } = pointerPosition(event);
     if (!pointerInPlot(svgX, svgY)) {
       return;
     }
@@ -3310,7 +3406,7 @@ function LineChart({
   const tooltipY = hover ? Math.max(8, Math.min(height - tooltipHeight - 8, hover.svgY - 18)) : 0;
 
   return (
-    <div className={`chart-box ${onXDomainChange ? "interactive" : ""} ${isPanning ? "panning" : ""}`} ref={chartBoxRef}>
+    <div className={`chart-box ${onXDomainChange || onYDomainChange ? "interactive" : ""} ${isPanning ? "panning" : ""}`} ref={chartBoxRef}>
       <svg
         ref={svgRef}
         viewBox={`0 0 ${width} ${height}`}
@@ -3414,6 +3510,15 @@ function LineChart({
           width={innerWidth}
           height={innerHeight}
         />
+        {onYDomainChange ? (
+          <rect
+            className="y-axis-hitbox"
+            x="0"
+            y={margin.top}
+            width={margin.left + 16}
+            height={innerHeight}
+          />
+        ) : null}
         {hover ? (
           <g className="chart-cursor">
             <line x1={hover.svgX} x2={hover.svgX} y1={margin.top} y2={height - margin.bottom} />
@@ -4887,6 +4992,17 @@ function roundFrequencyForInput(value: number): number {
     return roundTo(value, 1);
   }
   return roundTo(value, 0);
+}
+
+function roundChartYForInput(value: number): number {
+  const absValue = Math.abs(value);
+  if (absValue < 1) {
+    return roundTo(value, 3);
+  }
+  if (absValue < 10) {
+    return roundTo(value, 2);
+  }
+  return roundTo(value, 1);
 }
 
 function normalizeChartFrequencyDomain(minHz: number, maxHz: number): [number, number] {
