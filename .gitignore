@@ -1,5 +1,6 @@
 node_modules/
 dist/
+egui_app/target/
 *.tsbuildinfo
 vite.config.js
 vite.config.d.ts

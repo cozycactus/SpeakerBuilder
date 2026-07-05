@@ -43,6 +43,23 @@ jobs:
       - name: Build
         run: npm run build -- --base="$BASE_PATH"
 
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: egui_app
+
+      - name: Install Trunk
+        run: cargo install trunk --locked
+
+      - name: Build egui prototype
+        working-directory: egui_app
+        run: trunk build --release --dist ../dist/egui --public-url "${BASE_PATH}egui/"
+
       - name: Configure Pages
         uses: actions/configure-pages@v5
 

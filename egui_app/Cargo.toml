@@ -1,0 +1,20 @@
+[package]
+name = "speaker_builder_egui"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+eframe = { version = "0.35.0", default-features = false, features = ["accesskit", "default_fonts", "glow", "persistence", "wayland", "web_screen_reader", "x11"] }
+serde = { version = "1.0", features = ["derive"] }
+wasm-bindgen-futures = { version = "0.4", optional = true }
+web-sys = { version = "0.3", optional = true, features = ["Document", "HtmlCanvasElement", "Window"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = ["Document", "HtmlCanvasElement", "Window"] }
+
+[profile.release]
+opt-level = 2
+lto = true
+codegen-units = 1

@@ -513,6 +513,7 @@ const UI_TEXT = {
     exportReport: "Экспорт отчета HTML",
     exportPng: "Экспорт PNG",
     exportSvg: "Экспорт SVG",
+    eguiPrototype: "egui",
     freezeReference: "Запомнить эталон",
     importError: "Ошибка импорта",
     imported: (count: number) => `Импортировано: ${count}`,
@@ -852,6 +853,7 @@ const UI_TEXT = {
     exportReport: "Export HTML report",
     exportPng: "Export PNG",
     exportSvg: "Export SVG",
+    eguiPrototype: "egui",
     freezeReference: "Freeze reference",
     importError: "Import error",
     imported: (count: number) => `Imported: ${count}`,
@@ -2144,6 +2146,10 @@ function App() {
           <button type="button" className="icon-button" onClick={exportReportHtml} title={text.exportReport}>
             <FileText size={18} />
           </button>
+          <a className="text-button" href={`${import.meta.env.BASE_URL}egui/`} title={text.eguiPrototype}>
+            <ExternalLink size={18} />
+            <span>{text.eguiPrototype}</span>
+          </a>
         </div>
       </header>
 

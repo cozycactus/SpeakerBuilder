@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SpeakerBuilder egui prototype</title>
+    <link data-trunk rel="rust" />
+    <style>
+      html, body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        background: #f4f7fb;
+        color: #172033;
+        overflow: hidden;
+      }
+      canvas {
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
+      #loading_text {
+        position: fixed;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        font: 600 16px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="speaker_builder_egui_canvas"></canvas>
+    <div id="loading_text">Loading egui prototype...</div>
+  </body>
+</html>
