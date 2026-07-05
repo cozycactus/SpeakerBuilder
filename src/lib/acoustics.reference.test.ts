@@ -203,4 +203,16 @@ describe("acoustic reference scenarios", () => {
     expect(result.portMach).toHaveLength(0);
     expect(result.metrics.f3Hz).toBeUndefined();
   });
+
+  it("extends chart simulation points beyond the default 500 Hz range", () => {
+    const { design, driver } = designByName(0, "Vented QB3");
+    const result = simulateDesign(driver, design, {
+      frequencyMaxHz: 3000,
+      outputs: ["response"],
+      powerW: 25,
+    });
+
+    expect(result.responseDb.length).toBeGreaterThan(FREQUENCIES.length);
+    expect(result.responseDb[result.responseDb.length - 1]?.x).toBeCloseTo(3000, 3);
+  });
 });

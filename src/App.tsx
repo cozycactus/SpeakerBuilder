@@ -34,7 +34,10 @@ import {
   BoxDesign,
   BoxKind,
   DESIGN_COLORS,
+  DEFAULT_FREQUENCY_MAX_HZ,
   DriverSourceNote,
+  MAX_FREQUENCY_MAX_HZ,
+  MIN_FREQUENCY_MAX_HZ,
   Point,
   PRESET_DRIVERS,
   OptimizerCandidate,
@@ -129,6 +132,7 @@ interface AcousticOptions {
 interface ProjectState {
   acousticOptions: AcousticOptions;
   activeTab: ChartTab;
+  chartFrequencyMaxHz: number;
   compareDriverIds: string[];
   compareEnabled: boolean;
   designs: BoxDesign[];
@@ -265,6 +269,7 @@ const UI_TEXT = {
       impedance: "Импеданс",
       port: "Скорость в порту",
     } satisfies Record<ChartTab, string>,
+    chartRange: "До",
     axisLabels: {
       frequency: "Частота, Hz",
       time: "Время, ms",
@@ -529,6 +534,7 @@ const UI_TEXT = {
       impedance: "Impedance",
       port: "Port velocity",
     } satisfies Record<ChartTab, string>,
+    chartRange: "To",
     axisLabels: {
       frequency: "Frequency, Hz",
       time: "Time, ms",
@@ -768,6 +774,7 @@ function App() {
   const [chartPending, setChartPending] = useState(true);
   const [focusedDesignId, setFocusedDesignId] = useState(initialProject.focusedDesignId);
   const [activeTab, setActiveTab] = useState<ChartTab>(initialProject.activeTab);
+  const [chartFrequencyMaxHz, setChartFrequencyMaxHz] = useState(initialProject.chartFrequencyMaxHz);
   const [optimizerGoal, setOptimizerGoal] = useState<OptimizerGoal>(initialProject.optimizerGoal);
   const [powerW, setPowerW] = useState(initialProject.powerW);
   const [referenceByTab, setReferenceByTab] = useState<ReferenceByTab>(() => initialProject.referenceByTab);
@@ -857,6 +864,7 @@ function App() {
         createProjectFile({
           acousticOptions,
           activeTab,
+          chartFrequencyMaxHz,
           compareDriverIds,
           compareEnabled,
           designs,
@@ -875,6 +883,7 @@ function App() {
   }, [
     acousticOptions,
     activeTab,
+    chartFrequencyMaxHz,
     compareDriverIds,
     compareEnabled,
     designs,
@@ -994,6 +1003,7 @@ function App() {
       setChartResults(
         liveChartDesigns.map((design) =>
           simulateDesign(selectedDriver, design, {
+            frequencyMaxHz: chartFrequencyMaxHz,
             powerW,
             outputs,
           }),
@@ -1008,10 +1018,11 @@ function App() {
       type: "chart",
       driver: selectedDriver,
       designs: liveChartDesigns,
+      frequencyMaxHz: chartFrequencyMaxHz,
       powerW,
       outputs,
     });
-  }, [activeTab, powerW, selectedDriver, liveChartDesigns]);
+  }, [activeTab, chartFrequencyMaxHz, powerW, selectedDriver, liveChartDesigns]);
 
   const adjustedChartResults = useMemo(
     () => applyAcousticOptionsToResults(chartResults, acousticOptions),
@@ -1040,11 +1051,11 @@ function App() {
           name: displayDriverName(driver, text),
           color: DESIGN_COLORS[index % DESIGN_COLORS.length],
           enabled: true,
-        }, { powerW, outputs }),
+        }, { frequencyMaxHz: chartFrequencyMaxHz, powerW, outputs }),
       ),
       acousticOptions,
     );
-  }, [activeTab, acousticOptions, compareDriverIds, compareEnabled, drivers, focusedDesign, powerW, selectedDriver, text]);
+  }, [activeTab, acousticOptions, chartFrequencyMaxHz, compareDriverIds, compareEnabled, drivers, focusedDesign, powerW, selectedDriver, text]);
   const chartDisplayResults = compareEnabled ? compareChartResults : adjustedChartResults;
   const measurementSeries = useMemo(
     () => measurements
@@ -1221,6 +1232,7 @@ function App() {
     setDesigns(project.designs);
     setFocusedDesignId(project.focusedDesignId);
     setActiveTab(project.activeTab);
+    setChartFrequencyMaxHz(project.chartFrequencyMaxHz);
     setCompareEnabled(project.compareEnabled);
     setCompareDriverIds(project.compareDriverIds);
     setMeasurements(project.measurements);
@@ -1240,6 +1252,7 @@ function App() {
         createProjectFile({
           acousticOptions,
           activeTab,
+          chartFrequencyMaxHz,
           compareDriverIds,
           compareEnabled,
           designs,
@@ -1479,7 +1492,7 @@ function App() {
   }
 
   const chartFocusedSeriesId = compareEnabled ? selectedDriver.id : focusedDesignId;
-  const chartProps = getChartProps(activeTab, chartDisplayResults, selectedDriver, chartFocusedSeriesId, text, powerW, measurementSeries);
+  const chartProps = getChartProps(activeTab, chartDisplayResults, selectedDriver, chartFocusedSeriesId, text, powerW, chartFrequencyMaxHz, measurementSeries);
   const focusedDesignName = focusedDesign ? displayDesignName(focusedDesign.name, text) : "";
   const chartSubtitle = compareEnabled && focusedDesign
     ? `${text.compare.mode} · ${focusedDesignName}`
@@ -1806,6 +1819,26 @@ function App() {
                   ))}
                 </div>
                 <div className="chart-actions">
+                  <label className="chart-range-control">
+                    <span>{text.chartRange}</span>
+                    <input
+                      type="number"
+                      min={MIN_FREQUENCY_MAX_HZ}
+                      max={MAX_FREQUENCY_MAX_HZ}
+                      step="100"
+                      value={chartFrequencyMaxHz}
+                      onChange={(event) =>
+                        setChartFrequencyMaxHz(
+                          parseBoundedNumber(
+                            event.target.value,
+                            chartFrequencyMaxHz,
+                            MIN_FREQUENCY_MAX_HZ,
+                            MAX_FREQUENCY_MAX_HZ,
+                          ),
+                        )}
+                    />
+                    <em>Hz</em>
+                  </label>
                   <button type="button" className="text-button" onClick={freezeReference} title={text.freezeReference}>
                     <Target size={16} />
                     {text.reference}
@@ -2958,10 +2991,11 @@ function getChartProps(
   focusedDesignId: string,
   text: UiText,
   powerW: number,
+  chartFrequencyMaxHz: number,
   measurementSeries: Series[] = [],
 ): Parameters<typeof LineChart>[0] {
   const base = {
-    xDomain: [10, 500] as [number, number],
+    xDomain: [10, chartFrequencyMaxHz] as [number, number],
     xLabel: text.axisLabels.frequency,
     xScale: "log" as ScaleMode,
     series: [] as Series[],
@@ -3640,6 +3674,7 @@ function loadProjectState(): ProjectState {
   return {
     acousticOptions: DEFAULT_ACOUSTIC_OPTIONS,
     activeTab: "response",
+    chartFrequencyMaxHz: DEFAULT_FREQUENCY_MAX_HZ,
     compareDriverIds: [selectedDriver.id],
     compareEnabled: false,
     designs,
@@ -3686,6 +3721,7 @@ function parseProjectFile(content: string): ProjectState | null {
     return {
       acousticOptions: normalizeAcousticOptions(parsed.acousticOptions),
       activeTab: isChartTab(parsed.activeTab) ? parsed.activeTab : "response",
+      chartFrequencyMaxHz: normalizeChartFrequencyMax(parsed.chartFrequencyMaxHz),
       compareDriverIds: Array.isArray(parsed.compareDriverIds)
         ? parsed.compareDriverIds.filter((id): id is string => typeof id === "string" && drivers.some((driver) => driver.id === id))
         : [selectedDriverId],
@@ -3755,6 +3791,12 @@ function normalizeAcousticOptions(value: unknown): AcousticOptions {
     roomGainDb: finiteOptional(value.roomGainDb) ?? DEFAULT_ACOUSTIC_OPTIONS.roomGainDb,
     roomGainStartHz: finiteOptional(value.roomGainStartHz) ?? DEFAULT_ACOUSTIC_OPTIONS.roomGainStartHz,
   };
+}
+
+function normalizeChartFrequencyMax(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? clampNumber(value, MIN_FREQUENCY_MAX_HZ, MAX_FREQUENCY_MAX_HZ)
+    : DEFAULT_FREQUENCY_MAX_HZ;
 }
 
 function finiteOptional(value: unknown): number | undefined {
@@ -4067,7 +4109,7 @@ function keyForTemplate(design: BoxDesign): string {
 }
 
 function logTicks(domain: [number, number]): number[] {
-  return [10, 20, 30, 40, 50, 80, 100, 200, 300, 500].filter(
+  return [10, 20, 30, 40, 50, 80, 100, 200, 300, 500, 800, 1000, 2000, 3000, 5000, 8000, 10000, 20000].filter(
     (tick) => tick >= domain[0] && tick <= domain[1],
   );
 }

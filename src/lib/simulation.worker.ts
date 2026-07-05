@@ -7,6 +7,7 @@ type SimulationWorkerRequest =
       type: "chart";
       driver: SpeakerDriver;
       designs: BoxDesign[];
+      frequencyMaxHz: number;
       powerW: number;
       outputs: SimulationOutput[];
     }
@@ -47,6 +48,7 @@ self.onmessage = (event: MessageEvent<SimulationWorkerRequest>) => {
         type: "chart",
         results: request.designs.map((design) =>
           simulateDesign(request.driver, design, {
+            frequencyMaxHz: request.frequencyMaxHz,
             powerW: request.powerW,
             outputs: request.outputs,
           }),

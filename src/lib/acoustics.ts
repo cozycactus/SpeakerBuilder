@@ -52,6 +52,7 @@ export interface BoxDesign {
 }
 
 export interface SimulationOptions {
+  frequencyMaxHz?: number;
   powerW: number;
   outputs?: SimulationOutput[];
 }
@@ -173,6 +174,9 @@ const TWO_PI = Math.PI * 2;
 const REFERENCE_PRESSURE_PA = 20e-6;
 const SPL_DISTANCE_M = 1;
 const PORT_LIMIT_MACH = 0.16;
+export const DEFAULT_FREQUENCY_MAX_HZ = 500;
+export const MIN_FREQUENCY_MAX_HZ = 100;
+export const MAX_FREQUENCY_MAX_HZ = 20000;
 const DEFAULT_SIMULATION_OUTPUTS: SimulationOutput[] = [
   "response",
   "spl",
@@ -184,7 +188,7 @@ const DEFAULT_SIMULATION_OUTPUTS: SimulationOutput[] = [
   "metrics",
 ];
 
-export const FREQUENCIES = logspace(10, 500, 220);
+export const FREQUENCIES = logspace(10, DEFAULT_FREQUENCY_MAX_HZ, 220);
 
 export const DESIGN_COLORS = [
   "#0f766e",
@@ -499,7 +503,8 @@ export function simulateDesign(
   const needsImpedance = outputs.has("impedance") || needsMetrics;
   const powerW = Math.max(0.1, options.powerW);
   const voltageRms = Math.sqrt(powerW * derived.reOhm);
-  const raw = FREQUENCIES.map((frequency) => ({
+  const frequencies = simulationFrequencies(options.frequencyMaxHz);
+  const raw = frequencies.map((frequency) => ({
     frequency,
     response: responseAtFrequency(derived, design, frequency),
   }));
@@ -1447,6 +1452,21 @@ function logspace(start: number, end: number, count: number): number[] {
     const ratio = index / (count - 1);
     return Math.pow(10, min + ratio * (max - min));
   });
+}
+
+function simulationFrequencies(maxHz?: number): number[] {
+  const normalizedMax = clamp(
+    Number.isFinite(maxHz) ? maxHz ?? DEFAULT_FREQUENCY_MAX_HZ : DEFAULT_FREQUENCY_MAX_HZ,
+    MIN_FREQUENCY_MAX_HZ,
+    MAX_FREQUENCY_MAX_HZ,
+  );
+  if (normalizedMax === DEFAULT_FREQUENCY_MAX_HZ) {
+    return FREQUENCIES;
+  }
+
+  const octaveRatio = Math.max(1, normalizedMax / DEFAULT_FREQUENCY_MAX_HZ);
+  const count = Math.round(clamp(220 + Math.log2(octaveRatio) * 42, 220, 420));
+  return logspace(10, normalizedMax, count);
 }
 
 function unwrapPhase(phases: number[]): number[] {
