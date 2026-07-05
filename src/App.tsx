@@ -132,7 +132,11 @@ interface AcousticOptions {
 interface ProjectState {
   acousticOptions: AcousticOptions;
   activeTab: ChartTab;
+  chartFrequencyMinHz: number;
   chartFrequencyMaxHz: number;
+  chartYAuto: boolean;
+  chartYMax: number;
+  chartYMin: number;
   compareDriverIds: string[];
   compareEnabled: boolean;
   designs: BoxDesign[];
@@ -192,6 +196,18 @@ const CHART_PANEL_ORDER_STORAGE_KEY = "speaker-builder-chart-panel-order-v1";
 const LEFT_PANEL_LIMITS = { min: 240, max: 540, defaultValue: 320 };
 const RIGHT_PANEL_LIMITS = { min: 260, max: 560, defaultValue: 340 };
 const RESIZE_KEY_STEP = 16;
+const CHART_FREQUENCY_MIN_LIMIT_HZ = 10;
+const CHART_FREQUENCY_MIN_MAX_HZ = MAX_FREQUENCY_MAX_HZ / 2;
+const DEFAULT_CHART_FREQUENCY_MIN_HZ = 10;
+const DEFAULT_CHART_Y_MIN = -36;
+const DEFAULT_CHART_Y_MAX = 9;
+const CHART_Y_LIMIT = 240;
+const CHART_RANGE_PRESETS = [
+  { label: "20-200", minHz: 20, maxHz: 200 },
+  { label: "20-500", minHz: 20, maxHz: 500 },
+  { label: "20-3k", minHz: 20, maxHz: 3000 },
+  { label: "20-20k", minHz: 20, maxHz: 20000 },
+];
 const DEFAULT_SIDEBAR_PANEL_ORDER: SidebarPanelId[] = ["drivers", "model"];
 const DEFAULT_CHART_PANEL_ORDER: ChartToolPanelId[] = ["corrections", "measurements", "compare"];
 const DEFAULT_LIBRARY_FILTERS: LibraryFilters = {
@@ -270,6 +286,15 @@ const UI_TEXT = {
       port: "Скорость в порту",
     } satisfies Record<ChartTab, string>,
     chartRange: "До",
+    chartScale: {
+      autoY: "Y авто",
+      from: "От",
+      reset: "Сброс",
+      to: "До",
+      warning: "Выше 500 Гц T/S расчет не заменяет измеренную FRD: не учитываются резонансы диффузора, направленность и детали конструкции.",
+      yMax: "Y макс",
+      yMin: "Y мин",
+    },
     axisLabels: {
       frequency: "Частота, Hz",
       time: "Время, ms",
@@ -535,6 +560,15 @@ const UI_TEXT = {
       port: "Port velocity",
     } satisfies Record<ChartTab, string>,
     chartRange: "To",
+    chartScale: {
+      autoY: "Auto Y",
+      from: "From",
+      reset: "Reset",
+      to: "To",
+      warning: "Above 500 Hz, T/S modeling does not replace measured FRD: breakup, directivity, and cone details are not modeled.",
+      yMax: "Y max",
+      yMin: "Y min",
+    },
     axisLabels: {
       frequency: "Frequency, Hz",
       time: "Time, ms",
@@ -774,7 +808,11 @@ function App() {
   const [chartPending, setChartPending] = useState(true);
   const [focusedDesignId, setFocusedDesignId] = useState(initialProject.focusedDesignId);
   const [activeTab, setActiveTab] = useState<ChartTab>(initialProject.activeTab);
+  const [chartFrequencyMinHz, setChartFrequencyMinHz] = useState(initialProject.chartFrequencyMinHz);
   const [chartFrequencyMaxHz, setChartFrequencyMaxHz] = useState(initialProject.chartFrequencyMaxHz);
+  const [chartYAuto, setChartYAuto] = useState(initialProject.chartYAuto);
+  const [chartYMin, setChartYMin] = useState(initialProject.chartYMin);
+  const [chartYMax, setChartYMax] = useState(initialProject.chartYMax);
   const [optimizerGoal, setOptimizerGoal] = useState<OptimizerGoal>(initialProject.optimizerGoal);
   const [powerW, setPowerW] = useState(initialProject.powerW);
   const [referenceByTab, setReferenceByTab] = useState<ReferenceByTab>(() => initialProject.referenceByTab);
@@ -864,7 +902,11 @@ function App() {
         createProjectFile({
           acousticOptions,
           activeTab,
+          chartFrequencyMinHz,
           chartFrequencyMaxHz,
+          chartYAuto,
+          chartYMax,
+          chartYMin,
           compareDriverIds,
           compareEnabled,
           designs,
@@ -883,7 +925,11 @@ function App() {
   }, [
     acousticOptions,
     activeTab,
+    chartFrequencyMinHz,
     chartFrequencyMaxHz,
+    chartYAuto,
+    chartYMax,
+    chartYMin,
     compareDriverIds,
     compareEnabled,
     designs,
@@ -982,6 +1028,14 @@ function App() {
   const liveChartDesigns = useMemo(() => {
     return designs.filter((design) => design.enabled);
   }, [designs]);
+  const chartFrequencyDomain = useMemo(
+    () => normalizeChartFrequencyDomain(chartFrequencyMinHz, chartFrequencyMaxHz),
+    [chartFrequencyMaxHz, chartFrequencyMinHz],
+  );
+  const chartYDomain = useMemo(
+    () => chartYAuto ? undefined : normalizeChartYDomain(chartYMin, chartYMax),
+    [chartYAuto, chartYMax, chartYMin],
+  );
   const analysisStale =
     analysisSnapshot.driver !== selectedDriver ||
     analysisSnapshot.designs !== designs ||
@@ -1003,7 +1057,7 @@ function App() {
       setChartResults(
         liveChartDesigns.map((design) =>
           simulateDesign(selectedDriver, design, {
-            frequencyMaxHz: chartFrequencyMaxHz,
+            frequencyMaxHz: chartFrequencyDomain[1],
             powerW,
             outputs,
           }),
@@ -1018,11 +1072,11 @@ function App() {
       type: "chart",
       driver: selectedDriver,
       designs: liveChartDesigns,
-      frequencyMaxHz: chartFrequencyMaxHz,
+      frequencyMaxHz: chartFrequencyDomain[1],
       powerW,
       outputs,
     });
-  }, [activeTab, chartFrequencyMaxHz, powerW, selectedDriver, liveChartDesigns]);
+  }, [activeTab, chartFrequencyDomain, powerW, selectedDriver, liveChartDesigns]);
 
   const adjustedChartResults = useMemo(
     () => applyAcousticOptionsToResults(chartResults, acousticOptions),
@@ -1051,11 +1105,11 @@ function App() {
           name: displayDriverName(driver, text),
           color: DESIGN_COLORS[index % DESIGN_COLORS.length],
           enabled: true,
-        }, { frequencyMaxHz: chartFrequencyMaxHz, powerW, outputs }),
+        }, { frequencyMaxHz: chartFrequencyDomain[1], powerW, outputs }),
       ),
       acousticOptions,
     );
-  }, [activeTab, acousticOptions, chartFrequencyMaxHz, compareDriverIds, compareEnabled, drivers, focusedDesign, powerW, selectedDriver, text]);
+  }, [activeTab, acousticOptions, chartFrequencyDomain, compareDriverIds, compareEnabled, drivers, focusedDesign, powerW, selectedDriver, text]);
   const chartDisplayResults = compareEnabled ? compareChartResults : adjustedChartResults;
   const measurementSeries = useMemo(
     () => measurements
@@ -1232,7 +1286,11 @@ function App() {
     setDesigns(project.designs);
     setFocusedDesignId(project.focusedDesignId);
     setActiveTab(project.activeTab);
+    setChartFrequencyMinHz(project.chartFrequencyMinHz);
     setChartFrequencyMaxHz(project.chartFrequencyMaxHz);
+    setChartYAuto(project.chartYAuto);
+    setChartYMin(project.chartYMin);
+    setChartYMax(project.chartYMax);
     setCompareEnabled(project.compareEnabled);
     setCompareDriverIds(project.compareDriverIds);
     setMeasurements(project.measurements);
@@ -1252,7 +1310,11 @@ function App() {
         createProjectFile({
           acousticOptions,
           activeTab,
+          chartFrequencyMinHz,
           chartFrequencyMaxHz,
+          chartYAuto,
+          chartYMax,
+          chartYMin,
           compareDriverIds,
           compareEnabled,
           designs,
@@ -1492,7 +1554,7 @@ function App() {
   }
 
   const chartFocusedSeriesId = compareEnabled ? selectedDriver.id : focusedDesignId;
-  const chartProps = getChartProps(activeTab, chartDisplayResults, selectedDriver, chartFocusedSeriesId, text, powerW, chartFrequencyMaxHz, measurementSeries);
+  const chartProps = getChartProps(activeTab, chartDisplayResults, selectedDriver, chartFocusedSeriesId, text, powerW, chartFrequencyDomain, chartYDomain, measurementSeries);
   const focusedDesignName = focusedDesign ? displayDesignName(focusedDesign.name, text) : "";
   const chartSubtitle = compareEnabled && focusedDesign
     ? `${text.compare.mode} · ${focusedDesignName}`
@@ -1819,26 +1881,48 @@ function App() {
                   ))}
                 </div>
                 <div className="chart-actions">
-                  <label className="chart-range-control">
-                    <span>{text.chartRange}</span>
-                    <input
-                      type="number"
-                      min={MIN_FREQUENCY_MAX_HZ}
-                      max={MAX_FREQUENCY_MAX_HZ}
-                      step="100"
-                      value={chartFrequencyMaxHz}
-                      onChange={(event) =>
-                        setChartFrequencyMaxHz(
-                          parseBoundedNumber(
-                            event.target.value,
-                            chartFrequencyMaxHz,
-                            MIN_FREQUENCY_MAX_HZ,
-                            MAX_FREQUENCY_MAX_HZ,
-                          ),
-                        )}
-                    />
-                    <em>Hz</em>
-                  </label>
+                  <ChartScaleControls
+                    frequencyMaxHz={chartFrequencyMaxHz}
+                    frequencyMinHz={chartFrequencyMinHz}
+                    text={text}
+                    yAuto={chartYAuto}
+                    yMax={chartYMax}
+                    yMin={chartYMin}
+                    onFrequencyMaxChange={(value) => {
+                      const nextMax = parseBoundedNumber(value, chartFrequencyMaxHz, MIN_FREQUENCY_MAX_HZ, MAX_FREQUENCY_MAX_HZ);
+                      setChartFrequencyMaxHz(nextMax);
+                      setChartFrequencyMinHz((currentMin) => currentMin < nextMax
+                        ? currentMin
+                        : clampNumber(nextMax / 2, CHART_FREQUENCY_MIN_LIMIT_HZ, CHART_FREQUENCY_MIN_MAX_HZ));
+                    }}
+                    onFrequencyMinChange={(value) => {
+                      const nextMin = parseBoundedNumber(value, chartFrequencyMinHz, CHART_FREQUENCY_MIN_LIMIT_HZ, CHART_FREQUENCY_MIN_MAX_HZ);
+                      setChartFrequencyMinHz(nextMin);
+                      setChartFrequencyMaxHz((currentMax) => currentMax > nextMin
+                        ? currentMax
+                        : clampNumber(nextMin * 2, MIN_FREQUENCY_MAX_HZ, MAX_FREQUENCY_MAX_HZ));
+                    }}
+                    onPreset={(preset) => {
+                      setChartFrequencyMinHz(preset.minHz);
+                      setChartFrequencyMaxHz(preset.maxHz);
+                    }}
+                    onReset={() => {
+                      setChartFrequencyMinHz(DEFAULT_CHART_FREQUENCY_MIN_HZ);
+                      setChartFrequencyMaxHz(DEFAULT_FREQUENCY_MAX_HZ);
+                      setChartYAuto(true);
+                      setChartYMin(DEFAULT_CHART_Y_MIN);
+                      setChartYMax(DEFAULT_CHART_Y_MAX);
+                    }}
+                    onYAutoChange={setChartYAuto}
+                    onYMaxChange={(value) => {
+                      setChartYAuto(false);
+                      setChartYMax(parseBoundedNumber(value, chartYMax, -CHART_Y_LIMIT, CHART_Y_LIMIT));
+                    }}
+                    onYMinChange={(value) => {
+                      setChartYAuto(false);
+                      setChartYMin(parseBoundedNumber(value, chartYMin, -CHART_Y_LIMIT, CHART_Y_LIMIT));
+                    }}
+                  />
                   <button type="button" className="text-button" onClick={freezeReference} title={text.freezeReference}>
                     <Target size={16} />
                     {text.reference}
@@ -1939,6 +2023,9 @@ function App() {
                 </div>
               </aside>
             </div>
+            {chartFrequencyDomain[1] > DEFAULT_FREQUENCY_MAX_HZ ? (
+              <div className="chart-range-warning">{text.chartScale.warning}</div>
+            ) : null}
             <div className="chart-control-strip">
               {chartPanelOrder.map((panelId) => renderChartToolPanel(panelId))}
             </div>
@@ -2535,6 +2622,104 @@ function DriverComparePanel({
   );
 }
 
+function ChartScaleControls({
+  frequencyMaxHz,
+  frequencyMinHz,
+  text,
+  yAuto,
+  yMax,
+  yMin,
+  onFrequencyMaxChange,
+  onFrequencyMinChange,
+  onPreset,
+  onReset,
+  onYAutoChange,
+  onYMaxChange,
+  onYMinChange,
+}: {
+  frequencyMaxHz: number;
+  frequencyMinHz: number;
+  text: UiText;
+  yAuto: boolean;
+  yMax: number;
+  yMin: number;
+  onFrequencyMaxChange: (value: string) => void;
+  onFrequencyMinChange: (value: string) => void;
+  onPreset: (preset: (typeof CHART_RANGE_PRESETS)[number]) => void;
+  onReset: () => void;
+  onYAutoChange: (value: boolean) => void;
+  onYMaxChange: (value: string) => void;
+  onYMinChange: (value: string) => void;
+}) {
+  return (
+    <div className="chart-scale-controls">
+      <div className="chart-scale-presets">
+        {CHART_RANGE_PRESETS.map((preset) => (
+          <button key={preset.label} type="button" onClick={() => onPreset(preset)}>
+            {preset.label}
+          </button>
+        ))}
+      </div>
+      <label className="chart-range-control">
+        <span>{text.chartScale.from}</span>
+        <input
+          type="number"
+          min={CHART_FREQUENCY_MIN_LIMIT_HZ}
+          max={CHART_FREQUENCY_MIN_MAX_HZ}
+          step="10"
+          value={frequencyMinHz}
+          onChange={(event) => onFrequencyMinChange(event.target.value)}
+        />
+        <em>Hz</em>
+      </label>
+      <label className="chart-range-control">
+        <span>{text.chartScale.to}</span>
+        <input
+          type="number"
+          min={MIN_FREQUENCY_MAX_HZ}
+          max={MAX_FREQUENCY_MAX_HZ}
+          step="100"
+          value={frequencyMaxHz}
+          onChange={(event) => onFrequencyMaxChange(event.target.value)}
+        />
+        <em>Hz</em>
+      </label>
+      <label className="chart-range-control compact">
+        <input
+          type="checkbox"
+          checked={yAuto}
+          onChange={(event) => onYAutoChange(event.target.checked)}
+        />
+        <span>{text.chartScale.autoY}</span>
+      </label>
+      <label className="chart-range-control y-field">
+        <span>{text.chartScale.yMin}</span>
+        <input
+          type="number"
+          disabled={yAuto}
+          step="1"
+          value={yMin}
+          onChange={(event) => onYMinChange(event.target.value)}
+        />
+      </label>
+      <label className="chart-range-control y-field">
+        <span>{text.chartScale.yMax}</span>
+        <input
+          type="number"
+          disabled={yAuto}
+          step="1"
+          value={yMax}
+          onChange={(event) => onYMaxChange(event.target.value)}
+        />
+      </label>
+      <button type="button" className="text-button" onClick={onReset}>
+        <RefreshCw size={16} />
+        {text.chartScale.reset}
+      </button>
+    </div>
+  );
+}
+
 function DriverImpactPanel({
   activeTab,
   text,
@@ -2991,11 +3176,12 @@ function getChartProps(
   focusedDesignId: string,
   text: UiText,
   powerW: number,
-  chartFrequencyMaxHz: number,
+  chartFrequencyDomain: [number, number],
+  chartYDomain: [number, number] | undefined,
   measurementSeries: Series[] = [],
 ): Parameters<typeof LineChart>[0] {
   const base = {
-    xDomain: [10, chartFrequencyMaxHz] as [number, number],
+    xDomain: chartFrequencyDomain,
     xLabel: text.axisLabels.frequency,
     xScale: "log" as ScaleMode,
     series: [] as Series[],
@@ -3003,16 +3189,17 @@ function getChartProps(
   };
 
   if (tab === "response") {
+    const yDomain = chartYDomain ?? [-36, 9] as [number, number];
     return {
       ...base,
       title: text.chartTitles.response,
       yLabel: "dB",
-      yDomain: [-36, 9],
-      referenceLines: [
+      yDomain,
+      referenceLines: visibleReferenceLines([
         { y: 0, label: "0 dB" },
         { y: -3, label: "-3" },
         { y: -6, label: "-6" },
-      ],
+      ], yDomain),
       series: [...toSeriesList(results, "responseDb", focusedDesignId, text), ...measurementSeries],
     };
   }
@@ -3022,6 +3209,7 @@ function getChartProps(
       ...measurementSeries.flatMap((series) => series.points),
     ];
     const domain = splDomain(points.map((point) => point.y));
+    const yDomain = chartYDomain ?? domain;
     const sensitivityLine = driver.sensitivityDb !== undefined
       ? driver.sensitivityDb + powerToDb(powerW)
       : 85;
@@ -3029,38 +3217,41 @@ function getChartProps(
       ...base,
       title: text.chartTitles.spl,
       yLabel: "dB SPL",
-      yDomain: domain,
-      referenceLines: [
+      yDomain,
+      referenceLines: visibleReferenceLines([
         { y: sensitivityLine, label: `${fmt(sensitivityLine, 1)} dB` },
         { y: 100, label: "100" },
-      ].filter((line) => line.y >= domain[0] && line.y <= domain[1]),
+      ], yDomain),
       series: [...toSeriesList(results, "splDb", focusedDesignId, text), ...measurementSeries],
     };
   }
   if (tab === "excursion") {
     const points = results.flatMap((result) => result.excursionMm);
     const max = Math.max(driver.xmaxMm ?? 0, ...points.map((point) => point.y), 1);
+    const yDomain = chartYDomain ?? [0, niceCeil(max * 1.18)] as [number, number];
     return {
       ...base,
       title: text.chartTitles.excursion,
       yLabel: "mm",
-      yDomain: [0, niceCeil(max * 1.18)],
-      referenceLines: driver.xmaxMm ? [{ y: driver.xmaxMm, label: "Xmax" }] : [],
+      yDomain,
+      referenceLines: visibleReferenceLines(driver.xmaxMm ? [{ y: driver.xmaxMm, label: "Xmax" }] : [], yDomain),
       series: toSeriesList(results, "excursionMm", focusedDesignId, text),
     };
   }
   if (tab === "groupDelay") {
     const points = results.flatMap((result) => result.groupDelayMs);
     const max = Math.max(...points.map((point) => point.y), 12);
+    const yDomain = chartYDomain ?? [0, niceCeil(max * 1.12)] as [number, number];
     return {
       ...base,
       title: text.chartTitles.groupDelay,
       yLabel: "ms",
-      yDomain: [0, niceCeil(max * 1.12)],
+      yDomain,
       series: toSeriesList(results, "groupDelayMs", focusedDesignId, text),
     };
   }
   if (tab === "step") {
+    const yDomain = chartYDomain ?? [-1.1, 1.1] as [number, number];
     return {
       ...base,
       title: text.chartTitles.step,
@@ -3068,19 +3259,20 @@ function getChartProps(
       xLabel: text.axisLabels.time,
       xScale: "linear",
       xDomain: [0, 250],
-      yDomain: [-1.1, 1.1],
-      referenceLines: [{ y: 0, label: "0" }],
+      yDomain,
+      referenceLines: visibleReferenceLines([{ y: 0, label: "0" }], yDomain),
       series: toSeriesList(results, "step", focusedDesignId, text),
     };
   }
   if (tab === "phase") {
     const points = results.flatMap((result) => result.phaseDeg);
     const domain = paddedDomain(points.map((point) => point.y), [-360, 90]);
+    const yDomain = chartYDomain ?? domain;
     return {
       ...base,
       title: text.chartTitles.phase,
       yLabel: "deg",
-      yDomain: domain,
+      yDomain,
       series: toSeriesList(results, "phaseDeg", focusedDesignId, text),
     };
   }
@@ -3090,27 +3282,36 @@ function getChartProps(
       ...measurementSeries.flatMap((series) => series.points),
     ];
     const max = Math.max(...points.map((point) => point.y), driver.reOhm * 2);
+    const yDomain = chartYDomain ?? [0, niceCeil(max * 1.1)] as [number, number];
     return {
       ...base,
       title: text.chartTitles.impedance,
       yLabel: "Ω",
-      yDomain: [0, niceCeil(max * 1.1)],
+      yDomain,
       series: [...toSeriesList(results, "impedanceOhm", focusedDesignId, text), ...measurementSeries],
     };
   }
   const points = results.flatMap((result) => result.portMach);
   const max = Math.max(...points.map((point) => point.y), 0.18);
+  const yDomain = chartYDomain ?? [0, Math.max(0.2, niceCeil(max * 1.15))] as [number, number];
   return {
     ...base,
     title: text.chartTitles.port,
     yLabel: "Mach",
-    yDomain: [0, Math.max(0.2, niceCeil(max * 1.15))],
-    referenceLines: [
+    yDomain,
+    referenceLines: visibleReferenceLines([
       { y: 0.1, label: "0.10" },
       { y: 0.16, label: "0.16" },
-    ],
+    ], yDomain),
     series: toSeriesList(results, "portMach", focusedDesignId, text),
   };
+}
+
+function visibleReferenceLines(
+  lines: Array<{ y: number; label: string }>,
+  yDomain: [number, number],
+): Array<{ y: number; label: string }> {
+  return lines.filter((line) => line.y >= yDomain[0] && line.y <= yDomain[1]);
 }
 
 function toSeriesList(
@@ -3674,7 +3875,11 @@ function loadProjectState(): ProjectState {
   return {
     acousticOptions: DEFAULT_ACOUSTIC_OPTIONS,
     activeTab: "response",
+    chartFrequencyMinHz: DEFAULT_CHART_FREQUENCY_MIN_HZ,
     chartFrequencyMaxHz: DEFAULT_FREQUENCY_MAX_HZ,
+    chartYAuto: true,
+    chartYMax: DEFAULT_CHART_Y_MAX,
+    chartYMin: DEFAULT_CHART_Y_MIN,
     compareDriverIds: [selectedDriver.id],
     compareEnabled: false,
     designs,
@@ -3721,7 +3926,11 @@ function parseProjectFile(content: string): ProjectState | null {
     return {
       acousticOptions: normalizeAcousticOptions(parsed.acousticOptions),
       activeTab: isChartTab(parsed.activeTab) ? parsed.activeTab : "response",
+      chartFrequencyMinHz: normalizeChartFrequencyMin(parsed.chartFrequencyMinHz),
       chartFrequencyMaxHz: normalizeChartFrequencyMax(parsed.chartFrequencyMaxHz),
+      chartYAuto: typeof parsed.chartYAuto === "boolean" ? parsed.chartYAuto : true,
+      chartYMax: normalizeChartYValue(parsed.chartYMax, DEFAULT_CHART_Y_MAX),
+      chartYMin: normalizeChartYValue(parsed.chartYMin, DEFAULT_CHART_Y_MIN),
       compareDriverIds: Array.isArray(parsed.compareDriverIds)
         ? parsed.compareDriverIds.filter((id): id is string => typeof id === "string" && drivers.some((driver) => driver.id === id))
         : [selectedDriverId],
@@ -3797,6 +4006,18 @@ function normalizeChartFrequencyMax(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value)
     ? clampNumber(value, MIN_FREQUENCY_MAX_HZ, MAX_FREQUENCY_MAX_HZ)
     : DEFAULT_FREQUENCY_MAX_HZ;
+}
+
+function normalizeChartFrequencyMin(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? clampNumber(value, CHART_FREQUENCY_MIN_LIMIT_HZ, CHART_FREQUENCY_MIN_MAX_HZ)
+    : DEFAULT_CHART_FREQUENCY_MIN_HZ;
+}
+
+function normalizeChartYValue(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? clampNumber(value, -CHART_Y_LIMIT, CHART_Y_LIMIT)
+    : fallback;
 }
 
 function finiteOptional(value: unknown): number | undefined {
@@ -4176,6 +4397,25 @@ function roundTo(value: number, decimals: number): number {
 
 function clampNumber(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+function normalizeChartFrequencyDomain(minHz: number, maxHz: number): [number, number] {
+  const min = clampNumber(minHz, CHART_FREQUENCY_MIN_LIMIT_HZ, CHART_FREQUENCY_MIN_MAX_HZ);
+  const max = clampNumber(maxHz, MIN_FREQUENCY_MAX_HZ, MAX_FREQUENCY_MAX_HZ);
+  if (min < max) {
+    return [min, max];
+  }
+  return [Math.max(CHART_FREQUENCY_MIN_LIMIT_HZ, max / 2), max];
+}
+
+function normalizeChartYDomain(minY: number, maxY: number): [number, number] {
+  const min = clampNumber(minY, -CHART_Y_LIMIT, CHART_Y_LIMIT);
+  const max = clampNumber(maxY, -CHART_Y_LIMIT, CHART_Y_LIMIT);
+  if (min !== max) {
+    return [Math.min(min, max), Math.max(min, max)];
+  }
+  const lower = clampNumber(min, -CHART_Y_LIMIT, CHART_Y_LIMIT - 1);
+  return [lower, lower + 1];
 }
 
 function parseBoundedNumber(value: string, fallback: number, min: number, max: number): number {
