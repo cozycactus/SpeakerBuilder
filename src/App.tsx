@@ -296,8 +296,10 @@ const UI_TEXT = {
       yMin: "Y мин",
     },
     axisLabels: {
-      frequency: "Частота, Hz",
-      time: "Время, ms",
+      frequency: "Частота, Гц",
+      normalized: "норм.",
+      phase: "°",
+      time: "Время, мс",
     },
     configs: "Конфигурации",
     copySuffix: "копия",
@@ -415,9 +417,9 @@ const UI_TEXT = {
     },
     corrections: {
       title: "Поправки графика",
-      roomGain: "Room gain",
+      roomGain: "Подъем комнаты",
       roomStart: "Ниже",
-      baffleStep: "Baffle step",
+      baffleStep: "Потеря от щита",
       baffleHz: "Частота",
     },
     duplicate: "Дублировать",
@@ -461,6 +463,7 @@ const UI_TEXT = {
     reset: "Сбросить",
     resizeConfigPanel: "Изменить ширину панели конфигураций",
     resizeDriverPanel: "Изменить ширину панели динамиков",
+    warnings: "Предупреждения",
     optimizer: {
       apply: "Применить",
       best: "Лучший",
@@ -490,20 +493,20 @@ const UI_TEXT = {
       highQts: "Динамику с высоким Qts может лучше подойти закрытый или апериодический корпус",
       highVentAirSpeed: (mach: string) => `Высокая скорость воздуха в порту: Mach ${mach}`,
       invalidBoxVolume: "Некорректный объем корпуса",
-      maxSplLimitedByPe: (frequency: string) => `SPL ограничен Pe на ${frequency} Hz`,
-      maxSplLimitedByPort: (frequency: string) => `SPL ограничен портом на ${frequency} Hz`,
-      maxSplLimitedByXmax: (frequency: string) => `SPL ограничен Xmax на ${frequency} Hz`,
+      maxSplLimitedByPe: (frequency: string) => `SPL ограничен Pe на ${frequency} Гц`,
+      maxSplLimitedByPort: (frequency: string) => `SPL ограничен портом на ${frequency} Гц`,
+      maxSplLimitedByXmax: (frequency: string) => `SPL ограничен Xmax на ${frequency} Гц`,
       multiplePortsLong: "Несколько портов сильно увеличивают требуемую длину",
       powerExceeded: (power: string) => `Заданная мощность выше Pe: ${power} W`,
       portDiameterSmall: "Диаметр порта мал для площади диффузора",
       portMayNotFit: "Порт может не поместиться в корпус",
       portNearNoise: (mach: string) => `Скорость воздуха близка к шумовому пределу: Mach ${mach}`,
-      portResonanceLow: (frequency: string) => `Низкая первая резонансная частота порта: ${frequency} Hz`,
+      portResonanceLow: (frequency: string) => `Низкая первая резонансная частота порта: ${frequency} Гц`,
       portVeryLong: "Порт очень длинный для этого корпуса",
       qesEstimated: "Qes оценен по Qts",
       qmsEstimated: "Qms оценен по Qts/Qes",
       ventTooShort: "Порт слишком короткий для этого диаметра/настройки",
-      xmaxExceeded: (frequency: string) => `Превышен Xmax на ${frequency} Hz`,
+      xmaxExceeded: (frequency: string) => `Превышен Xmax на ${frequency} Гц`,
     },
     table: {
       design: "Конфигурация",
@@ -571,6 +574,8 @@ const UI_TEXT = {
     },
     axisLabels: {
       frequency: "Frequency, Hz",
+      normalized: "norm",
+      phase: "°",
       time: "Time, ms",
     },
     configs: "Configurations",
@@ -719,6 +724,7 @@ const UI_TEXT = {
     reset: "Reset",
     resizeConfigPanel: "Resize configuration panel",
     resizeDriverPanel: "Resize driver panel",
+    warnings: "Warnings",
     optimizer: {
       apply: "Apply",
       best: "Best",
@@ -2687,7 +2693,7 @@ function ChartScaleControls({
           value={frequencyMaxHz}
           onChange={(event) => onFrequencyMaxChange(event.target.value)}
         />
-        <em>Hz</em>
+        <em>{text.axisLabels.frequency.includes("Гц") ? "Гц" : "Hz"}</em>
       </div>
       <label className="chart-range-control compact">
         <input
@@ -2974,7 +2980,7 @@ function LineChart({
     svgX: number;
     svgY: number;
     xValue: number;
-    values: Array<{ color: string; name: string; y: number }>;
+    values: Array<{ color: string; name: string; x: number; y: number }>;
   } | null>(null);
   const xTicks = xScale === "log" ? logTicks(xDomain) : linearTicks(xDomain, 6);
   const yTicks = linearTicks(yDomain, 7);
@@ -3020,16 +3026,24 @@ function LineChart({
     ]
       .map((item) => {
         const point = nearestPoint(item.points, xValue, xScale);
-        return point ? { color: item.color, name: item.name, y: point.y } : null;
+        return point &&
+          Number.isFinite(point.x) &&
+          Number.isFinite(point.y) &&
+          point.x >= xDomain[0] &&
+          point.x <= xDomain[1] &&
+          point.y >= yDomain[0] &&
+          point.y <= yDomain[1]
+          ? { color: item.color, name: item.name, x: point.x, y: point.y }
+          : null;
       })
-      .filter(Boolean) as Array<{ color: string; name: string; y: number }>;
+      .filter(Boolean) as Array<{ color: string; name: string; x: number; y: number }>;
 
     setHover({ svgX, svgY, xValue, values });
   }
 
   const tooltipValues = hover?.values.slice(0, 7) ?? [];
-  const tooltipWidth = 236;
-  const tooltipHeight = 36 + tooltipValues.length * 18;
+  const tooltipWidth = 320;
+  const tooltipHeight = 40 + tooltipValues.length * 20;
   const tooltipX = hover ? Math.min(width - tooltipWidth - 10, hover.svgX + 14) : 0;
   const tooltipY = hover ? Math.max(8, Math.min(height - tooltipHeight - 8, hover.svgY - 18)) : 0;
 
@@ -3108,15 +3122,25 @@ function LineChart({
         {hover ? (
           <g className="chart-cursor">
             <line x1={hover.svgX} x2={hover.svgX} y1={margin.top} y2={height - margin.bottom} />
+            {tooltipValues.map((item, index) => (
+              <circle
+                key={`marker-${item.name}-${index}`}
+                className="chart-cursor-point"
+                cx={scaleX(item.x)}
+                cy={scaleY(item.y)}
+                r={5}
+                fill={item.color}
+              />
+            ))}
             <rect x={tooltipX} y={tooltipY} width={tooltipWidth} height={tooltipHeight} rx="8" />
-            <text x={tooltipX + 10} y={tooltipY + 18}>
+            <text x={tooltipX + 10} y={tooltipY + 20}>
               {formatAxisReadout(hover.xValue, xLabel)}
             </text>
             {tooltipValues.map((item, index) => (
               <g key={`${item.name}-${index}`}>
-                <circle cx={tooltipX + 12} cy={tooltipY + 38 + index * 18} r="4" fill={item.color} />
-                <text x={tooltipX + 22} y={tooltipY + 42 + index * 18}>
-                  {`${item.name}: ${formatAxisReadout(item.y, yLabel)}`}
+                <circle cx={tooltipX + 12} cy={tooltipY + 40 + index * 20} r="4" fill={item.color} />
+                <text x={tooltipX + 22} y={tooltipY + 44 + index * 20}>
+                  {`${shortenSeriesName(item.name)}: ${formatAxisReadout(item.y, yLabel)}`}
                 </text>
               </g>
             ))}
@@ -3261,7 +3285,7 @@ function getChartProps(
     return {
       ...base,
       title: text.chartTitles.step,
-      yLabel: "norm",
+      yLabel: text.axisLabels.normalized,
       xLabel: text.axisLabels.time,
       xScale: "linear",
       xDomain: [0, 250],
@@ -3277,7 +3301,7 @@ function getChartProps(
     return {
       ...base,
       title: text.chartTitles.phase,
-      yLabel: "deg",
+      yLabel: text.axisLabels.phase,
       yDomain,
       series: toSeriesList(results, "phaseDeg", focusedDesignId, text),
     };
@@ -3659,11 +3683,13 @@ function nearestPoint(points: Point[], x: number, scale: ScaleMode): Point | nul
 }
 
 function formatAxisReadout(value: number, label: string): string {
-  if (label.includes("Hz")) {
-    return `${fmt(value, value < 100 ? 1 : 0)} Hz`;
+  if (label.includes("Hz") || label.includes("Гц")) {
+    const unit = label.includes("Гц") ? "Гц" : "Hz";
+    return `${fmt(value, value < 100 ? 1 : 0)} ${unit}`;
   }
-  if (label.includes("ms")) {
-    return `${fmt(value, 1)} ms`;
+  if (label.includes("ms") || label.includes("мс")) {
+    const unit = label.includes("мс") ? "мс" : "ms";
+    return `${fmt(value, 1)} ${unit}`;
   }
   if (label === "dB") {
     return `${fmt(value, 1)} dB`;
@@ -3680,11 +3706,15 @@ function formatAxisReadout(value: number, label: string): string {
   if (label === "Mach") {
     return `M ${fmt(value, 3)}`;
   }
-  if (label === "deg") {
-    return `${fmt(value, 1)} deg`;
+  if (label === "deg" || label === "°") {
+    return `${fmt(value, 1)}°`;
   }
 
   return fmt(value, 3);
+}
+
+function shortenSeriesName(name: string): string {
+  return name.length > 34 ? `${name.slice(0, 31)}...` : name;
 }
 
 function pathForSeries(
@@ -3776,7 +3806,7 @@ function createReportHtml({
     <div><strong>${escapeHtml(text.model)}:</strong> ${escapeHtml(displayDriverName(driver, text))}</div>
     <div><strong>${escapeHtml(text.driverSource.title)}:</strong> ${source}</div>
     <div><strong>${escapeHtml(text.power)}:</strong> ${fmt(powerW, 1)} W</div>
-    <div><strong>${escapeHtml(text.corrections.title)}:</strong> room ${fmt(acousticOptions.roomGainDb, 1)} dB, baffle ${fmt(acousticOptions.baffleStepDb, 1)} dB</div>
+    <div><strong>${escapeHtml(text.corrections.title)}:</strong> ${escapeHtml(text.corrections.roomGain)} ${fmt(acousticOptions.roomGainDb, 1)} dB, ${escapeHtml(text.corrections.baffleStep)} ${fmt(acousticOptions.baffleStepDb, 1)} dB</div>
     <div><strong>${escapeHtml(text.measurements.title)}:</strong> ${measurements.length}</div>
   </div>
   <section class="chart">${chartSvg}</section>
@@ -3787,7 +3817,7 @@ function createReportHtml({
       <tbody>${rows}</tbody>
     </table>
   </section>
-  ${warnings.length ? `<section><h2>Warnings</h2><ul>${warningItems}</ul></section>` : ""}
+  ${warnings.length ? `<section><h2>${escapeHtml(text.warnings)}</h2><ul>${warningItems}</ul></section>` : ""}
 </body>
 </html>`;
 }

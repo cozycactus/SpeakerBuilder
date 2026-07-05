@@ -1001,6 +1001,12 @@ h2 {
   stroke-width: 1;
 }
 
+.chart-cursor-point {
+  stroke: #ffffff;
+  stroke-width: 2.4;
+  filter: drop-shadow(0 2px 4px rgba(24, 33, 47, 0.28));
+}
+
 .chart-cursor rect {
   fill: rgba(255, 255, 255, 0.96);
   stroke: #cfd8e3;
@@ -1009,8 +1015,8 @@ h2 {
 
 .chart-cursor text {
   fill: #243043;
-  font-size: 12px;
-  font-weight: 650;
+  font-size: 13px;
+  font-weight: 700;
 }
 
 .legend {
