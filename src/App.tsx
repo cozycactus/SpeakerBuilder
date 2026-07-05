@@ -127,6 +127,10 @@ const UI_TEXT = {
       impedance: "Импеданс",
       port: "Скорость в порту",
     } satisfies Record<ChartTab, string>,
+    axisLabels: {
+      frequency: "Частота, Hz",
+      time: "Время, ms",
+    },
     configs: "Конфигурации",
     copySuffix: "копия",
     delete: "Удалить",
@@ -246,6 +250,10 @@ const UI_TEXT = {
       impedance: "Impedance",
       port: "Port velocity",
     } satisfies Record<ChartTab, string>,
+    axisLabels: {
+      frequency: "Frequency, Hz",
+      time: "Time, ms",
+    },
     configs: "Configurations",
     copySuffix: "copy",
     delete: "Delete",
@@ -1177,6 +1185,7 @@ function LineChart({
   xDomain,
   yDomain,
   xScale = "log",
+  xLabel,
   yLabel,
   referenceLines = [],
 }: {
@@ -1185,12 +1194,13 @@ function LineChart({
   xDomain: [number, number];
   yDomain: [number, number];
   xScale?: ScaleMode;
+  xLabel: string;
   yLabel: string;
   referenceLines?: Array<{ y: number; label: string }>;
 }) {
   const width = 960;
   const height = 390;
-  const margin = { top: 20, right: 24, bottom: 44, left: 58 };
+  const margin = { top: 20, right: 24, bottom: 62, left: 58 };
   const innerWidth = width - margin.left - margin.right;
   const innerHeight = height - margin.top - margin.bottom;
   const xTicks = xScale === "log" ? logTicks(xDomain) : linearTicks(xDomain, 6);
@@ -1213,7 +1223,7 @@ function LineChart({
         {xTicks.map((tick) => (
           <g key={`x-${tick}`}>
             <line className="grid-line" x1={scaleX(tick)} x2={scaleX(tick)} y1={margin.top} y2={height - margin.bottom} />
-            <text className="axis-text" x={scaleX(tick)} y={height - 16} textAnchor="middle">
+            <text className="axis-text" x={scaleX(tick)} y={height - 34} textAnchor="middle">
               {tick >= 1000 ? `${tick / 1000}k` : tick}
             </text>
           </g>
@@ -1242,8 +1252,11 @@ function LineChart({
         ))}
         <line className="axis-line" x1={margin.left} x2={width - margin.right} y1={height - margin.bottom} y2={height - margin.bottom} />
         <line className="axis-line" x1={margin.left} x2={margin.left} y1={margin.top} y2={height - margin.bottom} />
-        <text className="axis-label" transform={`translate(18 ${height / 2}) rotate(-90)`} textAnchor="middle">
+        <text className="axis-label" transform={`translate(18 ${margin.top + innerHeight / 2}) rotate(-90)`} textAnchor="middle">
           {yLabel}
+        </text>
+        <text className="axis-label x-axis-label" x={margin.left + innerWidth / 2} y={height - 10} textAnchor="middle">
+          {xLabel}
         </text>
         {series.map((item) => (
           <path
@@ -1275,6 +1288,7 @@ function getChartProps(
 ): Parameters<typeof LineChart>[0] {
   const base = {
     xDomain: [10, 500] as [number, number],
+    xLabel: text.axisLabels.frequency,
     xScale: "log" as ScaleMode,
     series: [] as Series[],
     referenceLines: [] as Array<{ y: number; label: string }>,
@@ -1322,6 +1336,7 @@ function getChartProps(
       ...base,
       title: text.chartTitles.step,
       yLabel: "norm",
+      xLabel: text.axisLabels.time,
       xScale: "linear",
       xDomain: [0, 250],
       yDomain: [-1.1, 1.1],
