@@ -53,6 +53,8 @@ button {
 .design-toolbar,
 .section-title,
 .chart-header,
+.chart-actions,
+.chart-tools,
 .config-rail-header,
 .tabs,
 .legend,
@@ -283,6 +285,65 @@ h2 {
   margin-top: 10px;
 }
 
+.driver-analysis {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  border: 1px solid #dce3ec;
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 10px;
+}
+
+.driver-analysis-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.driver-analysis h3 {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.driver-analysis-head span,
+.driver-analysis-chips span {
+  color: #506074;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.driver-analysis-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.driver-analysis-chips span,
+.validation-list span {
+  border-radius: 6px;
+  background: #eef2f6;
+  padding: 6px 7px;
+}
+
+.validation-list {
+  display: grid;
+  gap: 6px;
+  color: #9a3412;
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.validation-list.ok {
+  color: #0f766e;
+}
+
+.validation-list.ok span {
+  background: #ecfdf5;
+}
+
 .field {
   display: grid;
   gap: 6px;
@@ -354,11 +415,28 @@ h2 {
   min-width: 140px;
 }
 
+.chart-tools {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+  min-width: 0;
+}
+
 .tabs {
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 6px;
   min-width: 0;
+}
+
+.chart-actions {
+  gap: 8px;
+}
+
+.chart-actions .text-button {
+  height: 32px;
+  padding: 0 9px;
+  font-size: 12px;
 }
 
 .tabs button {
@@ -432,6 +510,11 @@ h2 {
   stroke-width: 1.1;
 }
 
+.plot-hitbox {
+  fill: transparent;
+  pointer-events: all;
+}
+
 .series-line {
   fill: none;
   stroke-linecap: round;
@@ -443,6 +526,12 @@ h2 {
     filter 140ms ease;
 }
 
+.reference-series-line {
+  opacity: 0.48;
+  stroke-dasharray: 7 7;
+  stroke-width: 1.8;
+}
+
 .series-line.focused {
   filter: drop-shadow(0 1px 3px rgba(24, 33, 47, 0.32));
   stroke-width: 4.4;
@@ -451,6 +540,28 @@ h2 {
 .series-line.muted {
   opacity: 0.28;
   stroke-width: 1.8;
+}
+
+.chart-cursor {
+  pointer-events: none;
+}
+
+.chart-cursor line {
+  stroke: #334155;
+  stroke-dasharray: 4 4;
+  stroke-width: 1;
+}
+
+.chart-cursor rect {
+  fill: rgba(255, 255, 255, 0.96);
+  stroke: #cfd8e3;
+  filter: drop-shadow(0 8px 18px rgba(24, 33, 47, 0.12));
+}
+
+.chart-cursor text {
+  fill: #243043;
+  font-size: 12px;
+  font-weight: 650;
 }
 
 .legend {
@@ -486,6 +597,14 @@ h2 {
   height: 10px;
   border-radius: 999px;
   flex: 0 0 auto;
+}
+
+.legend .reference-legend i {
+  width: 18px;
+  height: 0;
+  border-top: 2px dashed #66758a;
+  border-radius: 0;
+  background: transparent;
 }
 
 .table-wrap {

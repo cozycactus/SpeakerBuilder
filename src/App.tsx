@@ -18,6 +18,7 @@ import type {
   ChangeEvent,
   KeyboardEvent as ReactKeyboardEvent,
   PointerEvent as ReactPointerEvent,
+  Ref,
 } from "react";
 import {
   BoxDesign,
@@ -25,19 +26,21 @@ import {
   DESIGN_COLORS,
   Point,
   PRESET_DRIVERS,
+  OptimizerCandidate,
+  OptimizerGoal,
   SimulationResult,
   SimulationOutput,
   SpeakerDriver,
   createDefaultDesigns,
   createDesignFromTemplate,
   getDesignTemplates,
+  optimizeDesigns,
   parseDriversFromFile,
   simulateDesign,
 } from "./lib/acoustics";
 
 type ChartTab = "response" | "excursion" | "groupDelay" | "step" | "phase" | "impedance" | "port";
 type Language = "ru" | "en";
-type OptimizerGoal = "balanced" | "flat" | "deep" | "compact" | "transient" | "output";
 type ScaleMode = "linear" | "log";
 type ResizeTarget = "left" | "right";
 type AnalysisSnapshot = {
@@ -45,6 +48,23 @@ type AnalysisSnapshot = {
   designs: BoxDesign[];
   powerW: number;
 };
+type SimulationWorkerResponse =
+  | {
+      id: number;
+      type: "chart";
+      results: SimulationResult[];
+    }
+  | {
+      id: number;
+      type: "analysis";
+      candidates: OptimizerCandidate[];
+      results: SimulationResult[];
+    }
+  | {
+      id: number;
+      type: "error";
+      message: string;
+    };
 
 interface Series {
   name: string;
@@ -54,22 +74,58 @@ interface Series {
   muted?: boolean;
 }
 
+interface FrozenReference {
+  capturedAt: string;
+  label: string;
+  tab: ChartTab;
+  series: Series[];
+}
+
+type ReferenceByTab = Partial<Record<ChartTab, FrozenReference>>;
+
+interface ProjectState {
+  activeTab: ChartTab;
+  designs: BoxDesign[];
+  drivers: SpeakerDriver[];
+  focusedDesignId: string;
+  language: Language;
+  optimizerGoal: OptimizerGoal;
+  powerW: number;
+  referenceByTab: ReferenceByTab;
+  selectedDriverId: string;
+}
+
+type ProjectFile = Omit<ProjectState, "referenceByTab"> & {
+  referenceByTab?: ReferenceByTab;
+  version: 1;
+};
+
+type DriverIssue =
+  | "invalidRequired"
+  | "qtsLow"
+  | "qtsHigh"
+  | "qesNotAboveQts"
+  | "qmsNotAboveQts"
+  | "xmaxInvalid"
+  | "powerInvalid";
+
+type DriverRecommendation = "sealed" | "vented" | "mixed" | "review";
+
+interface DriverProfile {
+  ebp?: number;
+  issues: DriverIssue[];
+  recommendation: DriverRecommendation;
+}
+
 interface ResizeState {
   target: ResizeTarget;
   startX: number;
   startWidth: number;
 }
 
-interface OptimizerCandidate {
-  id: string;
-  design: BoxDesign;
-  flatnessDb: number;
-  result: SimulationResult;
-  score: number;
-}
-
 const DRIVER_STORAGE_KEY = "speaker-builder-drivers-v1";
 const LANGUAGE_STORAGE_KEY = "speaker-builder-language-v1";
+const PROJECT_STORAGE_KEY = "speaker-builder-project-v1";
 const LEFT_PANEL_STORAGE_KEY = "speaker-builder-left-panel-width-v1";
 const RIGHT_PANEL_STORAGE_KEY = "speaker-builder-right-panel-width-v1";
 const LEFT_PANEL_LIMITS = { min: 240, max: 540, defaultValue: 320 };
@@ -160,9 +216,33 @@ const UI_TEXT = {
       "Imported driver": "Импортированный динамик",
     } satisfies Record<string, string>,
     drivers: "Динамики",
+    driverAnalysis: {
+      ebp: "EBP",
+      issues: {
+        invalidRequired: "Проверьте Fs, Qts, Vas, Sd и Re: обязательные параметры должны быть больше нуля",
+        powerInvalid: "Pe должен быть больше нуля или пустым",
+        qesNotAboveQts: "Qes должен быть больше Qts",
+        qmsNotAboveQts: "Qms должен быть больше Qts",
+        qtsHigh: "Qts высокий: ФИ может давать большой пик или длинный порт",
+        qtsLow: "Qts очень низкий: проверьте данные или рассчитывайте на крупный ФИ",
+        xmaxInvalid: "Xmax должен быть больше нуля или пустым",
+      } satisfies Record<DriverIssue, string>,
+      noIssues: "Параметры выглядят согласованно",
+      recommendation: "Рекомендация",
+      recommendations: {
+        mixed: "Можно сравнить закрытый и ФИ",
+        review: "Нужна ручная проверка",
+        sealed: "Лучше закрытый / апериодический",
+        vented: "Хороший кандидат для ФИ",
+      } satisfies Record<DriverRecommendation, string>,
+      title: "Проверка T/S",
+    },
     duplicate: "Дублировать",
     excursion: "Ход",
-    exportJson: "Экспорт JSON",
+    exportJson: "Экспорт проекта JSON",
+    exportPng: "Экспорт PNG",
+    exportSvg: "Экспорт SVG",
+    freezeReference: "Запомнить эталон",
     importError: "Ошибка импорта",
     imported: (count: number) => `Импортировано: ${count}`,
     importJsonCsv: "Импорт JSON/CSV",
@@ -170,14 +250,18 @@ const UI_TEXT = {
     language: "Язык",
     metrics: "Метрики",
     analysisCurrent: "Метрики актуальны",
+    analysisCalculating: "Расчет...",
     analysisStale: "Метрики и оптимизатор ждут пересчета",
     model: "Модель",
     noActiveDesigns: "Нет активных конфигураций.",
     portDiameter: "Порт Ø",
     ports: "Порты",
     power: "Мощность",
+    projectImported: "Проект загружен",
     requiredFieldsMissing: "Файл не содержит обязательные поля Fs, Qts, Vas, Sd, Re.",
     recalculate: "Пересчитать",
+    reference: "Эталон",
+    clearReference: "Очистить эталон",
     reset: "Сбросить",
     resizeConfigPanel: "Изменить ширину панели конфигураций",
     resizeDriverPanel: "Изменить ширину панели динамиков",
@@ -209,6 +293,11 @@ const UI_TEXT = {
       highQts: "Динамику с высоким Qts может лучше подойти закрытый или апериодический корпус",
       highVentAirSpeed: (mach: string) => `Высокая скорость воздуха в порту: Mach ${mach}`,
       invalidBoxVolume: "Некорректный объем корпуса",
+      multiplePortsLong: "Несколько портов сильно увеличивают требуемую длину",
+      portDiameterSmall: "Диаметр порта мал для площади диффузора",
+      portMayNotFit: "Порт может не поместиться в корпус",
+      portNearNoise: (mach: string) => `Скорость воздуха близка к шумовому пределу: Mach ${mach}`,
+      portVeryLong: "Порт очень длинный для этого корпуса",
       qesEstimated: "Qes оценен по Qts",
       qmsEstimated: "Qms оценен по Qts/Qes",
       ventTooShort: "Порт слишком короткий для этого диаметра/настройки",
@@ -270,9 +359,33 @@ const UI_TEXT = {
     designNames: {} satisfies Record<string, string>,
     driverNames: {} satisfies Record<string, string>,
     drivers: "Drivers",
+    driverAnalysis: {
+      ebp: "EBP",
+      issues: {
+        invalidRequired: "Check Fs, Qts, Vas, Sd, and Re: required parameters must be above zero",
+        powerInvalid: "Pe must be above zero or empty",
+        qesNotAboveQts: "Qes must be greater than Qts",
+        qmsNotAboveQts: "Qms must be greater than Qts",
+        qtsHigh: "High Qts: vented boxes may peak or need a long port",
+        qtsLow: "Very low Qts: verify the data or expect a large vented box",
+        xmaxInvalid: "Xmax must be above zero or empty",
+      } satisfies Record<DriverIssue, string>,
+      noIssues: "Parameters look consistent",
+      recommendation: "Recommendation",
+      recommendations: {
+        mixed: "Compare sealed and vented",
+        review: "Needs manual review",
+        sealed: "Prefer sealed / aperiodic",
+        vented: "Good vented candidate",
+      } satisfies Record<DriverRecommendation, string>,
+      title: "T/S check",
+    },
     duplicate: "Duplicate",
     excursion: "Excursion",
-    exportJson: "Export JSON",
+    exportJson: "Export project JSON",
+    exportPng: "Export PNG",
+    exportSvg: "Export SVG",
+    freezeReference: "Freeze reference",
     importError: "Import error",
     imported: (count: number) => `Imported: ${count}`,
     importJsonCsv: "Import JSON/CSV",
@@ -280,14 +393,18 @@ const UI_TEXT = {
     language: "Language",
     metrics: "Metrics",
     analysisCurrent: "Metrics are current",
+    analysisCalculating: "Calculating...",
     analysisStale: "Metrics and optimizer need recalculation",
     model: "Model",
     noActiveDesigns: "No active configurations.",
     portDiameter: "Port Ø",
     ports: "Ports",
     power: "Power",
+    projectImported: "Project loaded",
     requiredFieldsMissing: "File must contain Fs, Qts, Vas, Sd, and Re.",
     recalculate: "Recalculate",
+    reference: "Reference",
+    clearReference: "Clear reference",
     reset: "Reset",
     resizeConfigPanel: "Resize configuration panel",
     resizeDriverPanel: "Resize driver panel",
@@ -319,6 +436,11 @@ const UI_TEXT = {
       highQts: "High Qts driver may prefer sealed or aperiodic loading",
       highVentAirSpeed: (mach: string) => `High vent air speed: Mach ${mach}`,
       invalidBoxVolume: "Invalid box volume",
+      multiplePortsLong: "Multiple ports make the tuning tube long",
+      portDiameterSmall: "Port diameter is small for cone area",
+      portMayNotFit: "Port may not fit inside the box",
+      portNearNoise: (mach: string) => `Port air speed near noise limit: Mach ${mach}`,
+      portVeryLong: "Port is very long for this box",
       qesEstimated: "Qes estimated from Qts",
       qmsEstimated: "Qms estimated from Qts/Qes",
       ventTooShort: "Vent is too short for this diameter/tuning",
@@ -341,20 +463,31 @@ const UI_TEXT = {
 type UiText = (typeof UI_TEXT)[Language];
 
 function App() {
-  const [language, setLanguage] = useState<Language>(() => loadLanguage());
-  const [drivers, setDrivers] = useState<SpeakerDriver[]>(() => loadDrivers());
-  const [selectedDriverId, setSelectedDriverId] = useState(() => drivers[0]?.id ?? "");
+  const initialProjectRef = useRef<ProjectState | null>(null);
+  if (!initialProjectRef.current) {
+    initialProjectRef.current = loadProjectState();
+  }
+  const initialProject = initialProjectRef.current;
+  const [language, setLanguage] = useState<Language>(() => initialProject.language);
+  const [drivers, setDrivers] = useState<SpeakerDriver[]>(() => initialProject.drivers);
+  const [selectedDriverId, setSelectedDriverId] = useState(() => initialProject.selectedDriverId);
   const selectedDriver = drivers.find((driver) => driver.id === selectedDriverId) ?? drivers[0];
   const deferredSelectedDriver = useDeferredValue(selectedDriver);
-  const [designs, setDesigns] = useState<BoxDesign[]>(() => createDefaultDesigns(selectedDriver));
+  const [designs, setDesigns] = useState<BoxDesign[]>(() => initialProject.designs);
   const deferredDesigns = useDeferredValue(designs);
   const [analysisSnapshot, setAnalysisSnapshot] = useState<AnalysisSnapshot>(() =>
-    createAnalysisSnapshot(selectedDriver, designs, 25),
+    createAnalysisSnapshot(selectedDriver, initialProject.designs, initialProject.powerW),
   );
-  const [focusedDesignId, setFocusedDesignId] = useState("");
-  const [activeTab, setActiveTab] = useState<ChartTab>("response");
-  const [optimizerGoal, setOptimizerGoal] = useState<OptimizerGoal>("balanced");
-  const [powerW, setPowerW] = useState(25);
+  const [analysisResults, setAnalysisResults] = useState<SimulationResult[]>([]);
+  const [chartResults, setChartResults] = useState<SimulationResult[]>([]);
+  const [optimizerCandidates, setOptimizerCandidates] = useState<OptimizerCandidate[]>([]);
+  const [analysisPending, setAnalysisPending] = useState(true);
+  const [chartPending, setChartPending] = useState(true);
+  const [focusedDesignId, setFocusedDesignId] = useState(initialProject.focusedDesignId);
+  const [activeTab, setActiveTab] = useState<ChartTab>(initialProject.activeTab);
+  const [optimizerGoal, setOptimizerGoal] = useState<OptimizerGoal>(initialProject.optimizerGoal);
+  const [powerW, setPowerW] = useState(initialProject.powerW);
+  const [referenceByTab, setReferenceByTab] = useState<ReferenceByTab>(() => initialProject.referenceByTab);
   const deferredPowerW = useDeferredValue(powerW);
   const [status, setStatus] = useState("");
   const [leftPanelWidth, setLeftPanelWidth] = useState(() =>
@@ -365,7 +498,53 @@ function App() {
   );
   const [resizeState, setResizeState] = useState<ResizeState | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const chartSvgRef = useRef<SVGSVGElement>(null);
+  const simulationWorkerRef = useRef<Worker | null>(null);
+  const simulationRequestIdRef = useRef({ analysis: 0, chart: 0 });
   const text = UI_TEXT[language];
+
+  useEffect(() => {
+    const worker = new Worker(new URL("./lib/simulation.worker.ts", import.meta.url), {
+      type: "module",
+    });
+    simulationWorkerRef.current = worker;
+
+    worker.onmessage = (event: MessageEvent<SimulationWorkerResponse>) => {
+      const response = event.data;
+      if (response.type === "chart") {
+        if (response.id !== simulationRequestIdRef.current.chart) {
+          return;
+        }
+        setChartResults(response.results);
+        setChartPending(false);
+        return;
+      }
+      if (response.type === "analysis") {
+        if (response.id !== simulationRequestIdRef.current.analysis) {
+          return;
+        }
+        setAnalysisResults(response.results);
+        setOptimizerCandidates(response.candidates);
+        setAnalysisPending(false);
+        return;
+      }
+
+      setStatus(response.message);
+      setAnalysisPending(false);
+      setChartPending(false);
+    };
+
+    worker.onerror = () => {
+      setStatus("Simulation worker failed");
+      setAnalysisPending(false);
+      setChartPending(false);
+    };
+
+    return () => {
+      worker.terminate();
+      simulationWorkerRef.current = null;
+    };
+  }, []);
 
   useEffect(() => {
     localStorage.setItem(LANGUAGE_STORAGE_KEY, language);
@@ -376,6 +555,35 @@ function App() {
   useEffect(() => {
     localStorage.setItem(DRIVER_STORAGE_KEY, JSON.stringify(drivers));
   }, [drivers]);
+
+  useEffect(() => {
+    localStorage.setItem(
+      PROJECT_STORAGE_KEY,
+      JSON.stringify(
+        createProjectFile({
+          activeTab,
+          designs,
+          drivers,
+          focusedDesignId,
+          language,
+          optimizerGoal,
+          powerW,
+          referenceByTab,
+          selectedDriverId,
+        }),
+      ),
+    );
+  }, [
+    activeTab,
+    designs,
+    drivers,
+    focusedDesignId,
+    language,
+    optimizerGoal,
+    powerW,
+    referenceByTab,
+    selectedDriverId,
+  ]);
 
   useEffect(() => {
     localStorage.setItem(LEFT_PANEL_STORAGE_KEY, String(leftPanelWidth));
@@ -430,16 +638,6 @@ function App() {
   }, [resizeState]);
 
   useEffect(() => {
-    if (!selectedDriver) {
-      return;
-    }
-    const nextDesigns = createDefaultDesigns(selectedDriver);
-    setDesigns(nextDesigns);
-    setFocusedDesignId(nextDesigns.find((design) => design.enabled)?.id ?? nextDesigns[0]?.id ?? "");
-    setAnalysisSnapshot(createAnalysisSnapshot(selectedDriver, nextDesigns, powerW));
-  }, [selectedDriver?.id]);
-
-  useEffect(() => {
     if (focusedDesignId && designs.some((design) => design.id === focusedDesignId)) {
       return;
     }
@@ -447,44 +645,77 @@ function App() {
   }, [designs, focusedDesignId]);
 
   const templates = useMemo(() => getDesignTemplates(selectedDriver), [selectedDriver]);
+  const driverProfile = useMemo(() => analyzeDriver(selectedDriver), [selectedDriver]);
   const activeDesignCount = designs.filter((design) => design.enabled).length;
   const liveChartDesigns = useMemo(() => {
     return deferredDesigns.filter((design) => design.enabled);
   }, [deferredDesigns]);
-  const chartResults = useMemo(
-    () =>
-      liveChartDesigns.map((design) =>
-        simulateDesign(deferredSelectedDriver, design, {
-          powerW: deferredPowerW,
-          outputs: outputsForChartTab(activeTab),
-        }),
-      ),
-    [activeTab, deferredPowerW, deferredSelectedDriver, liveChartDesigns],
-  );
-  const analysisResults = useMemo(
-    () =>
-      analysisSnapshot.designs
-        .filter((design) => design.enabled)
-        .map((design) =>
-          simulateDesign(analysisSnapshot.driver, design, {
-            powerW: analysisSnapshot.powerW,
-          }),
-        ),
-    [analysisSnapshot],
-  );
   const analysisStale =
     analysisSnapshot.driver !== selectedDriver ||
     analysisSnapshot.designs !== designs ||
     analysisSnapshot.powerW !== powerW;
-  const optimizerCandidates = useMemo(
-    () => optimizeDesigns(analysisSnapshot.driver, analysisSnapshot.powerW, optimizerGoal),
-    [analysisSnapshot, optimizerGoal],
-  );
   const allWarnings = analysisResults.flatMap((result) =>
     result.metrics.notes.map((note) =>
       `${displayDesignName(result.design.name, text)}: ${translateNote(note, text)}`,
     ),
   );
+
+  useEffect(() => {
+    const requestId = simulationRequestIdRef.current.chart + 1;
+    const outputs = outputsForChartTab(activeTab);
+    simulationRequestIdRef.current.chart = requestId;
+    setChartPending(true);
+
+    const worker = simulationWorkerRef.current;
+    if (!worker) {
+      setChartResults(
+        liveChartDesigns.map((design) =>
+          simulateDesign(deferredSelectedDriver, design, {
+            powerW: deferredPowerW,
+            outputs,
+          }),
+        ),
+      );
+      setChartPending(false);
+      return;
+    }
+
+    worker.postMessage({
+      id: requestId,
+      type: "chart",
+      driver: deferredSelectedDriver,
+      designs: liveChartDesigns,
+      powerW: deferredPowerW,
+      outputs,
+    });
+  }, [activeTab, deferredPowerW, deferredSelectedDriver, liveChartDesigns]);
+
+  useEffect(() => {
+    const requestId = simulationRequestIdRef.current.analysis + 1;
+    simulationRequestIdRef.current.analysis = requestId;
+    setAnalysisPending(true);
+
+    const worker = simulationWorkerRef.current;
+    if (!worker) {
+      setAnalysisResults(
+        analysisSnapshot.designs
+          .filter((design) => design.enabled)
+          .map((design) => simulateDesign(analysisSnapshot.driver, design, { powerW: analysisSnapshot.powerW })),
+      );
+      setOptimizerCandidates(optimizeDesigns(analysisSnapshot.driver, analysisSnapshot.powerW, optimizerGoal));
+      setAnalysisPending(false);
+      return;
+    }
+
+    worker.postMessage({
+      id: requestId,
+      type: "analysis",
+      driver: analysisSnapshot.driver,
+      designs: analysisSnapshot.designs,
+      powerW: analysisSnapshot.powerW,
+      goal: optimizerGoal,
+    });
+  }, [analysisSnapshot, optimizerGoal]);
 
   function updateDriverField(key: keyof SpeakerDriver, value: string) {
     setDrivers((current) =>
@@ -501,6 +732,21 @@ function App() {
     );
   }
 
+  function selectDriverWithDefaults(driver: SpeakerDriver) {
+    const nextDesigns = createDefaultDesigns(driver);
+    setSelectedDriverId(driver.id);
+    setDesigns(nextDesigns);
+    setFocusedDesignId(nextDesigns.find((design) => design.enabled)?.id ?? nextDesigns[0]?.id ?? "");
+    setAnalysisSnapshot(createAnalysisSnapshot(driver, nextDesigns, powerW));
+  }
+
+  function changeSelectedDriver(id: string) {
+    const nextDriver = drivers.find((driver) => driver.id === id);
+    if (nextDriver) {
+      selectDriverWithDefaults(nextDriver);
+    }
+  }
+
   function addDriver() {
     const next: SpeakerDriver = {
       ...selectedDriver,
@@ -508,7 +754,7 @@ function App() {
       name: `${displayDriverName(selectedDriver, text)} ${text.copySuffix}`,
     };
     setDrivers((current) => [...current, next]);
-    setSelectedDriverId(next.id);
+    selectDriverWithDefaults(next);
   }
 
   function deleteDriver() {
@@ -517,7 +763,7 @@ function App() {
     }
     const nextDrivers = drivers.filter((driver) => driver.id !== selectedDriver.id);
     setDrivers(nextDrivers);
-    setSelectedDriverId(nextDrivers[0].id);
+    selectDriverWithDefaults(nextDrivers[0]);
   }
 
   async function importDrivers(event: ChangeEvent<HTMLInputElement>) {
@@ -528,29 +774,141 @@ function App() {
     }
     try {
       const content = await file.text();
+      const project = parseProjectFile(content);
+      if (project) {
+        applyProject(project);
+        setStatus(text.projectImported);
+        return;
+      }
       const imported = parseDriversFromFile(file.name, content);
       if (imported.length === 0) {
         setStatus(text.requiredFieldsMissing);
         return;
       }
       setDrivers((current) => [...current, ...imported]);
-      setSelectedDriverId(imported[0].id);
+      selectDriverWithDefaults(imported[0]);
       setStatus(text.imported(imported.length));
     } catch (error) {
       setStatus(error instanceof Error ? error.message : text.importError);
     }
   }
 
-  function exportDrivers() {
-    const blob = new Blob([JSON.stringify({ drivers }, null, 2)], {
+  function applyProject(project: ProjectState) {
+    setLanguage(project.language);
+    setDrivers(project.drivers);
+    setSelectedDriverId(project.selectedDriverId);
+    setDesigns(project.designs);
+    setFocusedDesignId(project.focusedDesignId);
+    setActiveTab(project.activeTab);
+    setOptimizerGoal(project.optimizerGoal);
+    setPowerW(project.powerW);
+    setReferenceByTab(project.referenceByTab);
+    setAnalysisSnapshot(createAnalysisSnapshot(
+      project.drivers.find((driver) => driver.id === project.selectedDriverId) ?? project.drivers[0],
+      project.designs,
+      project.powerW,
+    ));
+  }
+
+  function exportProject() {
+    const blob = new Blob([
+      JSON.stringify(
+        createProjectFile({
+          activeTab,
+          designs,
+          drivers,
+          focusedDesignId,
+          language,
+          optimizerGoal,
+          powerW,
+          referenceByTab,
+          selectedDriverId,
+        }),
+        null,
+        2,
+      ),
+    ], {
       type: "application/json",
     });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = "speaker-drivers.json";
+    link.download = "speaker-builder-project.json";
     link.click();
     URL.revokeObjectURL(url);
+  }
+
+  function exportChartSvg() {
+    const svg = chartSvgRef.current;
+    if (!svg) {
+      return;
+    }
+    const blob = new Blob([serializeSvg(svg)], {
+      type: "image/svg+xml;charset=utf-8",
+    });
+    downloadBlob(blob, `${chartFileBaseName(chartProps.title)}.svg`);
+  }
+
+  async function exportChartPng() {
+    const svg = chartSvgRef.current;
+    if (!svg) {
+      return;
+    }
+    const svgText = serializeSvg(svg);
+    const svgUrl = URL.createObjectURL(new Blob([svgText], { type: "image/svg+xml;charset=utf-8" }));
+    const image = new Image();
+    image.decoding = "async";
+    const loaded = new Promise<void>((resolve, reject) => {
+      image.onload = () => resolve();
+      image.onerror = () => reject(new Error("PNG export failed"));
+    });
+    image.src = svgUrl;
+    try {
+      await loaded;
+      const canvas = document.createElement("canvas");
+      const scale = 2;
+      canvas.width = image.width * scale;
+      canvas.height = image.height * scale;
+      const context = canvas.getContext("2d");
+      if (!context) {
+        return;
+      }
+      context.fillStyle = "#ffffff";
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      context.drawImage(image, 0, 0, canvas.width, canvas.height);
+      canvas.toBlob((blob) => {
+        if (blob) {
+          downloadBlob(blob, `${chartFileBaseName(chartProps.title)}.png`);
+        }
+      }, "image/png");
+    } finally {
+      URL.revokeObjectURL(svgUrl);
+    }
+  }
+
+  function freezeReference() {
+    setReferenceByTab((current) => ({
+      ...current,
+      [activeTab]: {
+        capturedAt: new Date().toISOString(),
+        label: chartProps.title,
+        tab: activeTab,
+        series: chartProps.series.map((item) => ({
+          ...item,
+          focused: false,
+          muted: false,
+          points: item.points.map((point) => ({ ...point })),
+        })),
+      },
+    }));
+  }
+
+  function clearReference() {
+    setReferenceByTab((current) => {
+      const next = { ...current };
+      delete next[activeTab];
+      return next;
+    });
   }
 
   function recalculateAnalysis() {
@@ -634,6 +992,7 @@ function App() {
   }
 
   const chartProps = getChartProps(activeTab, chartResults, deferredSelectedDriver, focusedDesignId, text);
+  const currentReference = referenceByTab[activeTab];
   const layoutStyle = {
     "--left-panel-width": `${leftPanelWidth}px`,
     "--right-panel-width": `${rightPanelWidth}px`,
@@ -723,7 +1082,7 @@ function App() {
             />
             <span>W</span>
           </label>
-          <button type="button" className="icon-button" onClick={exportDrivers} title={text.exportJson}>
+          <button type="button" className="icon-button" onClick={exportProject} title={text.exportJson}>
             <Download size={18} />
           </button>
         </div>
@@ -764,7 +1123,7 @@ function App() {
             <select
               className="driver-select"
               value={selectedDriver.id}
-              onChange={(event) => setSelectedDriverId(event.target.value)}
+              onChange={(event) => changeSelectedDriver(event.target.value)}
             >
               {drivers.map((driver) => (
                 <option key={driver.id} value={driver.id}>
@@ -800,6 +1159,7 @@ function App() {
                 </label>
               ))}
             </div>
+            <DriverAnalysisPanel profile={driverProfile} text={text} />
           </section>
         </aside>
 
@@ -818,25 +1178,59 @@ function App() {
             <div className="chart-header">
               <div>
                 <h2>{chartProps.title}</h2>
-                <span>{displayDriverName(selectedDriver, text)}</span>
+                <span>
+                  {displayDriverName(selectedDriver, text)}
+                  {chartPending ? ` · ${text.analysisCalculating}` : ""}
+                </span>
               </div>
-              <div className="tabs" role="tablist" aria-label={text.chartAria}>
-                {chartTabs.map((tab) => (
-                  <button
-                    key={tab}
-                    type="button"
-                    className={activeTab === tab ? "active" : ""}
-                    onClick={() => setActiveTab(tab)}
-                  >
-                    {text.chartTabs[tab]}
+              <div className="chart-tools">
+                <div className="tabs" role="tablist" aria-label={text.chartAria}>
+                  {chartTabs.map((tab) => (
+                    <button
+                      key={tab}
+                      type="button"
+                      className={activeTab === tab ? "active" : ""}
+                      onClick={() => setActiveTab(tab)}
+                    >
+                      {text.chartTabs[tab]}
+                    </button>
+                  ))}
+                </div>
+                <div className="chart-actions">
+                  <button type="button" className="text-button" onClick={freezeReference} title={text.freezeReference}>
+                    <Target size={16} />
+                    {text.reference}
                   </button>
-                ))}
+                  <button
+                    type="button"
+                    className="text-button"
+                    disabled={!currentReference}
+                    onClick={clearReference}
+                    title={text.clearReference}
+                  >
+                    <RefreshCw size={16} />
+                    {text.clearReference}
+                  </button>
+                  <button type="button" className="text-button" onClick={exportChartSvg} title={text.exportSvg}>
+                    <Download size={16} />
+                    SVG
+                  </button>
+                  <button type="button" className="text-button" onClick={exportChartPng} title={text.exportPng}>
+                    <Download size={16} />
+                    PNG
+                  </button>
+                </div>
               </div>
             </div>
 
             <div className="chart-workbench">
               <div className="chart-stage">
-                <LineChart {...chartProps} />
+                <LineChart
+                  {...chartProps}
+                  referenceLabel={text.reference}
+                  referenceSeries={currentReference?.series ?? []}
+                  svgRef={chartSvgRef}
+                />
               </div>
 
               <ResizeHandle
@@ -903,7 +1297,13 @@ function App() {
               <Activity size={18} />
             </div>
             <div className={`analysis-status ${analysisStale ? "stale" : ""}`}>
-              <span>{analysisStale ? text.analysisStale : text.analysisCurrent}</span>
+              <span>
+                {analysisPending
+                  ? text.analysisCalculating
+                  : analysisStale
+                    ? text.analysisStale
+                    : text.analysisCurrent}
+              </span>
               <button type="button" className="text-button" onClick={recalculateAnalysis}>
                 <RefreshCw size={16} />
                 {text.recalculate}
@@ -1093,6 +1493,37 @@ function NumberField({
   );
 }
 
+function DriverAnalysisPanel({
+  profile,
+  text,
+}: {
+  profile: DriverProfile;
+  text: UiText;
+}) {
+  return (
+    <div className="driver-analysis">
+      <div className="driver-analysis-head">
+        <h3>{text.driverAnalysis.title}</h3>
+        <span>{`${text.driverAnalysis.ebp}: ${profile.ebp ? fmt(profile.ebp, 0) : "—"}`}</span>
+      </div>
+      <div className="driver-analysis-chips">
+        <span>{`${text.driverAnalysis.recommendation}: ${text.driverAnalysis.recommendations[profile.recommendation]}`}</span>
+      </div>
+      {profile.issues.length > 0 ? (
+        <div className="validation-list">
+          {profile.issues.map((issue) => (
+            <span key={issue}>{text.driverAnalysis.issues[issue]}</span>
+          ))}
+        </div>
+      ) : (
+        <div className="validation-list ok">
+          <span>{text.driverAnalysis.noIssues}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function OptimizerPanel({
   disabled,
   candidates,
@@ -1237,27 +1668,39 @@ function MetricsTable({
 function LineChart({
   title,
   series,
+  referenceLabel = "Reference",
+  referenceSeries = [],
   xDomain,
   yDomain,
   xScale = "log",
   xLabel,
   yLabel,
   referenceLines = [],
+  svgRef,
 }: {
   title: string;
   series: Series[];
+  referenceLabel?: string;
+  referenceSeries?: Series[];
   xDomain: [number, number];
   yDomain: [number, number];
   xScale?: ScaleMode;
   xLabel: string;
   yLabel: string;
   referenceLines?: Array<{ y: number; label: string }>;
+  svgRef?: Ref<SVGSVGElement>;
 }) {
   const width = 960;
   const height = 390;
   const margin = { top: 20, right: 24, bottom: 62, left: 58 };
   const innerWidth = width - margin.left - margin.right;
   const innerHeight = height - margin.top - margin.bottom;
+  const [hover, setHover] = useState<{
+    svgX: number;
+    svgY: number;
+    xValue: number;
+    values: Array<{ color: string; name: string; y: number }>;
+  } | null>(null);
   const xTicks = xScale === "log" ? logTicks(xDomain) : linearTicks(xDomain, 6);
   const yTicks = linearTicks(yDomain, 7);
   const scaleX = (x: number) => {
@@ -1270,10 +1713,61 @@ function LineChart({
   };
   const scaleY = (y: number) =>
     margin.top + (1 - (y - yDomain[0]) / (yDomain[1] - yDomain[0])) * innerHeight;
+  const unscaleX = (svgX: number) => {
+    const ratio = (svgX - margin.left) / innerWidth;
+    if (xScale === "log") {
+      const min = Math.log10(xDomain[0]);
+      const max = Math.log10(xDomain[1]);
+      return Math.pow(10, min + ratio * (max - min));
+    }
+
+    return xDomain[0] + ratio * (xDomain[1] - xDomain[0]);
+  };
+
+  function handlePointerMove(event: ReactPointerEvent<SVGSVGElement>) {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const svgX = ((event.clientX - rect.left) / rect.width) * width;
+    const svgY = ((event.clientY - rect.top) / rect.height) * height;
+    if (
+      svgX < margin.left ||
+      svgX > width - margin.right ||
+      svgY < margin.top ||
+      svgY > height - margin.bottom
+    ) {
+      setHover(null);
+      return;
+    }
+
+    const xValue = unscaleX(svgX);
+    const values = [
+      ...series.map((item) => ({ ...item, name: item.name })),
+      ...referenceSeries.map((item) => ({ ...item, name: `${referenceLabel}: ${item.name}` })),
+    ]
+      .map((item) => {
+        const point = nearestPoint(item.points, xValue, xScale);
+        return point ? { color: item.color, name: item.name, y: point.y } : null;
+      })
+      .filter(Boolean) as Array<{ color: string; name: string; y: number }>;
+
+    setHover({ svgX, svgY, xValue, values });
+  }
+
+  const tooltipValues = hover?.values.slice(0, 7) ?? [];
+  const tooltipWidth = 236;
+  const tooltipHeight = 36 + tooltipValues.length * 18;
+  const tooltipX = hover ? Math.min(width - tooltipWidth - 10, hover.svgX + 14) : 0;
+  const tooltipY = hover ? Math.max(8, Math.min(height - tooltipHeight - 8, hover.svgY - 18)) : 0;
 
   return (
     <div className="chart-box">
-      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={title}>
+      <svg
+        ref={svgRef}
+        viewBox={`0 0 ${width} ${height}`}
+        role="img"
+        aria-label={title}
+        onPointerLeave={() => setHover(null)}
+        onPointerMove={handlePointerMove}
+      >
         <rect className="plot-bg" x={margin.left} y={margin.top} width={innerWidth} height={innerHeight} />
         {xTicks.map((tick) => (
           <g key={`x-${tick}`}>
@@ -1313,6 +1807,14 @@ function LineChart({
         <text className="axis-label x-axis-label" x={margin.left + innerWidth / 2} y={height - 10} textAnchor="middle">
           {xLabel}
         </text>
+        {referenceSeries.map((item, index) => (
+          <path
+            key={`reference-${item.name}-${index}`}
+            className="series-line reference-series-line"
+            d={pathForSeries(item.points, scaleX, scaleY, xDomain, yDomain)}
+            stroke={item.color}
+          />
+        ))}
         {series.map((item) => (
           <path
             key={item.name}
@@ -1321,8 +1823,38 @@ function LineChart({
             stroke={item.color}
           />
         ))}
+        <rect
+          className="plot-hitbox"
+          x={margin.left}
+          y={margin.top}
+          width={innerWidth}
+          height={innerHeight}
+        />
+        {hover ? (
+          <g className="chart-cursor">
+            <line x1={hover.svgX} x2={hover.svgX} y1={margin.top} y2={height - margin.bottom} />
+            <rect x={tooltipX} y={tooltipY} width={tooltipWidth} height={tooltipHeight} rx="8" />
+            <text x={tooltipX + 10} y={tooltipY + 18}>
+              {formatAxisReadout(hover.xValue, xLabel)}
+            </text>
+            {tooltipValues.map((item, index) => (
+              <g key={`${item.name}-${index}`}>
+                <circle cx={tooltipX + 12} cy={tooltipY + 38 + index * 18} r="4" fill={item.color} />
+                <text x={tooltipX + 22} y={tooltipY + 42 + index * 18}>
+                  {`${item.name}: ${formatAxisReadout(item.y, yLabel)}`}
+                </text>
+              </g>
+            ))}
+          </g>
+        ) : null}
       </svg>
       <div className="legend">
+        {referenceSeries.length > 0 ? (
+          <span className="reference-legend">
+            <i />
+            {referenceLabel}
+          </span>
+        ) : null}
         {series.map((item) => (
           <span className={`${item.focused ? "focused" : ""} ${item.muted ? "muted" : ""}`} key={item.name}>
             <i style={{ background: item.color }} />
@@ -1507,6 +2039,11 @@ function translateNote(note: string, text: UiText): string {
     return text.notes.highVentAirSpeed(ventSpeed[1]);
   }
 
+  const ventNearNoise = note.match(/^Port air speed near noise limit: Mach ([\d.]+)$/);
+  if (ventNearNoise) {
+    return text.notes.portNearNoise(ventNearNoise[1]);
+  }
+
   if (note === "Qes estimated from Qts") {
     return text.notes.qesEstimated;
   }
@@ -1522,230 +2059,20 @@ function translateNote(note: string, text: UiText): string {
   if (note === "Invalid box volume") {
     return text.notes.invalidBoxVolume;
   }
+  if (note === "Port diameter is small for cone area") {
+    return text.notes.portDiameterSmall;
+  }
+  if (note === "Port is very long for this box") {
+    return text.notes.portVeryLong;
+  }
+  if (note === "Port may not fit inside the box") {
+    return text.notes.portMayNotFit;
+  }
+  if (note === "Multiple ports make the tuning tube long") {
+    return text.notes.multiplePortsLong;
+  }
 
   return note;
-}
-
-function optimizeDesigns(
-  driver: SpeakerDriver,
-  powerW: number,
-  goal: OptimizerGoal,
-): OptimizerCandidate[] {
-  return createOptimizerDesigns(driver)
-    .map((design) => {
-      const result = simulateDesign(driver, design, { powerW });
-      const flatnessDb = responseFlatness(result.responseDb);
-
-      return {
-        id: design.id,
-        design,
-        flatnessDb,
-        result,
-        score: scoreOptimizerCandidate(result, driver, goal, flatnessDb),
-      };
-    })
-    .sort((left, right) => right.score - left.score)
-    .slice(0, 8);
-}
-
-function createOptimizerDesigns(driver: SpeakerDriver): BoxDesign[] {
-  const designs: BoxDesign[] = [];
-  const addDesign = (design: Omit<BoxDesign, "color" | "enabled">) => {
-    designs.push({
-      ...design,
-      color: DESIGN_COLORS[designs.length % DESIGN_COLORS.length],
-      enabled: true,
-      vbLiters: roundTo(Math.max(0.5, design.vbLiters), 1),
-      fbHz: design.fbHz ? roundTo(design.fbHz, 1) : undefined,
-      portDiameterCm: design.portDiameterCm ? roundTo(design.portDiameterCm, 1) : undefined,
-    });
-  };
-
-  for (const qtc of [0.58, 0.65, 0.707, 0.8, 0.9, 1]) {
-    addDesign({
-      id: `opt-sealed-${qtc}`,
-      name: `Optimized sealed Qtc ${qtc.toFixed(2)}`,
-      kind: "sealed",
-      vbLiters: volumeForQtc(driver, qtc),
-    });
-  }
-
-  for (const qtc of [0.68, 0.78, 0.88]) {
-    for (const ql of [1.3, 1.8]) {
-      addDesign({
-        id: `opt-aperiodic-${qtc}-${ql}`,
-        name: `Optimized aperiodic Qtc ${qtc.toFixed(2)}`,
-        kind: "aperiodic",
-        vbLiters: volumeForQtc(driver, qtc) * 0.72,
-        ql,
-      });
-    }
-  }
-
-  const baseVolumeFactor = optimizerVentedBaseVolumeFactor(driver.qts);
-  const pistonDiameterCm = Math.sqrt((Math.max(1, driver.sdCm2) * 4) / Math.PI);
-  const basePortCm = clampNumber(roundTo(pistonDiameterCm * 0.32, 1), 4, 16);
-  const portOptions = [
-    { diameterCm: basePortCm, count: 1 },
-    { diameterCm: clampNumber(roundTo(basePortCm * 1.25, 1), 4, 18), count: 1 },
-    { diameterCm: basePortCm, count: 2 },
-  ];
-
-  for (const volumeFactor of [0.62, 0.82, 1.05, 1.34, 1.72]) {
-    for (const fbRatio of [0.64, 0.76, 0.88, 1, 1.12]) {
-      for (const port of portOptions) {
-        addDesign({
-          id: `opt-vented-${volumeFactor}-${fbRatio}-${port.diameterCm}-${port.count}`,
-          name: "Optimized vented",
-          kind: "vented",
-          vbLiters: driver.vasL * baseVolumeFactor * volumeFactor,
-          fbHz: driver.fsHz * fbRatio,
-          ql: 7,
-          portDiameterCm: port.diameterCm,
-          portCount: port.count,
-        });
-      }
-    }
-  }
-
-  for (const volumeFactor of [0.85, 1.25, 1.7]) {
-    for (const fbRatio of [0.64, 0.78, 0.92]) {
-      addDesign({
-        id: `opt-passive-${volumeFactor}-${fbRatio}`,
-        name: "Optimized passive radiator",
-        kind: "passive",
-        vbLiters: driver.vasL * baseVolumeFactor * volumeFactor,
-        fbHz: driver.fsHz * fbRatio,
-        ql: 9,
-        portDiameterCm: clampNumber(roundTo(basePortCm * 1.7, 1), 6, 22),
-        portCount: 1,
-      });
-    }
-  }
-
-  return designs;
-}
-
-function scoreOptimizerCandidate(
-  result: SimulationResult,
-  driver: SpeakerDriver,
-  goal: OptimizerGoal,
-  flatnessDb: number,
-): number {
-  const metrics = result.metrics;
-  const targetF3 = Math.max(18, driver.fsHz * optimizerF3TargetFactor(goal));
-  const f3Hz = metrics.f3Hz ?? 500;
-  const f3Penalty = Math.max(0, (f3Hz - targetF3) / targetF3) * 45;
-  const flatPenalty = flatnessDb * 9 + Math.max(0, metrics.peakDb) * 5;
-  const volumePenalty = clampNumber((result.design.vbLiters / Math.max(1, driver.vasL)) * 22, 0, 70);
-  const groupDelayMs = metrics.groupDelay40Ms ?? metrics.groupDelay30Ms ?? 0;
-  const groupDelayPenalty = clampNumber(groupDelayMs * 0.9, 0, 70);
-  const excursionPenalty = driver.xmaxMm
-    ? Math.max(0, metrics.maxExcursionMm / driver.xmaxMm - 0.95) * 70
-    : 0;
-  const portPenalty = metrics.maxPortMach !== undefined
-    ? Math.max(0, metrics.maxPortMach - 0.14) * 260
-    : 0;
-  const portLengthPenalty = metrics.portLengthCm !== undefined && metrics.portLengthCm <= 1
-    ? 22
-    : metrics.portLengthCm !== undefined && metrics.portLengthCm < 4
-      ? 8
-      : 0;
-  const limitPenalty = excursionPenalty + portPenalty + portLengthPenalty;
-  const weights = optimizerWeights(goal);
-  const weightedPenalty =
-    f3Penalty * weights.f3 +
-    flatPenalty * weights.flat +
-    volumePenalty * weights.volume +
-    groupDelayPenalty * weights.groupDelay +
-    limitPenalty * weights.limits +
-    optimizerKindPenalty(result.design.kind, goal);
-
-  return clampNumber(100 - weightedPenalty, 0, 100);
-}
-
-function responseFlatness(points: Point[]): number {
-  const passband = points
-    .filter((point) => point.x >= 45 && point.x <= 220 && Number.isFinite(point.y))
-    .map((point) => point.y);
-  const values = passband.length > 0 ? passband : points.map((point) => point.y);
-  const rms = Math.sqrt(values.reduce((sum, value) => sum + value * value, 0) / Math.max(1, values.length));
-  const peak = values.reduce((max, value) => Math.max(max, Math.abs(value)), 0);
-
-  return rms * 0.75 + peak * 0.25;
-}
-
-function optimizerWeights(goal: OptimizerGoal): {
-  f3: number;
-  flat: number;
-  groupDelay: number;
-  limits: number;
-  volume: number;
-} {
-  if (goal === "flat") {
-    return { f3: 0.12, flat: 0.52, groupDelay: 0.13, limits: 0.15, volume: 0.08 };
-  }
-  if (goal === "deep") {
-    return { f3: 0.55, flat: 0.12, groupDelay: 0.05, limits: 0.2, volume: 0.08 };
-  }
-  if (goal === "compact") {
-    return { f3: 0.12, flat: 0.18, groupDelay: 0.08, limits: 0.1, volume: 0.52 };
-  }
-  if (goal === "transient") {
-    return { f3: 0.12, flat: 0.2, groupDelay: 0.46, limits: 0.1, volume: 0.12 };
-  }
-  if (goal === "output") {
-    return { f3: 0.18, flat: 0.12, groupDelay: 0.05, limits: 0.6, volume: 0.05 };
-  }
-
-  return { f3: 0.28, flat: 0.27, groupDelay: 0.12, limits: 0.15, volume: 0.18 };
-}
-
-function optimizerF3TargetFactor(goal: OptimizerGoal): number {
-  if (goal === "deep") {
-    return 0.62;
-  }
-  if (goal === "compact") {
-    return 1.05;
-  }
-  if (goal === "transient" || goal === "flat") {
-    return 0.92;
-  }
-  if (goal === "output") {
-    return 0.8;
-  }
-
-  return 0.85;
-}
-
-function optimizerKindPenalty(kind: BoxKind, goal: OptimizerGoal): number {
-  if (goal === "transient" && (kind === "vented" || kind === "passive" || kind === "bandpass")) {
-    return kind === "bandpass" ? 14 : 8;
-  }
-  if (goal === "deep" && (kind === "sealed" || kind === "aperiodic")) {
-    return 4;
-  }
-  if (goal === "output" && kind === "sealed") {
-    return 4;
-  }
-  if (goal === "compact" && kind === "bandpass") {
-    return 8;
-  }
-
-  return 0;
-}
-
-function volumeForQtc(driver: SpeakerDriver, qtc: number): number {
-  const ratio = Math.pow(qtc / Math.max(0.05, driver.qts), 2) - 1;
-  if (ratio <= 0) {
-    return driver.vasL * 4;
-  }
-
-  return driver.vasL / ratio;
-}
-
-function optimizerVentedBaseVolumeFactor(qts: number): number {
-  return clampNumber(12 * Math.pow(clampNumber(qts, 0.18, 0.65), 2.4), 0.25, 1.7);
 }
 
 function formatTune(result: SimulationResult, text: UiText): string {
@@ -1765,6 +2092,65 @@ function formatPort(result: SimulationResult): string {
   }
 
   return `M ${fmt(result.metrics.maxPortMach, 2)} / ${fmt(result.metrics.portLengthCm, 1)} cm`;
+}
+
+function serializeSvg(svg: SVGSVGElement): string {
+  const clone = svg.cloneNode(true) as SVGSVGElement;
+  clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+  clone.setAttribute("width", "960");
+  clone.setAttribute("height", "390");
+  return new XMLSerializer().serializeToString(clone);
+}
+
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+function chartFileBaseName(title: string): string {
+  return `speaker-builder-${title.toLowerCase().replace(/[^a-z0-9а-яё]+/gi, "-").replace(/^-|-$/g, "") || "chart"}`;
+}
+
+function nearestPoint(points: Point[], x: number, scale: ScaleMode): Point | null {
+  if (points.length === 0) {
+    return null;
+  }
+  const distance = (point: Point) =>
+    scale === "log"
+      ? Math.abs(Math.log10(Math.max(0.001, point.x)) - Math.log10(Math.max(0.001, x)))
+      : Math.abs(point.x - x);
+
+  return points.reduce((best, point) => (distance(point) < distance(best) ? point : best), points[0]);
+}
+
+function formatAxisReadout(value: number, label: string): string {
+  if (label.includes("Hz")) {
+    return `${fmt(value, value < 100 ? 1 : 0)} Hz`;
+  }
+  if (label.includes("ms")) {
+    return `${fmt(value, 1)} ms`;
+  }
+  if (label === "dB") {
+    return `${fmt(value, 1)} dB`;
+  }
+  if (label === "mm") {
+    return `${fmt(value, 2)} mm`;
+  }
+  if (label === "Ω") {
+    return `${fmt(value, 2)} Ω`;
+  }
+  if (label === "Mach") {
+    return `M ${fmt(value, 3)}`;
+  }
+  if (label === "deg") {
+    return `${fmt(value, 1)} deg`;
+  }
+
+  return fmt(value, 3);
 }
 
 function pathForSeries(
@@ -1789,6 +2175,138 @@ function pathForSeries(
     path += path ? ` L ${x.toFixed(2)} ${y.toFixed(2)}` : `M ${x.toFixed(2)} ${y.toFixed(2)}`;
   }
   return path;
+}
+
+function createProjectFile(state: ProjectState): ProjectFile {
+  return {
+    ...state,
+    version: 1,
+  };
+}
+
+function analyzeDriver(driver: SpeakerDriver): DriverProfile {
+  const issues: DriverIssue[] = [];
+  const hasInvalidRequired =
+    driver.fsHz <= 0 ||
+    driver.qts <= 0 ||
+    driver.vasL <= 0 ||
+    driver.sdCm2 <= 0 ||
+    driver.reOhm <= 0;
+  if (hasInvalidRequired) {
+    issues.push("invalidRequired");
+  }
+  if (driver.qts < 0.18) {
+    issues.push("qtsLow");
+  }
+  if (driver.qts > 0.7) {
+    issues.push("qtsHigh");
+  }
+  if (driver.qes !== undefined && driver.qes <= driver.qts) {
+    issues.push("qesNotAboveQts");
+  }
+  if (driver.qms !== undefined && driver.qms <= driver.qts) {
+    issues.push("qmsNotAboveQts");
+  }
+  if (driver.xmaxMm !== undefined && driver.xmaxMm <= 0) {
+    issues.push("xmaxInvalid");
+  }
+  if (driver.peW !== undefined && driver.peW <= 0) {
+    issues.push("powerInvalid");
+  }
+
+  const ebp = driver.qes && driver.qes > 0 ? driver.fsHz / driver.qes : undefined;
+  let recommendation: DriverRecommendation = "review";
+  if (driver.qts >= 0.55 || (ebp !== undefined && ebp < 50)) {
+    recommendation = "sealed";
+  } else if (ebp !== undefined && ebp > 90 && driver.qts < 0.45) {
+    recommendation = "vented";
+  } else if (ebp !== undefined && ebp >= 50 && ebp <= 90) {
+    recommendation = "mixed";
+  }
+
+  return {
+    ebp,
+    issues: Array.from(new Set(issues)),
+    recommendation,
+  };
+}
+
+function loadProjectState(): ProjectState {
+  try {
+    const raw = localStorage.getItem(PROJECT_STORAGE_KEY);
+    if (raw) {
+      const project = parseProjectFile(raw);
+      if (project) {
+        return project;
+      }
+    }
+  } catch {
+    // Fall through to the legacy driver-only store.
+  }
+
+  const drivers = loadDrivers();
+  const selectedDriver = drivers[0];
+  const designs = createDefaultDesigns(selectedDriver);
+  const focusedDesignId = designs.find((design) => design.enabled)?.id ?? designs[0]?.id ?? "";
+
+  return {
+    activeTab: "response",
+    designs,
+    drivers,
+    focusedDesignId,
+    language: loadLanguage(),
+    optimizerGoal: "balanced",
+    powerW: 25,
+    referenceByTab: {},
+    selectedDriverId: selectedDriver.id,
+  };
+}
+
+function parseProjectFile(content: string): ProjectState | null {
+  try {
+    const parsed = JSON.parse(content) as unknown;
+    if (!isPlainRecord(parsed) || parsed.version !== 1) {
+      return null;
+    }
+    if (!Array.isArray(parsed.drivers) || !Array.isArray(parsed.designs)) {
+      return null;
+    }
+
+    const drivers = parsed.drivers.filter(isSpeakerDriver);
+    if (drivers.length === 0) {
+      return null;
+    }
+
+    const selectedDriverId = typeof parsed.selectedDriverId === "string" &&
+      drivers.some((driver) => driver.id === parsed.selectedDriverId)
+      ? parsed.selectedDriverId
+      : drivers[0].id;
+    const selectedDriver = drivers.find((driver) => driver.id === selectedDriverId) ?? drivers[0];
+    const designs = parsed.designs.filter(isBoxDesign).map(normalizeDesign);
+    const normalizedDesigns = designs.length > 0 ? designs : createDefaultDesigns(selectedDriver);
+    const focusedDesignId = typeof parsed.focusedDesignId === "string" &&
+      normalizedDesigns.some((design) => design.id === parsed.focusedDesignId)
+      ? parsed.focusedDesignId
+      : normalizedDesigns.find((design) => design.enabled)?.id ?? normalizedDesigns[0]?.id ?? "";
+
+    return {
+      activeTab: isChartTab(parsed.activeTab) ? parsed.activeTab : "response",
+      designs: normalizedDesigns,
+      drivers,
+      focusedDesignId,
+      language: parsed.language === "en" ? "en" : "ru",
+      optimizerGoal: isOptimizerGoal(parsed.optimizerGoal) ? parsed.optimizerGoal : "balanced",
+      powerW: typeof parsed.powerW === "number" && Number.isFinite(parsed.powerW)
+        ? Math.max(0.1, parsed.powerW)
+        : 25,
+      referenceByTab: isPlainRecord(parsed.referenceByTab)
+        ? normalizeReferenceByTab(parsed.referenceByTab)
+        : {},
+      selectedDriverId,
+    };
+  } catch {
+    return null;
+  }
 }
 
 function loadDrivers(): SpeakerDriver[] {
@@ -1835,6 +2353,69 @@ function normalizeDesign(design: BoxDesign): BoxDesign {
     portDiameterCm: design.portDiameterCm !== undefined ? Math.max(0.1, design.portDiameterCm) : undefined,
     portCount: design.portCount !== undefined ? Math.max(1, Math.round(design.portCount)) : undefined,
   };
+}
+
+function normalizeReferenceByTab(value: Record<string, unknown>): ReferenceByTab {
+  const referenceByTab: ReferenceByTab = {};
+  for (const tab of chartTabs) {
+    const reference = value[tab];
+    if (!isPlainRecord(reference) || !Array.isArray(reference.series)) {
+      continue;
+    }
+    referenceByTab[tab] = {
+      capturedAt: typeof reference.capturedAt === "string" ? reference.capturedAt : new Date().toISOString(),
+      label: typeof reference.label === "string" ? reference.label : "Reference",
+      tab,
+      series: reference.series.filter(isSeries),
+    };
+  }
+  return referenceByTab;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isSpeakerDriver(value: unknown): value is SpeakerDriver {
+  return isPlainRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.name === "string" &&
+    typeof value.fsHz === "number" &&
+    typeof value.qts === "number" &&
+    typeof value.vasL === "number" &&
+    typeof value.sdCm2 === "number" &&
+    typeof value.reOhm === "number";
+}
+
+function isBoxDesign(value: unknown): value is BoxDesign {
+  return isPlainRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.name === "string" &&
+    typeof value.kind === "string" &&
+    ["sealed", "vented", "passive", "aperiodic", "infinite", "bandpass"].includes(value.kind) &&
+    typeof value.enabled === "boolean" &&
+    typeof value.vbLiters === "number" &&
+    typeof value.color === "string";
+}
+
+function isSeries(value: unknown): value is Series {
+  return isPlainRecord(value) &&
+    typeof value.name === "string" &&
+    typeof value.color === "string" &&
+    Array.isArray(value.points) &&
+    value.points.every((point) =>
+      isPlainRecord(point) &&
+      typeof point.x === "number" &&
+      typeof point.y === "number",
+    );
+}
+
+function isChartTab(value: unknown): value is ChartTab {
+  return typeof value === "string" && chartTabs.includes(value as ChartTab);
+}
+
+function isOptimizerGoal(value: unknown): value is OptimizerGoal {
+  return typeof value === "string" && optimizerGoals.includes(value as OptimizerGoal);
 }
 
 function keyForTemplate(design: BoxDesign): string {

@@ -51,6 +51,8 @@ export type SimulationOutput =
   | "step"
   | "metrics";
 
+export type OptimizerGoal = "balanced" | "flat" | "deep" | "compact" | "transient" | "output";
+
 export interface Point {
   x: number;
   y: number;
@@ -82,6 +84,14 @@ export interface SimulationResult {
     fcHz?: number;
     notes: string[];
   };
+}
+
+export interface OptimizerCandidate {
+  id: string;
+  design: BoxDesign;
+  flatnessDb: number;
+  result: SimulationResult;
+  score: number;
 }
 
 interface Complex {
@@ -429,8 +439,28 @@ export function simulateDesign(
     if (design.kind === "vented" && maxPort.y > 0.16) {
       notes.push(`High vent air speed: Mach ${roundTo(maxPort.y, 2)}`);
     }
+    if (design.kind === "vented" && maxPort.y > 0.1 && maxPort.y <= 0.16) {
+      notes.push(`Port air speed near noise limit: Mach ${roundTo(maxPort.y, 2)}`);
+    }
     if (design.kind === "vented" && portLengthCm !== undefined && portLengthCm <= 1) {
       notes.push("Vent is too short for this diameter/tuning");
+    }
+    if (design.kind === "vented") {
+      const pistonDiameterCm = Math.sqrt((Math.max(1, driver.sdCm2) * 4) / Math.PI);
+      const portDiameterCm = design.portDiameterCm ?? 0;
+      const boxCubeSideCm = Math.cbrt(Math.max(0.001, design.vbLiters / 1000)) * 100;
+      if (portDiameterCm > 0 && portDiameterCm < pistonDiameterCm * 0.22) {
+        notes.push("Port diameter is small for cone area");
+      }
+      if (portLengthCm !== undefined && portLengthCm > 60) {
+        notes.push("Port is very long for this box");
+      }
+      if (portLengthCm !== undefined && portLengthCm > boxCubeSideCm * 1.8) {
+        notes.push("Port may not fit inside the box");
+      }
+      if ((design.portCount ?? 1) > 1 && portLengthCm !== undefined && portLengthCm > 40) {
+        notes.push("Multiple ports make the tuning tube long");
+      }
     }
     if ((design.kind === "vented" || design.kind === "passive") && driver.qts > 0.58) {
       notes.push("High Qts driver may prefer sealed or aperiodic loading");
@@ -467,6 +497,228 @@ export function simulateDesign(
       notes,
     },
   };
+}
+
+export function optimizeDesigns(
+  driver: SpeakerDriver,
+  powerW: number,
+  goal: OptimizerGoal,
+): OptimizerCandidate[] {
+  return createOptimizerDesigns(driver)
+    .map((design) => {
+      const result = simulateDesign(driver, design, { powerW });
+      const flatnessDb = responseFlatness(result.responseDb);
+
+      return {
+        id: design.id,
+        design,
+        flatnessDb,
+        result,
+        score: scoreOptimizerCandidate(result, driver, goal, flatnessDb),
+      };
+    })
+    .sort((left, right) => right.score - left.score)
+    .slice(0, 8);
+}
+
+function createOptimizerDesigns(driver: SpeakerDriver): BoxDesign[] {
+  const designs: BoxDesign[] = [];
+  const addDesign = (design: Omit<BoxDesign, "color" | "enabled">) => {
+    designs.push({
+      ...design,
+      color: DESIGN_COLORS[designs.length % DESIGN_COLORS.length],
+      enabled: true,
+      vbLiters: roundTo(Math.max(0.5, design.vbLiters), 1),
+      fbHz: design.fbHz ? roundTo(design.fbHz, 1) : undefined,
+      portDiameterCm: design.portDiameterCm ? roundTo(design.portDiameterCm, 1) : undefined,
+    });
+  };
+
+  for (const qtc of [0.58, 0.65, 0.707, 0.8, 0.9, 1]) {
+    addDesign({
+      id: `opt-sealed-${qtc}`,
+      name: `Optimized sealed Qtc ${qtc.toFixed(2)}`,
+      kind: "sealed",
+      vbLiters: volumeForQtc(driver, qtc),
+    });
+  }
+
+  for (const qtc of [0.68, 0.78, 0.88]) {
+    for (const ql of [1.3, 1.8]) {
+      addDesign({
+        id: `opt-aperiodic-${qtc}-${ql}`,
+        name: `Optimized aperiodic Qtc ${qtc.toFixed(2)}`,
+        kind: "aperiodic",
+        vbLiters: volumeForQtc(driver, qtc) * 0.72,
+        ql,
+      });
+    }
+  }
+
+  const baseVolumeFactor = optimizerVentedBaseVolumeFactor(driver.qts);
+  const pistonDiameterCm = Math.sqrt((Math.max(1, driver.sdCm2) * 4) / Math.PI);
+  const basePortCm = clamp(roundTo(pistonDiameterCm * 0.32, 1), 4, 16);
+  const portOptions = [
+    { diameterCm: basePortCm, count: 1 },
+    { diameterCm: clamp(roundTo(basePortCm * 1.25, 1), 4, 18), count: 1 },
+    { diameterCm: basePortCm, count: 2 },
+  ];
+
+  for (const volumeFactor of [0.62, 0.82, 1.05, 1.34, 1.72]) {
+    for (const fbRatio of [0.64, 0.76, 0.88, 1, 1.12]) {
+      for (const port of portOptions) {
+        addDesign({
+          id: `opt-vented-${volumeFactor}-${fbRatio}-${port.diameterCm}-${port.count}`,
+          name: "Optimized vented",
+          kind: "vented",
+          vbLiters: driver.vasL * baseVolumeFactor * volumeFactor,
+          fbHz: driver.fsHz * fbRatio,
+          ql: 7,
+          portDiameterCm: port.diameterCm,
+          portCount: port.count,
+        });
+      }
+    }
+  }
+
+  for (const volumeFactor of [0.85, 1.25, 1.7]) {
+    for (const fbRatio of [0.64, 0.78, 0.92]) {
+      addDesign({
+        id: `opt-passive-${volumeFactor}-${fbRatio}`,
+        name: "Optimized passive radiator",
+        kind: "passive",
+        vbLiters: driver.vasL * baseVolumeFactor * volumeFactor,
+        fbHz: driver.fsHz * fbRatio,
+        ql: 9,
+        portDiameterCm: clamp(roundTo(basePortCm * 1.7, 1), 6, 22),
+        portCount: 1,
+      });
+    }
+  }
+
+  return designs;
+}
+
+function scoreOptimizerCandidate(
+  result: SimulationResult,
+  driver: SpeakerDriver,
+  goal: OptimizerGoal,
+  flatnessDb: number,
+): number {
+  const metrics = result.metrics;
+  const targetF3 = Math.max(18, driver.fsHz * optimizerF3TargetFactor(goal));
+  const f3Hz = metrics.f3Hz ?? 500;
+  const f3Penalty = Math.max(0, (f3Hz - targetF3) / targetF3) * 45;
+  const flatPenalty = flatnessDb * 9 + Math.max(0, metrics.peakDb) * 5;
+  const volumePenalty = clamp((result.design.vbLiters / Math.max(1, driver.vasL)) * 22, 0, 70);
+  const groupDelayMs = metrics.groupDelay40Ms ?? metrics.groupDelay30Ms ?? 0;
+  const groupDelayPenalty = clamp(groupDelayMs * 0.9, 0, 70);
+  const excursionPenalty = driver.xmaxMm
+    ? Math.max(0, metrics.maxExcursionMm / driver.xmaxMm - 0.95) * 70
+    : 0;
+  const portPenalty = metrics.maxPortMach !== undefined
+    ? Math.max(0, metrics.maxPortMach - 0.14) * 260
+    : 0;
+  const portLengthPenalty = metrics.portLengthCm !== undefined && metrics.portLengthCm <= 1
+    ? 22
+    : metrics.portLengthCm !== undefined && metrics.portLengthCm < 4
+      ? 8
+      : 0;
+  const limitPenalty = excursionPenalty + portPenalty + portLengthPenalty;
+  const weights = optimizerWeights(goal);
+  const weightedPenalty =
+    f3Penalty * weights.f3 +
+    flatPenalty * weights.flat +
+    volumePenalty * weights.volume +
+    groupDelayPenalty * weights.groupDelay +
+    limitPenalty * weights.limits +
+    optimizerKindPenalty(result.design.kind, goal);
+
+  return clamp(100 - weightedPenalty, 0, 100);
+}
+
+function responseFlatness(points: Point[]): number {
+  const passband = points
+    .filter((point) => point.x >= 45 && point.x <= 220 && Number.isFinite(point.y))
+    .map((point) => point.y);
+  const values = passband.length > 0 ? passband : points.map((point) => point.y);
+  const rms = Math.sqrt(values.reduce((sum, value) => sum + value * value, 0) / Math.max(1, values.length));
+  const peak = values.reduce((max, value) => Math.max(max, Math.abs(value)), 0);
+
+  return rms * 0.75 + peak * 0.25;
+}
+
+function optimizerWeights(goal: OptimizerGoal): {
+  f3: number;
+  flat: number;
+  groupDelay: number;
+  limits: number;
+  volume: number;
+} {
+  if (goal === "flat") {
+    return { f3: 0.12, flat: 0.52, groupDelay: 0.13, limits: 0.15, volume: 0.08 };
+  }
+  if (goal === "deep") {
+    return { f3: 0.55, flat: 0.12, groupDelay: 0.05, limits: 0.2, volume: 0.08 };
+  }
+  if (goal === "compact") {
+    return { f3: 0.12, flat: 0.18, groupDelay: 0.08, limits: 0.1, volume: 0.52 };
+  }
+  if (goal === "transient") {
+    return { f3: 0.12, flat: 0.2, groupDelay: 0.46, limits: 0.1, volume: 0.12 };
+  }
+  if (goal === "output") {
+    return { f3: 0.18, flat: 0.12, groupDelay: 0.05, limits: 0.6, volume: 0.05 };
+  }
+
+  return { f3: 0.28, flat: 0.27, groupDelay: 0.12, limits: 0.15, volume: 0.18 };
+}
+
+function optimizerF3TargetFactor(goal: OptimizerGoal): number {
+  if (goal === "deep") {
+    return 0.62;
+  }
+  if (goal === "compact") {
+    return 1.05;
+  }
+  if (goal === "transient" || goal === "flat") {
+    return 0.92;
+  }
+  if (goal === "output") {
+    return 0.8;
+  }
+
+  return 0.85;
+}
+
+function optimizerKindPenalty(kind: BoxKind, goal: OptimizerGoal): number {
+  if (goal === "transient" && (kind === "vented" || kind === "passive" || kind === "bandpass")) {
+    return kind === "bandpass" ? 14 : 8;
+  }
+  if (goal === "deep" && (kind === "sealed" || kind === "aperiodic")) {
+    return 4;
+  }
+  if (goal === "output" && kind === "sealed") {
+    return 4;
+  }
+  if (goal === "compact" && kind === "bandpass") {
+    return 8;
+  }
+
+  return 0;
+}
+
+function volumeForQtc(driver: SpeakerDriver, qtc: number): number {
+  const ratio = Math.pow(qtc / Math.max(0.05, driver.qts), 2) - 1;
+  if (ratio <= 0) {
+    return driver.vasL * 4;
+  }
+
+  return driver.vasL / ratio;
+}
+
+function optimizerVentedBaseVolumeFactor(qts: number): number {
+  return clamp(12 * Math.pow(clamp(qts, 0.18, 0.65), 2.4), 0.25, 1.7);
 }
 
 export function parseDriversFromFile(name: string, content: string): SpeakerDriver[] {
