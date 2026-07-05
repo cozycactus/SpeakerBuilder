@@ -340,7 +340,7 @@ const UI_TEXT = {
       step: "Переходная характеристика",
       phase: "Фаза",
       impedance: "Импеданс",
-      port: "Скорость в порту",
+      port: "Порт / пассивный радиатор",
     } satisfies Record<ChartTab, string>,
     chartRange: "До",
     chartScale: {
@@ -564,6 +564,13 @@ const UI_TEXT = {
     } satisfies Record<SplInputMode, string>,
     model: "Модель",
     noActiveDesigns: "Нет активных конфигураций.",
+    passiveRadiatorCount: "PR шт.",
+    passiveRadiatorExcursion: "Ход PR",
+    passiveRadiatorMms: "Mmp PR",
+    passiveRadiatorQms: "Qms PR",
+    passiveRadiatorSd: "Sd PR",
+    passiveRadiatorTuning: "Fb PR",
+    passiveRadiatorXmax: "Xmax PR",
     portDiameter: "Порт Ø",
     portHeight: "Высота",
     portShape: "Порт",
@@ -618,11 +625,12 @@ const UI_TEXT = {
       highVentAirSpeed: (mach: string) => `Высокая скорость воздуха в порту: Mach ${mach}`,
       invalidBoxVolume: "Некорректный объем корпуса",
       maxSplLimitedByPe: (frequency: string) => `SPL ограничен Pe на ${frequency} Гц`,
+      maxSplLimitedByPassive: (frequency: string) => `SPL ограничен ходом пассивного радиатора на ${frequency} Гц`,
       maxSplLimitedByPort: (frequency: string) => `SPL ограничен портом на ${frequency} Гц`,
       maxSplLimitedByXmax: (frequency: string) => `SPL ограничен Xmax на ${frequency} Гц`,
       bandpassApproximate: "Бандпасс пока считается приближенно: задняя закрытая камера + ФНЧ, без полной модели камер",
       multiplePortsLong: "Несколько портов сильно увеличивают требуемую длину",
-      passiveEquivalentVent: "Пассивный радиатор пока считается как эквивалентный порт, без массы и хода PR",
+      passiveXmaxExceeded: (frequency: string) => `Превышен Xmax пассивного радиатора на ${frequency} Гц`,
       powerExceeded: (power: string) => `Заданная мощность выше Pe: ${power} W`,
       portDiameterSmall: "Диаметр порта мал для площади диффузора",
       portMayNotFit: "Порт может не поместиться в корпус",
@@ -647,6 +655,7 @@ const UI_TEXT = {
       zmin: "Zmin",
     },
     limitReasons: {
+      passive: "PR",
       power: "Pe",
       port: "порт",
       xmax: "Xmax",
@@ -686,7 +695,7 @@ const UI_TEXT = {
       step: "Step response",
       phase: "Phase",
       impedance: "Impedance",
-      port: "Port velocity",
+      port: "Port / passive radiator",
     } satisfies Record<ChartTab, string>,
     chartRange: "To",
     chartScale: {
@@ -894,6 +903,13 @@ const UI_TEXT = {
     } satisfies Record<SplInputMode, string>,
     model: "Model",
     noActiveDesigns: "No active configurations.",
+    passiveRadiatorCount: "PR count",
+    passiveRadiatorExcursion: "PR excursion",
+    passiveRadiatorMms: "PR Mmp",
+    passiveRadiatorQms: "PR Qms",
+    passiveRadiatorSd: "PR Sd",
+    passiveRadiatorTuning: "PR Fb",
+    passiveRadiatorXmax: "PR Xmax",
     portDiameter: "Port Ø",
     portHeight: "Height",
     portShape: "Port",
@@ -948,11 +964,12 @@ const UI_TEXT = {
       highVentAirSpeed: (mach: string) => `High vent air speed: Mach ${mach}`,
       invalidBoxVolume: "Invalid box volume",
       maxSplLimitedByPe: (frequency: string) => `Max SPL limited by Pe at ${frequency} Hz`,
+      maxSplLimitedByPassive: (frequency: string) => `Max SPL limited by passive radiator excursion at ${frequency} Hz`,
       maxSplLimitedByPort: (frequency: string) => `Max SPL limited by port at ${frequency} Hz`,
       maxSplLimitedByXmax: (frequency: string) => `Max SPL limited by Xmax at ${frequency} Hz`,
       bandpassApproximate: "Bandpass is approximate: rear sealed + low-pass, not a full chamber model",
       multiplePortsLong: "Multiple ports make the tuning tube long",
-      passiveEquivalentVent: "Passive radiator uses an equivalent vent approximation, without PR mass and excursion",
+      passiveXmaxExceeded: (frequency: string) => `Passive radiator Xmax exceeded at ${frequency} Hz`,
       powerExceeded: (power: string) => `Power exceeds Pe: ${power} W`,
       portDiameterSmall: "Port diameter is small for cone area",
       portMayNotFit: "Port may not fit inside the box",
@@ -977,6 +994,7 @@ const UI_TEXT = {
       zmin: "Zmin",
     },
     limitReasons: {
+      passive: "PR",
       power: "Pe",
       port: "port",
       xmax: "Xmax",
@@ -2545,8 +2563,9 @@ function DesignEditor({
   onDuplicate: () => void;
   onDelete: () => void;
 }) {
-  const hasTuning = design.kind === "vented" || design.kind === "passive" || design.kind === "bandpass";
+  const hasTuning = design.kind === "vented" || design.kind === "bandpass";
   const hasPort = design.kind === "vented" || design.kind === "bandpass";
+  const hasPassiveRadiator = design.kind === "passive";
   const hasAperiodicVent = design.kind === "aperiodic";
   const hasVentGeometry = hasPort || hasAperiodicVent;
   const aperiodicMode = hasAperiodicVent ? design.aperiodicMode ?? "ql" : undefined;
@@ -2561,6 +2580,7 @@ function DesignEditor({
   const selectedDampingPreset = hasAperiodicVent && aperiodicMode === "ql"
     ? selectedAperiodicDampingPreset(design.ql ?? 1.7)
     : undefined;
+  const passiveTuning = hasPassiveRadiator ? passiveRadiatorTuningSummary(design, driver) : undefined;
 
   return (
     <article className={`design-card ${design.enabled ? "" : "muted"} ${focused ? "focused" : ""}`}>
@@ -2619,8 +2639,52 @@ function DesignEditor({
             </select>
           </label>
         ) : null}
-        {design.kind !== "sealed" && design.kind !== "infinite" && !(hasAperiodicVent && aperiodicMode === "flow") ? (
+        {design.kind !== "sealed" && design.kind !== "infinite" && !hasPassiveRadiator && !(hasAperiodicVent && aperiodicMode === "flow") ? (
           <NumberField label={dampingLabel} unit="" value={design.ql ?? (design.kind === "aperiodic" ? 1.7 : 7)} min={0.1} step="0.1" onChange={(ql) => onChange({ ql })} />
+        ) : null}
+        {hasPassiveRadiator ? (
+          <>
+            <NumberField
+              label={text.passiveRadiatorSd}
+              unit="cm²"
+              value={design.passiveRadiatorSdCm2 ?? defaultPassiveRadiatorSdCm2(driver)}
+              min={1}
+              step="1"
+              onChange={(passiveRadiatorSdCm2) => onChange({ passiveRadiatorSdCm2 })}
+            />
+            <NumberField
+              label={text.passiveRadiatorMms}
+              unit="g"
+              value={design.passiveRadiatorMmsG ?? defaultPassiveRadiatorMmsG(design, driver)}
+              min={1}
+              step="1"
+              onChange={(passiveRadiatorMmsG) => onChange({ passiveRadiatorMmsG })}
+            />
+            <NumberField
+              label={text.passiveRadiatorQms}
+              unit=""
+              value={design.passiveRadiatorQms ?? design.ql ?? 9}
+              min={0.5}
+              step="0.1"
+              onChange={(passiveRadiatorQms) => onChange({ passiveRadiatorQms, ql: passiveRadiatorQms })}
+            />
+            <NumberField
+              label={text.passiveRadiatorXmax}
+              unit="mm"
+              value={design.passiveRadiatorXmaxMm ?? defaultPassiveRadiatorXmaxMm(driver)}
+              min={0.1}
+              step="0.1"
+              onChange={(passiveRadiatorXmaxMm) => onChange({ passiveRadiatorXmaxMm })}
+            />
+            <NumberField
+              label={text.passiveRadiatorCount}
+              unit=""
+              value={design.passiveRadiatorCount ?? 1}
+              min={1}
+              step="1"
+              onChange={(passiveRadiatorCount) => onChange({ passiveRadiatorCount: Math.max(1, Math.round(passiveRadiatorCount)) })}
+            />
+          </>
         ) : null}
         {hasAperiodicVent && aperiodicMode === "ql" ? (
           <div className="aperiodic-preset-control" role="group" aria-label={text.aperiodicDampingPreset}>
@@ -2739,6 +2803,13 @@ function DesignEditor({
             <em>{aperiodicResistance.note}</em>
           </div>
         ) : null}
+        {passiveTuning ? (
+          <div className="design-readout">
+            <span>{text.passiveRadiatorTuning}</span>
+            <strong>{passiveTuning.value}</strong>
+            <em>{passiveTuning.note}</em>
+          </div>
+        ) : null}
       </div>
     </article>
   );
@@ -2815,10 +2886,18 @@ function designKindPatch(kind: BoxKind, design: BoxDesign, driver: SpeakerDriver
     };
   }
   if (kind === "passive") {
+    const vbLiters = design.vbLiters || Math.max(1, driver.vasL * 0.8);
+    const fbHz = design.fbHz ?? Math.max(15, driver.fsHz * 0.78);
+    const passiveRadiatorSdCm2 = design.passiveRadiatorSdCm2 ?? defaultPassiveRadiatorSdCm2(driver);
+    const passiveRadiatorCount = design.passiveRadiatorCount ?? 1;
     return {
       kind,
-      fbHz: design.fbHz ?? Math.max(15, driver.fsHz * 0.78),
       ql: design.ql ?? 9,
+      passiveRadiatorSdCm2,
+      passiveRadiatorMmsG: design.passiveRadiatorMmsG ?? passiveRadiatorMassForTarget(vbLiters, fbHz, passiveRadiatorSdCm2, passiveRadiatorCount),
+      passiveRadiatorQms: design.passiveRadiatorQms ?? design.ql ?? 9,
+      passiveRadiatorXmaxMm: design.passiveRadiatorXmaxMm ?? defaultPassiveRadiatorXmaxMm(driver),
+      passiveRadiatorCount,
     };
   }
   return { kind };
@@ -2856,6 +2935,43 @@ function defaultFlowResistivity(material: AperiodicMaterial): number {
 function defaultAperiodicVentDiameterCm(driver: SpeakerDriver): number {
   const targetAreaCm2 = Math.max(0.5, driver.sdCm2 * 0.1);
   return roundTo(Math.sqrt((targetAreaCm2 * 4) / Math.PI), 1);
+}
+
+function defaultPassiveRadiatorSdCm2(driver: SpeakerDriver): number {
+  return roundTo(Math.max(driver.sdCm2 * 1.5, driver.sdCm2 + 20), 1);
+}
+
+function defaultPassiveRadiatorXmaxMm(driver: SpeakerDriver): number {
+  return roundTo((driver.xmaxMm ?? 6) * 1.8, 1);
+}
+
+function defaultPassiveRadiatorMmsG(design: BoxDesign, driver: SpeakerDriver): number {
+  return passiveRadiatorMassForTarget(
+    design.vbLiters,
+    design.fbHz ?? Math.max(15, driver.fsHz * 0.78),
+    design.passiveRadiatorSdCm2 ?? defaultPassiveRadiatorSdCm2(driver),
+    design.passiveRadiatorCount ?? 1,
+  );
+}
+
+function passiveRadiatorMassForTarget(vbLiters: number, fbHz: number, sdCm2: number, count: number): number {
+  const cab = Math.max(0.001, vbLiters / 1000) / (1.204 * 343 * 343);
+  const sdM2 = Math.max(0.001, sdCm2 / 10000);
+  const acousticMass = 1 / (Math.pow(Math.PI * 2 * Math.max(5, fbHz), 2) * cab);
+  return roundTo(Math.max(1, acousticMass * Math.max(1, count) * sdM2 * sdM2 * 1000), 1);
+}
+
+function passiveRadiatorTuningSummary(design: BoxDesign, driver: SpeakerDriver): { value: string; note: string } {
+  const cab = Math.max(0.001, design.vbLiters / 1000) / (1.204 * 343 * 343);
+  const sdM2 = Math.max(0.001, (design.passiveRadiatorSdCm2 ?? defaultPassiveRadiatorSdCm2(driver)) / 10000);
+  const count = Math.max(1, Math.round(design.passiveRadiatorCount ?? 1));
+  const mmsG = design.passiveRadiatorMmsG ?? defaultPassiveRadiatorMmsG(design, driver);
+  const acousticMass = Math.max(0.001, mmsG / 1000) / (count * sdM2 * sdM2);
+  const tuningHz = 1 / (Math.PI * 2 * Math.sqrt(Math.max(1e-12, acousticMass * cab)));
+  return {
+    value: `${formatCompactNumber(tuningHz)} Hz`,
+    note: `${formatCompactNumber(mmsG)} g`,
+  };
 }
 
 function selectedAperiodicDampingPreset(ql: number): AperiodicDampingPresetKey | undefined {
@@ -3409,10 +3525,10 @@ function chartInputGroups(
     ? [
         { label: text.design, value: text.boxLabels[design.kind] },
         { label: "Vb", value: `${formatCompactNumber(design.vbLiters)} L` },
-        ...(design.fbHz !== undefined ? [{ label: "Fb", value: `${formatCompactNumber(design.fbHz)} Hz` }] : []),
+        ...(design.fbHz !== undefined && design.kind !== "passive" ? [{ label: "Fb", value: `${formatCompactNumber(design.fbHz)} Hz` }] : []),
         ...(design.kind === "aperiodic"
           ? aperiodicInputItems(design, driver, text)
-          : design.ql !== undefined
+          : design.ql !== undefined && design.kind !== "passive"
             ? [{ label: "Ql", value: formatCompactNumber(design.ql) }]
             : []),
         ...(chartUsesPort(activeTab, design) ? portInputItems(design, driver, text) : []),
@@ -3498,6 +3614,18 @@ function aperiodicInputItems(design: BoxDesign, driver: SpeakerDriver, text: UiT
 }
 
 function portInputItems(design: BoxDesign, driver: SpeakerDriver, text: UiText): ChartInputItem[] {
+  if (design.kind === "passive") {
+    const tuning = passiveRadiatorTuningSummary(design, driver);
+    return [
+      { label: text.passiveRadiatorSd, value: `${formatCompactNumber(design.passiveRadiatorSdCm2 ?? defaultPassiveRadiatorSdCm2(driver))} cm²` },
+      { label: text.passiveRadiatorMms, value: `${formatCompactNumber(design.passiveRadiatorMmsG ?? defaultPassiveRadiatorMmsG(design, driver))} g` },
+      { label: text.passiveRadiatorQms, value: formatCompactNumber(design.passiveRadiatorQms ?? design.ql ?? 9) },
+      { label: text.passiveRadiatorXmax, value: `${formatCompactNumber(design.passiveRadiatorXmaxMm ?? defaultPassiveRadiatorXmaxMm(driver))} mm` },
+      { label: text.passiveRadiatorCount, value: formatCompactNumber(design.passiveRadiatorCount ?? 1) },
+      { label: text.passiveRadiatorTuning, value: tuning.value },
+    ];
+  }
+
   const isAperiodic = design.kind === "aperiodic";
   const countLabel = isAperiodic ? text.aperiodicVentCount : text.ports;
   const diameterLabel = isAperiodic ? text.aperiodicVentDiameter : text.portDiameter;
@@ -3674,7 +3802,7 @@ function MetricsTable({
                 {fmt(result.metrics.maxExcursionMm, 1)} mm @ {formatHz(result.metrics.maxExcursionHz)}
               </td>
               <td>
-                {result.metrics.maxPortMach !== undefined
+                {result.metrics.maxPortMach !== undefined || result.metrics.maxPassiveRadiatorExcursionMm !== undefined
                   ? formatPort(result)
                   : "—"}
               </td>
@@ -4226,7 +4354,7 @@ function outputsForChartTab(tab: ChartTab): SimulationOutput[] {
     return ["impedance"];
   }
 
-  return ["port"];
+  return ["port", "excursion", "metrics"];
 }
 
 function createAnalysisSnapshot(
@@ -4363,7 +4491,26 @@ function getChartProps(
       series: [...toSeriesList(results, "impedanceOhm", focusedDesignId, text), ...measurementSeries],
     };
   }
-  const points = results.flatMap((result) => result.portMach);
+  const focusedResult = results.find((result) => result.design.id === focusedDesignId) ?? results[0];
+  const showPassiveRadiator = focusedResult?.design.kind === "passive";
+  if (showPassiveRadiator) {
+    const passiveResults = results.filter((result) => result.design.kind === "passive");
+    const points = passiveResults.flatMap((result) => result.passiveRadiatorExcursionMm);
+    const maxXmax = Math.max(...passiveResults.map((result) => result.design.passiveRadiatorXmaxMm ?? 0), 0);
+    const max = Math.max(maxXmax, ...points.map((point) => point.y), 1);
+    const yDomain = chartYDomain ?? [0, niceCeil(max * 1.15)] as [number, number];
+    return {
+      ...base,
+      title: text.passiveRadiatorExcursion,
+      yLabel: "mm",
+      yDomain,
+      referenceLines: visibleReferenceLines(maxXmax > 0 ? [{ y: maxXmax, label: "Xmax PR" }] : [], yDomain),
+      series: toSeriesList(passiveResults, "passiveRadiatorExcursionMm", focusedDesignId, text),
+    };
+  }
+
+  const ventedResults = results.filter((result) => result.design.kind === "vented");
+  const points = ventedResults.flatMap((result) => result.portMach);
   const max = Math.max(...points.map((point) => point.y), 0.18);
   const yDomain = chartYDomain ?? [0, Math.max(0.2, niceCeil(max * 1.15))] as [number, number];
   return {
@@ -4375,7 +4522,7 @@ function getChartProps(
       { y: 0.1, label: "0.10" },
       { y: 0.16, label: "0.16" },
     ], yDomain),
-    series: toSeriesList(results, "portMach", focusedDesignId, text),
+    series: toSeriesList(ventedResults, "portMach", focusedDesignId, text),
   };
 }
 
@@ -4457,11 +4604,21 @@ function chartMarkersForTab(
       markers.push({ ...minZ, color, label: text.chartMarkers.minZ });
     }
   } else if (tab === "port") {
-    const maxPort = result.design.kind === "vented" ? extremumPoint(result.portMach, "max") : undefined;
-    if (maxPort) {
-      markers.push({ ...maxPort, color, label: text.chartMarkers.maxPort });
+    if (result.design.kind === "passive") {
+      const maxPassiveRadiator = extremumPoint(result.passiveRadiatorExcursionMm, "max");
+      if (maxPassiveRadiator) {
+        markers.push({ ...maxPassiveRadiator, color, label: text.chartMarkers.maxExcursion });
+      }
+      if (result.metrics.passiveRadiatorTuningHz) {
+        markers.push(pointMarker(result.passiveRadiatorExcursionMm, result.metrics.passiveRadiatorTuningHz, text.chartMarkers.fb, color));
+      }
+    } else {
+      const maxPort = result.design.kind === "vented" ? extremumPoint(result.portMach, "max") : undefined;
+      if (maxPort) {
+        markers.push({ ...maxPort, color, label: text.chartMarkers.maxPort });
+      }
+      addFb(result.portMach);
     }
-    addFb(result.portMach);
   }
 
   return markers.filter(Boolean) as ChartMarker[];
@@ -4572,9 +4729,19 @@ function translateNote(note: string, text: UiText): string {
     return text.notes.maxSplLimitedByPort(maxSplPort[1]);
   }
 
+  const maxSplPassive = note.match(/^Max SPL limited by passive radiator at ([\d.]+) Hz$/);
+  if (maxSplPassive) {
+    return text.notes.maxSplLimitedByPassive(maxSplPassive[1]);
+  }
+
   const maxSplPe = note.match(/^Max SPL limited by Pe at ([\d.]+) Hz$/);
   if (maxSplPe) {
     return text.notes.maxSplLimitedByPe(maxSplPe[1]);
+  }
+
+  const passiveXmax = note.match(/^Passive radiator Xmax exceeded at ([\d.]+) Hz$/);
+  if (passiveXmax) {
+    return text.notes.passiveXmaxExceeded(passiveXmax[1]);
   }
 
   if (note === "Qes estimated from Qts") {
@@ -4604,9 +4771,6 @@ function translateNote(note: string, text: UiText): string {
   if (note === "Multiple ports make the tuning tube long") {
     return text.notes.multiplePortsLong;
   }
-  if (note === "Passive radiator uses equivalent vent approximation") {
-    return text.notes.passiveEquivalentVent;
-  }
   if (note === "Bandpass model is approximate") {
     return text.notes.bandpassApproximate;
   }
@@ -4619,6 +4783,9 @@ function formatTune(
   text: UiText,
   boxLabels: Record<BoxKind, string> = text.boxLabels,
 ): string {
+  if (result.design.kind === "passive" && result.metrics.passiveRadiatorTuningHz !== undefined) {
+    return `${text.passiveRadiatorTuning} ${fmt(result.metrics.passiveRadiatorTuningHz, 1)} Hz`;
+  }
   if (result.design.fbHz) {
     return `Fb ${fmt(result.design.fbHz, 1)} Hz`;
   }
@@ -4639,6 +4806,13 @@ function formatTune(
 }
 
 function formatPort(result: SimulationResult): string {
+  if (result.design.kind === "passive" && result.metrics.maxPassiveRadiatorExcursionMm !== undefined) {
+    const tuning = result.metrics.passiveRadiatorTuningHz !== undefined
+      ? ` / ${fmt(result.metrics.passiveRadiatorTuningHz, 1)} Hz`
+      : "";
+    return `PR ${fmt(result.metrics.maxPassiveRadiatorExcursionMm, 1)} mm${tuning}`;
+  }
+
   if (result.metrics.maxPortMach === undefined) {
     return "—";
   }
@@ -5609,6 +5783,21 @@ function normalizeDesign(design: BoxDesign): BoxDesign {
       : undefined,
     flowResistivityPaSecM2: design.flowResistivityPaSecM2 !== undefined
       ? clampNumber(design.flowResistivityPaSecM2, 100, 200000)
+      : undefined,
+    passiveRadiatorSdCm2: design.passiveRadiatorSdCm2 !== undefined
+      ? clampNumber(design.passiveRadiatorSdCm2, 1, 5000)
+      : undefined,
+    passiveRadiatorMmsG: design.passiveRadiatorMmsG !== undefined
+      ? clampNumber(design.passiveRadiatorMmsG, 1, 10000)
+      : undefined,
+    passiveRadiatorQms: design.passiveRadiatorQms !== undefined
+      ? clampNumber(design.passiveRadiatorQms, 0.5, 50)
+      : undefined,
+    passiveRadiatorXmaxMm: design.passiveRadiatorXmaxMm !== undefined
+      ? clampNumber(design.passiveRadiatorXmaxMm, 0.1, 100)
+      : undefined,
+    passiveRadiatorCount: design.passiveRadiatorCount !== undefined
+      ? clampNumber(Math.round(design.passiveRadiatorCount), 1, 16)
       : undefined,
     portShape: design.portShape === "slot" ? "slot" : "round",
     portDiameterCm: design.portDiameterCm !== undefined ? Math.max(0.1, design.portDiameterCm) : undefined,

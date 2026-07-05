@@ -47,6 +47,11 @@ export interface BoxDesign {
   aperiodicMaterial?: AperiodicMaterial;
   aperiodicThicknessMm?: number;
   flowResistivityPaSecM2?: number;
+  passiveRadiatorSdCm2?: number;
+  passiveRadiatorMmsG?: number;
+  passiveRadiatorQms?: number;
+  passiveRadiatorXmaxMm?: number;
+  passiveRadiatorCount?: number;
   portShape?: "round" | "slot";
   portDiameterCm?: number;
   portWidthCm?: number;
@@ -84,7 +89,7 @@ export interface Point {
   y: number;
 }
 
-export type SplLimitReason = "xmax" | "port" | "power";
+export type SplLimitReason = "xmax" | "passive" | "port" | "power";
 
 export interface SimulationResult {
   design: BoxDesign;
@@ -93,6 +98,7 @@ export interface SimulationResult {
   phaseDeg: Point[];
   groupDelayMs: Point[];
   excursionMm: Point[];
+  passiveRadiatorExcursionMm: Point[];
   portMach: Point[];
   impedanceOhm: Point[];
   step: Point[];
@@ -116,6 +122,9 @@ export interface SimulationResult {
     groupDelayAtF3Ms?: number;
     maxExcursionMm: number;
     maxExcursionHz: number;
+    maxPassiveRadiatorExcursionMm?: number;
+    maxPassiveRadiatorExcursionHz?: number;
+    passiveRadiatorTuningHz?: number;
     maxPortMach?: number;
     portLengthCm?: number;
     portResonanceHz?: number;
@@ -175,6 +184,7 @@ interface SplLimitPoint {
 
 interface SplLimitSummary {
   excursion?: SplLimitPoint;
+  passive?: SplLimitPoint;
   port?: SplLimitPoint;
   power?: SplLimitPoint;
   usable?: SplLimitPoint;
@@ -369,6 +379,10 @@ export function createDefaultDesigns(driver: SpeakerDriver): BoxDesign[] {
   const sealedBw = sealedForQtc(driver, 0.707);
   const sealedCompact = sealedForQtc(driver, 0.9);
   const ventedBase = ventedBaseVolumeFactor(driver.qts);
+  const passiveVb = driver.vasL * ventedBase * 1.2;
+  const passiveFb = driver.fsHz * 0.78;
+  const passiveSd = defaultPassiveRadiatorSdCm2(driver);
+  const passiveCount = 1;
 
   const designs: BoxDesign[] = [
     {
@@ -452,12 +466,14 @@ export function createDefaultDesigns(driver: SpeakerDriver): BoxDesign[] {
       name: "Passive radiator",
       kind: "passive",
       enabled: false,
-      vbLiters: driver.vasL * ventedBase * 1.2,
-      fbHz: driver.fsHz * 0.78,
+      vbLiters: passiveVb,
+      fbHz: passiveFb,
       ql: 9,
-      portDiameterCm: 12,
-      portCount: 1,
-      portShape: "round",
+      passiveRadiatorSdCm2: passiveSd,
+      passiveRadiatorMmsG: passiveRadiatorMassForTarget(driver, passiveVb, passiveFb, passiveSd, passiveCount),
+      passiveRadiatorQms: 9,
+      passiveRadiatorXmaxMm: defaultPassiveRadiatorXmaxMm(driver),
+      passiveRadiatorCount: passiveCount,
       color: DESIGN_COLORS[7],
     },
     {
@@ -625,10 +641,25 @@ export function simulateDesign(
   const portMach = needsPort
     ? raw.map((item) => {
         const velocity =
-          portArea > 0
+          design.kind === "vented" && portArea > 0
             ? (cabs(item.response.portVolumeVelocity) * voltageRms) / portArea
             : 0;
         return { x: item.frequency, y: velocity / SPEED_OF_SOUND };
+      })
+    : [];
+  const passiveRadiatorExcursionMm = needsExcursion
+    ? raw.map((item) => {
+        if (design.kind !== "passive") {
+          return { x: item.frequency, y: 0 };
+        }
+        const omega = TWO_PI * item.frequency;
+        const sdM2 = passiveRadiatorSdM2(derived, design);
+        const count = passiveRadiatorCount(design);
+        const volumeVelocityPerRadiator = (cabs(item.response.portVolumeVelocity) * voltageRms) / count;
+        return {
+          x: item.frequency,
+          y: (volumeVelocityPerRadiator * 1000) / (Math.max(0.0001, sdM2) * omega),
+        };
       })
     : [];
   const impedanceOhm = needsImpedance
@@ -646,6 +677,7 @@ export function simulateDesign(
   let spl80HzDb: number | undefined;
   let splLimits: SplLimitSummary = {};
   let maxExcursion = { x: 0, y: 0 };
+  let maxPassiveRadiatorExcursion = { x: 0, y: 0 };
   let maxPort = { x: 0, y: 0 };
   let minImpedance = { x: 0, y: 0 };
   let qtc: number | undefined;
@@ -655,6 +687,7 @@ export function simulateDesign(
   let peakReductionDb: number | undefined;
   let portLengthCm: number | undefined;
   let portResonanceHz: number | undefined;
+  let passiveRadiatorTuningHz: number | undefined;
 
   if (needsMetrics) {
     f3Hz = findCutoff(responseDb, -3);
@@ -664,6 +697,7 @@ export function simulateDesign(
     spl50HzDb = valueAt(splDb, 50);
     spl80HzDb = valueAt(splDb, 80);
     maxExcursion = maxPoint(excursionMm, (point) => point.y);
+    maxPassiveRadiatorExcursion = maxPoint(passiveRadiatorExcursionMm, (point) => point.y);
     maxPort = maxPoint(portMach, (point) => point.y);
     minImpedance = minPoint(impedanceOhm, (point) => point.y);
     splLimits = calculateSplLimits({
@@ -671,6 +705,7 @@ export function simulateDesign(
       driver,
       excursionMm,
       f3Hz,
+      passiveRadiatorExcursionMm,
       portMach,
       powerW: driveInput.electricalPowerW,
       splDb,
@@ -683,18 +718,25 @@ export function simulateDesign(
     portResonanceHz = portLengthCm !== undefined && portLengthCm > 0
       ? roundTo(SPEED_OF_SOUND / (2 * (portLengthCm / 100)), 0)
       : undefined;
+    passiveRadiatorTuningHz = design.kind === "passive"
+      ? passiveRadiatorTuning(derived, design)
+      : undefined;
 
     if (driver.xmaxMm && maxExcursion.y > driver.xmaxMm) {
       notes.push(`Xmax exceeded at ${roundTo(maxExcursion.x, 1)} Hz`);
+    }
+    if (
+      design.kind === "passive" &&
+      design.passiveRadiatorXmaxMm &&
+      maxPassiveRadiatorExcursion.y > design.passiveRadiatorXmaxMm
+    ) {
+      notes.push(`Passive radiator Xmax exceeded at ${roundTo(maxPassiveRadiatorExcursion.x, 1)} Hz`);
     }
     if (design.kind === "aperiodic") {
       const impedanceSummary = aperiodicImpedanceSummary(derived, design, rawFrequencies);
       peakReductionDb = impedanceSummary.peakReductionDb;
       effectiveQ = impedanceSummary.effectiveQ;
       impedancePeakOhm = impedanceSummary.peakOhm;
-    }
-    if (design.kind === "passive") {
-      notes.push("Passive radiator uses equivalent vent approximation");
     }
     if (design.kind === "bandpass") {
       notes.push("Bandpass model is approximate");
@@ -707,6 +749,9 @@ export function simulateDesign(
     }
     if (splLimits.usable?.reason === "port") {
       notes.push(`Max SPL limited by port at ${roundTo(splLimits.usable.frequency, 1)} Hz`);
+    }
+    if (splLimits.usable?.reason === "passive") {
+      notes.push(`Max SPL limited by passive radiator at ${roundTo(splLimits.usable.frequency, 1)} Hz`);
     }
     if (splLimits.usable?.reason === "power") {
       notes.push(`Max SPL limited by Pe at ${roundTo(splLimits.usable.frequency, 1)} Hz`);
@@ -756,6 +801,7 @@ export function simulateDesign(
     phaseDeg,
     groupDelayMs: outputs.has("groupDelay") || needsMetrics ? groupDelayMs : [],
     excursionMm: outputs.has("excursion") || needsMetrics ? excursionMm : [],
+    passiveRadiatorExcursionMm: outputs.has("excursion") || needsMetrics ? passiveRadiatorExcursionMm : [],
     portMach: outputs.has("port") || needsMetrics ? portMach : [],
     impedanceOhm: outputs.has("impedance") || needsMetrics ? impedanceOhm : [],
     step,
@@ -779,6 +825,9 @@ export function simulateDesign(
       groupDelayAtF3Ms: needsMetrics && f3Hz ? valueAt(groupDelayMs, f3Hz) : undefined,
       maxExcursionMm: maxExcursion.y,
       maxExcursionHz: maxExcursion.x,
+      maxPassiveRadiatorExcursionMm: needsMetrics && design.kind === "passive" ? maxPassiveRadiatorExcursion.y : undefined,
+      maxPassiveRadiatorExcursionHz: needsMetrics && design.kind === "passive" ? maxPassiveRadiatorExcursion.x : undefined,
+      passiveRadiatorTuningHz,
       maxPortMach: needsMetrics && design.kind === "vented" ? maxPort.y : undefined,
       portLengthCm,
       portResonanceHz,
@@ -884,15 +933,22 @@ function createOptimizerDesigns(driver: SpeakerDriver): BoxDesign[] {
 
   for (const volumeFactor of [0.85, 1.25, 1.7]) {
     for (const fbRatio of [0.64, 0.78, 0.92]) {
+      const vbLiters = driver.vasL * baseVolumeFactor * volumeFactor;
+      const fbHz = driver.fsHz * fbRatio;
+      const passiveSd = defaultPassiveRadiatorSdCm2(driver);
+      const passiveCount = 1;
       addDesign({
         id: `opt-passive-${volumeFactor}-${fbRatio}`,
         name: "Optimized passive radiator",
         kind: "passive",
-        vbLiters: driver.vasL * baseVolumeFactor * volumeFactor,
-        fbHz: driver.fsHz * fbRatio,
+        vbLiters,
+        fbHz,
         ql: 9,
-        portDiameterCm: clamp(roundTo(basePortCm * 1.7, 1), 6, 22),
-        portCount: 1,
+        passiveRadiatorSdCm2: passiveSd,
+        passiveRadiatorMmsG: passiveRadiatorMassForTarget(driver, vbLiters, fbHz, passiveSd, passiveCount),
+        passiveRadiatorQms: 9,
+        passiveRadiatorXmaxMm: defaultPassiveRadiatorXmaxMm(driver),
+        passiveRadiatorCount: passiveCount,
       });
     }
   }
@@ -917,6 +973,9 @@ function scoreOptimizerCandidate(
   const excursionPenalty = driver.xmaxMm
     ? Math.max(0, metrics.maxExcursionMm / driver.xmaxMm - 0.95) * 70
     : 0;
+  const passiveExcursionPenalty = result.design.kind === "passive" && result.design.passiveRadiatorXmaxMm && metrics.maxPassiveRadiatorExcursionMm !== undefined
+    ? Math.max(0, metrics.maxPassiveRadiatorExcursionMm / result.design.passiveRadiatorXmaxMm - 0.95) * 70
+    : 0;
   const portPenalty = metrics.maxPortMach !== undefined
     ? Math.max(0, metrics.maxPortMach - 0.14) * 260
     : 0;
@@ -928,7 +987,7 @@ function scoreOptimizerCandidate(
   const outputPenalty = metrics.maxUsableSplDb
     ? clamp((112 - metrics.maxUsableSplDb) * 1.35, 0, 90)
     : 22;
-  const limitPenalty = excursionPenalty + portPenalty + portLengthPenalty;
+  const limitPenalty = excursionPenalty + passiveExcursionPenalty + portPenalty + portLengthPenalty;
   const weights = optimizerWeights(goal);
   const weightedPenalty =
     f3Penalty * weights.f3 +
@@ -1114,12 +1173,24 @@ function enclosureLoad(
   const vbM3 = Math.max(0.001, design.vbLiters / 1000);
   const cab = vbM3 / (RHO * SPEED_OF_SOUND * SPEED_OF_SOUND);
 
-  if (design.kind === "vented" || design.kind === "passive") {
+  if (design.kind === "vented") {
     const fb = Math.max(5, design.fbHz ?? driver.fsHz);
     const ql = clamp(design.ql ?? 7, 2, 30);
     const map = 1 / (Math.pow(TWO_PI * fb, 2) * cab);
     const rap = (TWO_PI * fb * map) / ql;
     const zPort = cadd(c(rap, 0), cmul(s, c(map, 0)));
+    const yBox = cmul(s, c(cab, 0));
+    const yPort = cdiv(c(1, 0), zPort);
+    const zAcoustic = cdiv(c(1, 0), cadd(yBox, yPort));
+    return {
+      zload: cmul(c(driver.sdM2 * driver.sdM2, 0), zAcoustic),
+      zAcoustic,
+      zPort,
+    };
+  }
+
+  if (design.kind === "passive") {
+    const zPort = passiveRadiatorAcousticImpedance(driver, design, cab, s);
     const yBox = cmul(s, c(cab, 0));
     const yPort = cdiv(c(1, 0), zPort);
     const zAcoustic = cdiv(c(1, 0), cadd(yBox, yPort));
@@ -1310,6 +1381,7 @@ function calculateSplLimits({
   driver,
   excursionMm,
   f3Hz,
+  passiveRadiatorExcursionMm,
   portMach,
   powerW,
   splDb,
@@ -1318,6 +1390,7 @@ function calculateSplLimits({
   driver: SpeakerDriver;
   excursionMm: Point[];
   f3Hz?: number;
+  passiveRadiatorExcursionMm: Point[];
   portMach: Point[];
   powerW: number;
   splDb: Point[];
@@ -1346,17 +1419,25 @@ function calculateSplLimits({
         return mach > 0.00001 ? powerW * Math.pow(PORT_LIMIT_MACH / mach, 2) : undefined;
       })
     : undefined;
+  const passive = design.kind === "passive" && design.passiveRadiatorXmaxMm
+    ? minimumSplLimit(indexes, splDb, powerW, "passive", (index) => {
+        const excursion = passiveRadiatorExcursionMm[index]?.y ?? 0;
+        return excursion > 0.0001
+          ? powerW * Math.pow(design.passiveRadiatorXmaxMm! / excursion, 2)
+          : undefined;
+      })
+    : undefined;
   const power = driver.peW
     ? minimumSplLimit(indexes, splDb, powerW, "power", () => driver.peW)
     : undefined;
-  const usable = [excursion, port, power]
+  const usable = [excursion, passive, port, power]
     .filter((limit): limit is SplLimitPoint => Boolean(limit))
     .reduce<SplLimitPoint | undefined>(
       (best, limit) => (!best || limit.db < best.db ? limit : best),
       undefined,
     );
 
-  return { excursion, port, power, usable };
+  return { excursion, passive, port, power, usable };
 }
 
 function minimumSplLimit(
@@ -1400,6 +1481,77 @@ function sealedQtc(driver: SpeakerDriver, vbLiters: number): number {
 
 function ventedBaseVolumeFactor(qts: number): number {
   return clamp(12 * Math.pow(clamp(qts, 0.18, 0.65), 2.4), 0.25, 1.7);
+}
+
+function defaultPassiveRadiatorSdCm2(driver: SpeakerDriver): number {
+  return roundTo(Math.max(driver.sdCm2 * 1.5, driver.sdCm2 + 20), 1);
+}
+
+function defaultPassiveRadiatorXmaxMm(driver: SpeakerDriver): number | undefined {
+  return driver.xmaxMm ? roundTo(driver.xmaxMm * 1.8, 1) : undefined;
+}
+
+function passiveRadiatorMassForTarget(
+  driver: SpeakerDriver,
+  vbLiters: number,
+  fbHz: number,
+  sdCm2 = defaultPassiveRadiatorSdCm2(driver),
+  count = 1,
+): number {
+  const cab = boxAcousticCompliance(vbLiters);
+  const sdM2 = Math.max(0.001, sdCm2 / 10000);
+  const acousticMass = 1 / (Math.pow(TWO_PI * Math.max(5, fbHz), 2) * cab);
+  return roundTo(Math.max(1, acousticMass * Math.max(1, count) * sdM2 * sdM2 * 1000), 1);
+}
+
+function boxAcousticCompliance(vbLiters: number): number {
+  const vbM3 = Math.max(0.001, vbLiters / 1000);
+  return vbM3 / (RHO * SPEED_OF_SOUND * SPEED_OF_SOUND);
+}
+
+function passiveRadiatorAcousticImpedance(
+  driver: DerivedDriver,
+  design: BoxDesign,
+  cab: number,
+  s: Complex,
+): Complex {
+  const acousticMass = passiveRadiatorAcousticMass(driver, design, cab);
+  const tuningHz = 1 / (TWO_PI * Math.sqrt(Math.max(1e-12, acousticMass * cab)));
+  const qms = clamp(design.passiveRadiatorQms ?? design.ql ?? 7, 0.5, 50);
+  const resistance = (TWO_PI * tuningHz * acousticMass) / qms;
+  return cadd(c(resistance, 0), cmul(s, c(acousticMass, 0)));
+}
+
+function passiveRadiatorAcousticMass(driver: DerivedDriver, design: BoxDesign, cab: number): number {
+  const sdM2 = passiveRadiatorSdM2(driver, design);
+  const count = passiveRadiatorCount(design);
+  const mmsKg = passiveRadiatorMmsKg(driver, design, cab);
+  return mmsKg / (count * sdM2 * sdM2);
+}
+
+function passiveRadiatorMmsKg(driver: DerivedDriver, design: BoxDesign, cab: number): number {
+  if (design.passiveRadiatorMmsG !== undefined && design.passiveRadiatorMmsG > 0) {
+    return design.passiveRadiatorMmsG / 1000;
+  }
+
+  const targetFb = Math.max(5, design.fbHz ?? driver.fsHz * 0.78);
+  const acousticMass = 1 / (Math.pow(TWO_PI * targetFb, 2) * cab);
+  const sdM2 = passiveRadiatorSdM2(driver, design);
+  return acousticMass * passiveRadiatorCount(design) * sdM2 * sdM2;
+}
+
+function passiveRadiatorSdM2(driver: DerivedDriver, design: BoxDesign): number {
+  return Math.max(0.001, (design.passiveRadiatorSdCm2 ?? driver.sdM2 * 10000 * 1.5) / 10000);
+}
+
+function passiveRadiatorCount(design: BoxDesign): number {
+  return Math.max(1, Math.round(design.passiveRadiatorCount ?? design.portCount ?? 1));
+}
+
+function passiveRadiatorTuning(driver: DerivedDriver, design: BoxDesign): number {
+  const cab = boxAcousticCompliance(design.vbLiters);
+  const acousticMass = passiveRadiatorAcousticMass(driver, design, cab);
+  return roundTo(1 / (TWO_PI * Math.sqrt(Math.max(1e-12, acousticMass * cab))), 1);
 }
 
 function aperiodicLeakAdmittance(driver: DerivedDriver, design: BoxDesign, cab: number): Complex {

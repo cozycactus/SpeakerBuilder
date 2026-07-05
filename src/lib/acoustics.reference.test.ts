@@ -253,16 +253,36 @@ describe("acoustic reference scenarios", () => {
     expectNear(invertedFb, design.fbHz!, 0.2);
   });
 
-  it("marks approximate enclosure types as approximate in analysis notes", () => {
+  it("models passive radiator mass, excursion, and output limit separately from vented ports", () => {
     const driver = presetById("usher-8945p");
-    const designs = createDefaultDesigns(driver);
-    const passive = designs.find((item) => item.name === "Passive radiator");
-    const bandpass = designs.find((item) => item.name === "Bandpass 4th order");
+    const passive = createDefaultDesigns(driver).find((item) => item.name === "Passive radiator");
     expect(passive).toBeDefined();
+    expect(passive?.passiveRadiatorSdCm2).toBeGreaterThan(driver.sdCm2);
+    expect(passive?.passiveRadiatorMmsG).toBeGreaterThan(0);
+
+    const result = simulateDesign(driver, passive!, { powerW: 25 });
+    const heavier = simulateDesign(driver, {
+      ...passive!,
+      passiveRadiatorMmsG: (passive!.passiveRadiatorMmsG ?? 1) * 1.8,
+    }, { powerW: 25 });
+    const lowXmax = simulateDesign(driver, {
+      ...passive!,
+      passiveRadiatorXmaxMm: 1,
+    }, { powerW: 25 });
+
+    expect(result.portMach.every((point) => point.y === 0)).toBe(true);
+    expect(result.passiveRadiatorExcursionMm.length).toBe(FREQUENCIES.length);
+    expect(result.metrics.maxPassiveRadiatorExcursionMm).toBeGreaterThan(0);
+    expect(result.metrics.passiveRadiatorTuningHz).toBeGreaterThan(10);
+    expect(heavier.metrics.passiveRadiatorTuningHz).toBeLessThan(result.metrics.passiveRadiatorTuningHz ?? 0);
+    expect(lowXmax.metrics.maxUsableSplReason).toBe("passive");
+  });
+
+  it("marks approximate bandpass modeling in analysis notes", () => {
+    const driver = presetById("usher-8945p");
+    const bandpass = createDefaultDesigns(driver).find((item) => item.name === "Bandpass 4th order");
     expect(bandpass).toBeDefined();
 
-    expect(simulateDesign(driver, passive!, { powerW: 1 }).metrics.notes)
-      .toContain("Passive radiator uses equivalent vent approximation");
     expect(simulateDesign(driver, bandpass!, { powerW: 1 }).metrics.notes)
       .toContain("Bandpass model is approximate");
   });
@@ -375,6 +395,7 @@ describe("acoustic reference scenarios", () => {
     expect(result.splDb).toHaveLength(FREQUENCIES.length);
     expect(result.responseDb).toHaveLength(0);
     expect(result.excursionMm).toHaveLength(0);
+    expect(result.passiveRadiatorExcursionMm).toHaveLength(0);
     expect(result.groupDelayMs).toHaveLength(0);
     expect(result.portMach).toHaveLength(0);
     expect(result.metrics.f3Hz).toBeUndefined();
