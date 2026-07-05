@@ -45,6 +45,7 @@ import {
   DriverSourceNote,
   MAX_FREQUENCY_MAX_HZ,
   MIN_FREQUENCY_MAX_HZ,
+  MeasurementTraceKind,
   Point,
   PRESET_DRIVERS,
   OptimizerCandidate,
@@ -59,6 +60,7 @@ import {
   getDesignTemplates,
   optimizeDesigns,
   parseDriversFromFile,
+  parseMeasurementTraceFile,
   resolveDriveInput,
   simulateDesign,
 } from "./lib/acoustics";
@@ -133,7 +135,9 @@ interface LibraryFilters {
 
 interface MeasurementTrace {
   color: string;
+  driverId: string;
   id: string;
+  kind: MeasurementTraceKind;
   name: string;
   points: Point[];
   tab: ChartTab;
@@ -497,8 +501,10 @@ const UI_TEXT = {
     measurements: {
       title: "Измерения",
       import: "Импорт FRD/ZMA",
-      imported: (count: number) => `Измерений: ${count}`,
-      clear: "Очистить",
+      imported: (count: number, total: number) => `Для драйвера: ${count} / всего ${total}`,
+      visibleHint: "FRD: АЧХ/SPL, ZMA: импеданс",
+      clear: "Очистить все",
+      clearCurrent: "Очистить драйвер",
     },
     corrections: {
       title: "Поправки графика",
@@ -854,8 +860,10 @@ const UI_TEXT = {
     measurements: {
       title: "Measurements",
       import: "Import FRD/ZMA",
-      imported: (count: number) => `Measurements: ${count}`,
-      clear: "Clear",
+      imported: (count: number, total: number) => `Driver: ${count} / total ${total}`,
+      visibleHint: "FRD: response/SPL, ZMA: impedance",
+      clear: "Clear all",
+      clearCurrent: "Clear driver",
     },
     corrections: {
       title: "Chart corrections",
@@ -1411,16 +1419,20 @@ function App() {
     );
   }, [activeTab, acousticOptions, chartFrequencyDomain, compareDriverIds, compareEnabled, drivers, focusedDesign, powerW, selectedDriver, splInputMode, text]);
   const chartDisplayResults = compareEnabled ? compareChartResults : adjustedChartResults;
+  const currentDriverMeasurements = useMemo(
+    () => measurements.filter((measurement) => measurement.driverId === selectedDriver.id),
+    [measurements, selectedDriver.id],
+  );
   const measurementSeries = useMemo(
-    () => measurements
-      .filter((measurement) => measurement.tab === activeTab)
+    () => currentDriverMeasurements
+      .filter((measurement) => measurementVisibleOnTab(measurement, activeTab))
       .map((measurement) => ({
         color: measurement.color,
         measurement: true,
-        name: measurement.name,
-        points: measurement.points,
+        name: measurementSeriesName(measurement, activeTab),
+        points: measurementPointsForTab(measurement, activeTab),
       })),
-    [activeTab, measurements],
+    [activeTab, currentDriverMeasurements],
   );
 
   useEffect(() => {
@@ -1567,14 +1579,22 @@ function App() {
       return;
     }
     try {
-      const trace = parseMeasurementTrace(file.name, await file.text(), measurements.length);
-      if (!trace) {
+      const parsedTrace = parseMeasurementTraceFile(file.name, await file.text());
+      if (!parsedTrace) {
         setStatus(text.requiredFieldsMissing);
         return;
       }
+      const driverMeasurements = measurements.filter((measurement) => measurement.driverId === selectedDriver.id);
+      const trace: MeasurementTrace = {
+        ...parsedTrace,
+        color: DESIGN_COLORS[(driverMeasurements.length + 6) % DESIGN_COLORS.length],
+        driverId: selectedDriver.id,
+        id: newId("measurement"),
+        tab: measurementKindToDefaultTab(parsedTrace.kind),
+      };
       setMeasurements((current) => [...current, trace]);
-      setActiveTab(trace.tab);
-      setStatus(text.measurements.imported(measurements.length + 1));
+      setActiveTab(trace.kind === "zma" ? "impedance" : activeTab === "spl" ? "spl" : "response");
+      setStatus(text.measurements.imported(driverMeasurements.length + 1, measurements.length + 1));
     } catch (error) {
       setStatus(error instanceof Error ? error.message : text.importError);
     }
@@ -2037,10 +2057,14 @@ function App() {
       return (
         <MeasurementPanel
           key={panelId}
-          count={measurements.length}
+          count={currentDriverMeasurements.length}
           dragHandle={dragHandle}
           text={text}
+          totalCount={measurements.length}
           onClear={() => setMeasurements([])}
+          onClearCurrent={() => {
+            setMeasurements((current) => current.filter((measurement) => measurement.driverId !== selectedDriver.id));
+          }}
           onDragOver={(event) => dragPanelOver("chartTools", event)}
           onDrop={(event) => dropChartPanel(panelId, event)}
         />
@@ -3304,14 +3328,18 @@ function MeasurementPanel({
   count,
   dragHandle,
   text,
+  totalCount,
   onClear,
+  onClearCurrent,
   onDragOver,
   onDrop,
 }: {
   count: number;
   dragHandle?: ReactNode;
   text: UiText;
+  totalCount: number;
   onClear: () => void;
+  onClearCurrent: () => void;
   onDragOver?: (event: ReactDragEvent<HTMLElement>) => void;
   onDrop?: (event: ReactDragEvent<HTMLElement>) => void;
 }) {
@@ -3320,12 +3348,19 @@ function MeasurementPanel({
       {dragHandle}
       <div className="mini-panel-head">
         <h3>{text.measurements.title}</h3>
-        <span>{text.measurements.imported(count)}</span>
+        <span>{text.measurements.imported(count, totalCount)}</span>
       </div>
-      <button type="button" className="text-button" disabled={count === 0} onClick={onClear}>
-        <RefreshCw size={16} />
-        {text.measurements.clear}
-      </button>
+      <p>{text.measurements.visibleHint}</p>
+      <div className="measurement-actions">
+        <button type="button" className="text-button" disabled={count === 0} onClick={onClearCurrent}>
+          <RefreshCw size={16} />
+          {text.measurements.clearCurrent}
+        </button>
+        <button type="button" className="text-button" disabled={totalCount === 0} onClick={onClear}>
+          <Trash2 size={16} />
+          {text.measurements.clear}
+        </button>
+      </div>
     </section>
   );
 }
@@ -5160,27 +5195,43 @@ function acousticCorrectionDb(frequency: number, options: AcousticOptions): numb
   return roomGain + baffle;
 }
 
-function parseMeasurementTrace(name: string, content: string, index: number): MeasurementTrace | null {
-  const lower = name.toLowerCase();
-  const tab: ChartTab = lower.endsWith(".zma") ? "impedance" : "response";
-  const points = content
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line && !line.startsWith("#") && !line.startsWith("*") && !line.startsWith(";"))
-    .map((line) => line.split(/[,\s;]+/).map(Number))
-    .filter((columns) => columns.length >= 2 && Number.isFinite(columns[0]) && Number.isFinite(columns[1]))
-    .map(([x, y]) => ({ x, y }))
-    .filter((point) => point.x > 0);
-  if (points.length < 2) {
-    return null;
+function measurementKindToDefaultTab(kind: MeasurementTraceKind): ChartTab {
+  return kind === "zma" ? "impedance" : "response";
+}
+
+function measurementVisibleOnTab(measurement: MeasurementTrace, tab: ChartTab): boolean {
+  if (measurement.kind === "zma") {
+    return tab === "impedance";
   }
-  return {
-    color: DESIGN_COLORS[(index + 6) % DESIGN_COLORS.length],
-    id: newId("measurement"),
-    name,
-    points,
-    tab,
-  };
+  return tab === "response" || tab === "spl";
+}
+
+function measurementPointsForTab(measurement: MeasurementTrace, tab: ChartTab): Point[] {
+  if (measurement.kind !== "frd" || tab !== "response") {
+    return measurement.points;
+  }
+  return normalizeFrdResponsePoints(measurement.points);
+}
+
+function measurementSeriesName(measurement: MeasurementTrace, tab: ChartTab): string {
+  if (measurement.kind === "frd" && tab === "response") {
+    return `${measurement.name} · norm`;
+  }
+  return measurement.name;
+}
+
+function normalizeFrdResponsePoints(points: Point[]): Point[] {
+  const referenceValues = points
+    .filter((point) => point.x >= 120 && point.x <= 260 && Number.isFinite(point.y))
+    .map((point) => point.y)
+    .sort((left, right) => left - right);
+  const fallbackValues = points
+    .map((point) => point.y)
+    .filter(Number.isFinite)
+    .sort((left, right) => left - right);
+  const values = referenceValues.length > 0 ? referenceValues : fallbackValues;
+  const referenceDb = values.length > 0 ? values[Math.floor(values.length / 2)] : 0;
+  return points.map((point) => ({ ...point, y: point.y - referenceDb }));
 }
 
 function downloadBlob(blob: Blob, filename: string) {
@@ -5596,7 +5647,7 @@ function parseProjectFile(content: string): ProjectState | null {
       language: parsed.language === "en" ? "en" : "ru",
       libraryFilters: normalizeLibraryFilters(parsed.libraryFilters),
       measurements: Array.isArray(parsed.measurements)
-        ? parsed.measurements.filter(isMeasurementTrace)
+        ? normalizeMeasurementTraces(parsed.measurements, selectedDriverId)
         : [],
       optimizerGoal: isOptimizerGoal(parsed.optimizerGoal) ? parsed.optimizerGoal : "balanced",
       powerW: typeof parsed.powerW === "number" && Number.isFinite(parsed.powerW)
@@ -5714,14 +5765,33 @@ function finiteOptional(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-function isMeasurementTrace(value: unknown): value is MeasurementTrace {
-  return isPlainRecord(value) &&
-    typeof value.id === "string" &&
-    typeof value.name === "string" &&
-    typeof value.color === "string" &&
-    isChartTab(value.tab) &&
-    Array.isArray(value.points) &&
-    value.points.every(isPoint);
+function normalizeMeasurementTraces(values: unknown[], fallbackDriverId: string): MeasurementTrace[] {
+  return values
+    .map((value, index) => normalizeMeasurementTrace(value, fallbackDriverId, index))
+    .filter(Boolean) as MeasurementTrace[];
+}
+
+function normalizeMeasurementTrace(value: unknown, fallbackDriverId: string, index: number): MeasurementTrace | null {
+  if (!isPlainRecord(value) || !Array.isArray(value.points) || !value.points.every(isPoint)) {
+    return null;
+  }
+  if (typeof value.id !== "string" || typeof value.name !== "string") {
+    return null;
+  }
+  const kind = isMeasurementTraceKind(value.kind)
+    ? value.kind
+    : value.tab === "impedance"
+      ? "zma"
+      : "frd";
+  return {
+    color: typeof value.color === "string" ? value.color : DESIGN_COLORS[(index + 6) % DESIGN_COLORS.length],
+    driverId: typeof value.driverId === "string" ? value.driverId : fallbackDriverId,
+    id: value.id,
+    kind,
+    name: value.name,
+    points: value.points,
+    tab: isChartTab(value.tab) ? value.tab : measurementKindToDefaultTab(kind),
+  };
 }
 
 function isPoint(value: unknown): value is Point {
@@ -5730,6 +5800,10 @@ function isPoint(value: unknown): value is Point {
     Number.isFinite(value.x) &&
     typeof value.y === "number" &&
     Number.isFinite(value.y);
+}
+
+function isMeasurementTraceKind(value: unknown): value is MeasurementTraceKind {
+  return value === "frd" || value === "zma";
 }
 
 function mergePresetDrivers(drivers: SpeakerDriver[]): SpeakerDriver[] {

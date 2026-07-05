@@ -3,6 +3,7 @@ import {
   FREQUENCIES,
   createDefaultDesigns,
   PRESET_DRIVERS,
+  parseMeasurementTraceFile,
   resolveDriveInput,
   simulateDesign,
 } from "./acoustics";
@@ -148,6 +149,42 @@ describe("acoustic reference scenarios", () => {
     }
     expect(presetById("usher-8945p").source?.notes).toContain("usherPeRms");
     expect(presetById("sb17nrxc35-8").source?.notes).toContain("sbXmaxPeakToPeak");
+  });
+
+  it("parses FRD measurement traces as sorted response points", () => {
+    const trace = parseMeasurementTraceFile("woofer.frd", [
+      "# frequency magnitude phase",
+      "200 86 -12",
+      "100, 82, -20",
+      "100 81 -21",
+      "300;88;-8",
+    ].join("\n"));
+
+    expect(trace).toMatchObject({
+      kind: "frd",
+      name: "woofer.frd",
+      points: [
+        { x: 100, y: 82 },
+        { x: 200, y: 86 },
+        { x: 300, y: 88 },
+      ],
+    });
+  });
+
+  it("parses ZMA measurement traces as impedance points", () => {
+    const trace = parseMeasurementTraceFile("woofer.zma", [
+      "* Hz Ohm Phase",
+      "20 7.1 22",
+      "35 42 -2",
+      "100 8.2 -12",
+    ].join("\n"));
+
+    expect(trace?.kind).toBe("zma");
+    expect(trace?.points).toEqual([
+      { x: 20, y: 7.1 },
+      { x: 35, y: 42 },
+      { x: 100, y: 8.2 },
+    ]);
   });
 
   it("can simulate each datasheet-backed preset without invalid metrics", () => {

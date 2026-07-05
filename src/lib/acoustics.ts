@@ -89,6 +89,14 @@ export interface Point {
   y: number;
 }
 
+export type MeasurementTraceKind = "frd" | "zma";
+
+export interface ParsedMeasurementTrace {
+  kind: MeasurementTraceKind;
+  name: string;
+  points: Point[];
+}
+
 export type SplLimitReason = "xmax" | "passive" | "port" | "power";
 
 export interface SimulationResult {
@@ -1100,6 +1108,29 @@ export function parseDriversFromFile(name: string, content: string): SpeakerDriv
 
   const rows = parseCsv(content);
   return rows.map(normalizeDriver).filter(Boolean) as SpeakerDriver[];
+}
+
+export function parseMeasurementTraceFile(name: string, content: string): ParsedMeasurementTrace | null {
+  const lower = name.toLowerCase();
+  const kind: MeasurementTraceKind = lower.endsWith(".zma") ? "zma" : "frd";
+  const points = content
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith("#") && !line.startsWith("*") && !line.startsWith(";"))
+    .map((line) => line.split(/[,\s;]+/).map(Number))
+    .filter((columns) => columns.length >= 2 && Number.isFinite(columns[0]) && Number.isFinite(columns[1]))
+    .map(([x, y]) => ({ x, y }))
+    .filter((point) => point.x > 0 && Number.isFinite(point.y))
+    .sort((left, right) => left.x - right.x);
+  const uniquePoints = points.filter((point, index) => index === 0 || point.x !== points[index - 1].x);
+  if (uniquePoints.length < 2) {
+    return null;
+  }
+  return {
+    kind,
+    name,
+    points: uniquePoints,
+  };
 }
 
 function responseAtFrequency(
