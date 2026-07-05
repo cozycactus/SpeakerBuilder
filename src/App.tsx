@@ -12,7 +12,7 @@ import {
   Trash2,
   Upload,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import type {
   CSSProperties,
   ChangeEvent,
@@ -26,6 +26,7 @@ import {
   Point,
   PRESET_DRIVERS,
   SimulationResult,
+  SimulationOutput,
   SpeakerDriver,
   createDefaultDesigns,
   createDesignFromTemplate,
@@ -39,6 +40,11 @@ type Language = "ru" | "en";
 type OptimizerGoal = "balanced" | "flat" | "deep" | "compact" | "transient" | "output";
 type ScaleMode = "linear" | "log";
 type ResizeTarget = "left" | "right";
+type AnalysisSnapshot = {
+  driver: SpeakerDriver;
+  designs: BoxDesign[];
+  powerW: number;
+};
 
 interface Series {
   name: string;
@@ -163,12 +169,15 @@ const UI_TEXT = {
     inactivePrefix: "Неактивно - ",
     language: "Язык",
     metrics: "Метрики",
+    analysisCurrent: "Метрики актуальны",
+    analysisStale: "Метрики и оптимизатор ждут пересчета",
     model: "Модель",
     noActiveDesigns: "Нет активных конфигураций.",
     portDiameter: "Порт Ø",
     ports: "Порты",
     power: "Мощность",
     requiredFieldsMissing: "Файл не содержит обязательные поля Fs, Qts, Vas, Sd, Re.",
+    recalculate: "Пересчитать",
     reset: "Сбросить",
     resizeConfigPanel: "Изменить ширину панели конфигураций",
     resizeDriverPanel: "Изменить ширину панели динамиков",
@@ -270,12 +279,15 @@ const UI_TEXT = {
     inactivePrefix: "Inactive - ",
     language: "Language",
     metrics: "Metrics",
+    analysisCurrent: "Metrics are current",
+    analysisStale: "Metrics and optimizer need recalculation",
     model: "Model",
     noActiveDesigns: "No active configurations.",
     portDiameter: "Port Ø",
     ports: "Ports",
     power: "Power",
     requiredFieldsMissing: "File must contain Fs, Qts, Vas, Sd, and Re.",
+    recalculate: "Recalculate",
     reset: "Reset",
     resizeConfigPanel: "Resize configuration panel",
     resizeDriverPanel: "Resize driver panel",
@@ -333,11 +345,17 @@ function App() {
   const [drivers, setDrivers] = useState<SpeakerDriver[]>(() => loadDrivers());
   const [selectedDriverId, setSelectedDriverId] = useState(() => drivers[0]?.id ?? "");
   const selectedDriver = drivers.find((driver) => driver.id === selectedDriverId) ?? drivers[0];
+  const deferredSelectedDriver = useDeferredValue(selectedDriver);
   const [designs, setDesigns] = useState<BoxDesign[]>(() => createDefaultDesigns(selectedDriver));
+  const deferredDesigns = useDeferredValue(designs);
+  const [analysisSnapshot, setAnalysisSnapshot] = useState<AnalysisSnapshot>(() =>
+    createAnalysisSnapshot(selectedDriver, designs, 25),
+  );
   const [focusedDesignId, setFocusedDesignId] = useState("");
   const [activeTab, setActiveTab] = useState<ChartTab>("response");
   const [optimizerGoal, setOptimizerGoal] = useState<OptimizerGoal>("balanced");
   const [powerW, setPowerW] = useState(25);
+  const deferredPowerW = useDeferredValue(powerW);
   const [status, setStatus] = useState("");
   const [leftPanelWidth, setLeftPanelWidth] = useState(() =>
     loadPanelWidth(LEFT_PANEL_STORAGE_KEY, LEFT_PANEL_LIMITS),
@@ -418,6 +436,7 @@ function App() {
     const nextDesigns = createDefaultDesigns(selectedDriver);
     setDesigns(nextDesigns);
     setFocusedDesignId(nextDesigns.find((design) => design.enabled)?.id ?? nextDesigns[0]?.id ?? "");
+    setAnalysisSnapshot(createAnalysisSnapshot(selectedDriver, nextDesigns, powerW));
   }, [selectedDriver?.id]);
 
   useEffect(() => {
@@ -428,18 +447,40 @@ function App() {
   }, [designs, focusedDesignId]);
 
   const templates = useMemo(() => getDesignTemplates(selectedDriver), [selectedDriver]);
-  const enabledResults = useMemo(
+  const activeDesignCount = designs.filter((design) => design.enabled).length;
+  const liveChartDesigns = useMemo(() => {
+    return deferredDesigns.filter((design) => design.enabled);
+  }, [deferredDesigns]);
+  const chartResults = useMemo(
     () =>
-      designs
+      liveChartDesigns.map((design) =>
+        simulateDesign(deferredSelectedDriver, design, {
+          powerW: deferredPowerW,
+          outputs: outputsForChartTab(activeTab),
+        }),
+      ),
+    [activeTab, deferredPowerW, deferredSelectedDriver, liveChartDesigns],
+  );
+  const analysisResults = useMemo(
+    () =>
+      analysisSnapshot.designs
         .filter((design) => design.enabled)
-        .map((design) => simulateDesign(selectedDriver, design, { powerW })),
-    [designs, powerW, selectedDriver],
+        .map((design) =>
+          simulateDesign(analysisSnapshot.driver, design, {
+            powerW: analysisSnapshot.powerW,
+          }),
+        ),
+    [analysisSnapshot],
   );
+  const analysisStale =
+    analysisSnapshot.driver !== selectedDriver ||
+    analysisSnapshot.designs !== designs ||
+    analysisSnapshot.powerW !== powerW;
   const optimizerCandidates = useMemo(
-    () => optimizeDesigns(selectedDriver, powerW, optimizerGoal),
-    [optimizerGoal, powerW, selectedDriver],
+    () => optimizeDesigns(analysisSnapshot.driver, analysisSnapshot.powerW, optimizerGoal),
+    [analysisSnapshot, optimizerGoal],
   );
-  const allWarnings = enabledResults.flatMap((result) =>
+  const allWarnings = analysisResults.flatMap((result) =>
     result.metrics.notes.map((note) =>
       `${displayDesignName(result.design.name, text)}: ${translateNote(note, text)}`,
     ),
@@ -510,6 +551,10 @@ function App() {
     link.download = "speaker-drivers.json";
     link.click();
     URL.revokeObjectURL(url);
+  }
+
+  function recalculateAnalysis() {
+    setAnalysisSnapshot(createAnalysisSnapshot(selectedDriver, designs, powerW));
   }
 
   function updateDesign(id: string, patch: Partial<BoxDesign>) {
@@ -588,7 +633,7 @@ function App() {
     );
   }
 
-  const chartProps = getChartProps(activeTab, enabledResults, selectedDriver, focusedDesignId, text);
+  const chartProps = getChartProps(activeTab, chartResults, deferredSelectedDriver, focusedDesignId, text);
   const layoutStyle = {
     "--left-panel-width": `${leftPanelWidth}px`,
     "--right-panel-width": `${rightPanelWidth}px`,
@@ -808,7 +853,7 @@ function App() {
                 <div className="config-rail-header">
                   <div>
                     <h2>{text.configs}</h2>
-                    <span>{text.activeCount(enabledResults.length, designs.length)}</span>
+                    <span>{text.activeCount(activeDesignCount, designs.length)}</span>
                   </div>
                   <SlidersHorizontal size={18} />
                 </div>
@@ -853,11 +898,19 @@ function App() {
             <div className="section-title">
               <div>
                 <h2>{text.metrics}</h2>
-                <span>{text.activeCount(enabledResults.length)}</span>
+                <span>{text.activeCount(analysisResults.length)}</span>
               </div>
               <Activity size={18} />
             </div>
+            <div className={`analysis-status ${analysisStale ? "stale" : ""}`}>
+              <span>{analysisStale ? text.analysisStale : text.analysisCurrent}</span>
+              <button type="button" className="text-button" onClick={recalculateAnalysis}>
+                <RefreshCw size={16} />
+                {text.recalculate}
+              </button>
+            </div>
             <OptimizerPanel
+              disabled={analysisStale}
               candidates={optimizerCandidates}
               goal={optimizerGoal}
               text={text}
@@ -867,7 +920,7 @@ function App() {
             <MetricsTable
               boxLabels={text.boxLabels}
               focusedDesignId={focusedDesignId}
-              results={enabledResults}
+              results={analysisResults}
               text={text}
             />
             {allWarnings.length > 0 ? (
@@ -1041,12 +1094,14 @@ function NumberField({
 }
 
 function OptimizerPanel({
+  disabled,
   candidates,
   goal,
   text,
   onApply,
   onGoalChange,
 }: {
+  disabled: boolean;
   candidates: OptimizerCandidate[];
   goal: OptimizerGoal;
   text: UiText;
@@ -1086,7 +1141,7 @@ function OptimizerPanel({
                 <h3>{text.boxLabels[candidate.design.kind]}</h3>
                 <span>{`${text.optimizer.score} ${fmt(candidate.score, 0)}`}</span>
               </div>
-              <button type="button" className="text-button" onClick={() => onApply(candidate)}>
+              <button type="button" className="text-button" disabled={disabled} onClick={() => onApply(candidate)}>
                 <Target size={16} />
                 {text.optimizer.apply}
               </button>
@@ -1277,6 +1332,37 @@ function LineChart({
       </div>
     </div>
   );
+}
+
+function outputsForChartTab(tab: ChartTab): SimulationOutput[] {
+  if (tab === "response") {
+    return ["response"];
+  }
+  if (tab === "excursion") {
+    return ["excursion"];
+  }
+  if (tab === "groupDelay") {
+    return ["groupDelay"];
+  }
+  if (tab === "step") {
+    return ["step"];
+  }
+  if (tab === "phase") {
+    return ["phase"];
+  }
+  if (tab === "impedance") {
+    return ["impedance"];
+  }
+
+  return ["port"];
+}
+
+function createAnalysisSnapshot(
+  driver: SpeakerDriver,
+  designs: BoxDesign[],
+  powerW: number,
+): AnalysisSnapshot {
+  return { driver, designs, powerW };
 }
 
 function getChartProps(

@@ -244,6 +244,13 @@ h2 {
   font-weight: 650;
 }
 
+.text-button:disabled {
+  cursor: not-allowed;
+  border-color: #d8e0ea;
+  background: #eef2f6;
+  color: #93a1b2;
+}
+
 .hidden-input {
   display: none;
 }
@@ -522,6 +529,32 @@ h2 {
   align-items: center;
   gap: 8px;
   font-weight: 700;
+}
+
+.analysis-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: -2px 0 14px;
+  border: 1px solid #dce3ec;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #506074;
+  padding: 8px 10px;
+  font-size: 13px;
+}
+
+.analysis-status.stale {
+  border-color: #fed7aa;
+  background: #fff7ed;
+  color: #9a3412;
+}
+
+.analysis-status .text-button {
+  height: 30px;
+  padding: 0 9px;
+  font-size: 12px;
 }
 
 .warning-strip {

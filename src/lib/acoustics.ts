@@ -38,7 +38,18 @@ export interface BoxDesign {
 
 export interface SimulationOptions {
   powerW: number;
+  outputs?: SimulationOutput[];
 }
+
+export type SimulationOutput =
+  | "response"
+  | "phase"
+  | "groupDelay"
+  | "excursion"
+  | "port"
+  | "impedance"
+  | "step"
+  | "metrics";
 
 export interface Point {
   x: number;
@@ -106,6 +117,15 @@ interface ResponseAtFrequency {
 const RHO = 1.204;
 const SPEED_OF_SOUND = 343;
 const TWO_PI = Math.PI * 2;
+const DEFAULT_SIMULATION_OUTPUTS: SimulationOutput[] = [
+  "response",
+  "phase",
+  "groupDelay",
+  "excursion",
+  "port",
+  "impedance",
+  "metrics",
+];
 
 export const FREQUENCIES = logspace(10, 500, 220);
 
@@ -315,6 +335,14 @@ export function simulateDesign(
 ): SimulationResult {
   const derived = deriveDriver(driver);
   const notes = [...derived.warnings];
+  const outputs = new Set(options.outputs ?? DEFAULT_SIMULATION_OUTPUTS);
+  const needsMetrics = outputs.has("metrics");
+  const needsResponse = outputs.has("response") || needsMetrics;
+  const needsPhase = outputs.has("phase") || outputs.has("groupDelay") || needsMetrics;
+  const needsGroupDelay = outputs.has("groupDelay") || needsMetrics;
+  const needsExcursion = outputs.has("excursion") || needsMetrics;
+  const needsPort = outputs.has("port") || needsMetrics;
+  const needsImpedance = outputs.has("impedance") || needsMetrics;
   const voltageRms = Math.sqrt(Math.max(0.1, options.powerW) * derived.reOhm);
   const raw = FREQUENCIES.map((frequency) => ({
     frequency,
@@ -326,87 +354,112 @@ export function simulateDesign(
     magnitude: cabs(item.response.acoustic),
   })));
 
-  const responseDb = raw.map((item) => ({
-    x: item.frequency,
-    y: db(cabs(item.response.acoustic) / refMagnitude),
-  }));
-  const phaseRad = unwrapPhase(raw.map((item) => carg(item.response.acoustic)));
-  const phaseDeg = raw.map((item, index) => ({
-    x: item.frequency,
-    y: (phaseRad[index] * 180) / Math.PI,
-  }));
-  const groupDelayMs = raw.map((item, index) => ({
-    x: item.frequency,
-    y: groupDelayAt(index, raw.map((point) => point.frequency), phaseRad),
-  }));
-  const excursionMm = raw.map((item) => {
-    const omega = TWO_PI * item.frequency;
-    return {
-      x: item.frequency,
-      y: (cabs(item.response.coneVelocity) * voltageRms * 1000) / omega,
-    };
-  });
+  const responseDb = needsResponse
+    ? raw.map((item) => ({
+        x: item.frequency,
+        y: db(cabs(item.response.acoustic) / refMagnitude),
+      }))
+    : [];
+  const rawFrequencies = raw.map((point) => point.frequency);
+  const phaseRad = needsPhase ? unwrapPhase(raw.map((item) => carg(item.response.acoustic))) : [];
+  const phaseDeg = outputs.has("phase")
+    ? raw.map((item, index) => ({
+        x: item.frequency,
+        y: (phaseRad[index] * 180) / Math.PI,
+      }))
+    : [];
+  const groupDelayMs = needsGroupDelay
+    ? raw.map((item, index) => ({
+        x: item.frequency,
+        y: groupDelayAt(index, rawFrequencies, phaseRad),
+      }))
+    : [];
+  const excursionMm = needsExcursion
+    ? raw.map((item) => {
+        const omega = TWO_PI * item.frequency;
+        return {
+          x: item.frequency,
+          y: (cabs(item.response.coneVelocity) * voltageRms * 1000) / omega,
+        };
+      })
+    : [];
   const portArea = getPortAreaM2(design);
-  const portMach = raw.map((item) => {
-    const velocity =
-      portArea > 0
-        ? (cabs(item.response.portVolumeVelocity) * voltageRms) / portArea
-        : 0;
-    return { x: item.frequency, y: velocity / SPEED_OF_SOUND };
-  });
-  const impedanceOhm = raw.map((item) => ({
-    x: item.frequency,
-    y: cabs(item.response.inputImpedance),
-  }));
-  const step = createStepResponse(derived, design, refMagnitude);
-  const f3Hz = findCutoff(responseDb, -3);
-  const f6Hz = findCutoff(responseDb, -6);
-  const peak = maxPoint(responseDb, (point) => point.y);
-  const maxExcursion = maxPoint(excursionMm, (point) => point.y);
-  const maxPort = maxPoint(portMach, (point) => point.y);
-  const minImpedance = minPoint(impedanceOhm, (point) => point.y);
-  const qtc = design.kind === "sealed" || design.kind === "aperiodic"
-    ? sealedQtc(driver, design.vbLiters)
-    : undefined;
-  const fcHz = qtc ? driver.fsHz * Math.sqrt(1 + driver.vasL / design.vbLiters) : undefined;
-  const portLengthCm = design.kind === "vented" ? portLength(design) : undefined;
+  const portMach = needsPort
+    ? raw.map((item) => {
+        const velocity =
+          portArea > 0
+            ? (cabs(item.response.portVolumeVelocity) * voltageRms) / portArea
+            : 0;
+        return { x: item.frequency, y: velocity / SPEED_OF_SOUND };
+      })
+    : [];
+  const impedanceOhm = needsImpedance
+    ? raw.map((item) => ({
+        x: item.frequency,
+        y: cabs(item.response.inputImpedance),
+      }))
+    : [];
+  const step = outputs.has("step") ? createStepResponse(derived, design, refMagnitude) : [];
+  let f3Hz: number | undefined;
+  let f6Hz: number | undefined;
+  let peak = { x: 0, y: 0 };
+  let maxExcursion = { x: 0, y: 0 };
+  let maxPort = { x: 0, y: 0 };
+  let minImpedance = { x: 0, y: 0 };
+  let qtc: number | undefined;
+  let fcHz: number | undefined;
+  let portLengthCm: number | undefined;
 
-  if (driver.xmaxMm && maxExcursion.y > driver.xmaxMm) {
-    notes.push(`Xmax exceeded at ${roundTo(maxExcursion.x, 1)} Hz`);
-  }
-  if (design.kind === "vented" && maxPort.y > 0.16) {
-    notes.push(`High vent air speed: Mach ${roundTo(maxPort.y, 2)}`);
-  }
-  if (design.kind === "vented" && portLengthCm !== undefined && portLengthCm <= 1) {
-    notes.push("Vent is too short for this diameter/tuning");
-  }
-  if ((design.kind === "vented" || design.kind === "passive") && driver.qts > 0.58) {
-    notes.push("High Qts driver may prefer sealed or aperiodic loading");
-  }
-  if (design.vbLiters <= 0 || Number.isNaN(design.vbLiters)) {
-    notes.push("Invalid box volume");
+  if (needsMetrics) {
+    f3Hz = findCutoff(responseDb, -3);
+    f6Hz = findCutoff(responseDb, -6);
+    peak = maxPoint(responseDb, (point) => point.y);
+    maxExcursion = maxPoint(excursionMm, (point) => point.y);
+    maxPort = maxPoint(portMach, (point) => point.y);
+    minImpedance = minPoint(impedanceOhm, (point) => point.y);
+    qtc = design.kind === "sealed" || design.kind === "aperiodic"
+      ? sealedQtc(driver, design.vbLiters)
+      : undefined;
+    fcHz = qtc ? driver.fsHz * Math.sqrt(1 + driver.vasL / design.vbLiters) : undefined;
+    portLengthCm = design.kind === "vented" ? portLength(design) : undefined;
+
+    if (driver.xmaxMm && maxExcursion.y > driver.xmaxMm) {
+      notes.push(`Xmax exceeded at ${roundTo(maxExcursion.x, 1)} Hz`);
+    }
+    if (design.kind === "vented" && maxPort.y > 0.16) {
+      notes.push(`High vent air speed: Mach ${roundTo(maxPort.y, 2)}`);
+    }
+    if (design.kind === "vented" && portLengthCm !== undefined && portLengthCm <= 1) {
+      notes.push("Vent is too short for this diameter/tuning");
+    }
+    if ((design.kind === "vented" || design.kind === "passive") && driver.qts > 0.58) {
+      notes.push("High Qts driver may prefer sealed or aperiodic loading");
+    }
+    if (design.vbLiters <= 0 || Number.isNaN(design.vbLiters)) {
+      notes.push("Invalid box volume");
+    }
   }
 
   return {
     design,
-    responseDb,
+    responseDb: outputs.has("response") || needsMetrics ? responseDb : [],
     phaseDeg,
-    groupDelayMs,
-    excursionMm,
-    portMach,
-    impedanceOhm,
+    groupDelayMs: outputs.has("groupDelay") || needsMetrics ? groupDelayMs : [],
+    excursionMm: outputs.has("excursion") || needsMetrics ? excursionMm : [],
+    portMach: outputs.has("port") || needsMetrics ? portMach : [],
+    impedanceOhm: outputs.has("impedance") || needsMetrics ? impedanceOhm : [],
     step,
     metrics: {
       f3Hz,
       f6Hz,
       peakDb: peak.y,
       peakHz: peak.x,
-      groupDelay30Ms: valueAt(groupDelayMs, 30),
-      groupDelay40Ms: valueAt(groupDelayMs, 40),
-      groupDelayAtF3Ms: f3Hz ? valueAt(groupDelayMs, f3Hz) : undefined,
+      groupDelay30Ms: needsMetrics ? valueAt(groupDelayMs, 30) : undefined,
+      groupDelay40Ms: needsMetrics ? valueAt(groupDelayMs, 40) : undefined,
+      groupDelayAtF3Ms: needsMetrics && f3Hz ? valueAt(groupDelayMs, f3Hz) : undefined,
       maxExcursionMm: maxExcursion.y,
       maxExcursionHz: maxExcursion.x,
-      maxPortMach: design.kind === "vented" ? maxPort.y : undefined,
+      maxPortMach: needsMetrics && design.kind === "vented" ? maxPort.y : undefined,
       portLengthCm,
       minImpedanceOhm: minImpedance.y,
       qtc,
