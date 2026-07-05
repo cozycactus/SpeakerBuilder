@@ -207,6 +207,14 @@ describe("acoustic reference scenarios", () => {
     expect(Math.abs(nearestY(smallVent.responseDb, driver.fsHz) - nearestY(largeVent.responseDb, driver.fsHz))).toBeGreaterThan(0.15);
   });
 
+  it("changes aperiodic damping when damping Ql changes", () => {
+    const { design, driver } = designByName(0, "Aperiodic damped");
+    const lightDamping = simulateDesign(driver, { ...design, ql: 4.5 }, { powerW: 25 });
+    const heavyDamping = simulateDesign(driver, { ...design, ql: 0.8 }, { powerW: 25 });
+
+    expect(Math.abs(nearestY(lightDamping.responseDb, driver.fsHz) - nearestY(heavyDamping.responseDb, driver.fsHz))).toBeGreaterThan(0.15);
+  });
+
   it("can calculate only the SPL graph without filling unrelated series", () => {
     const { design, driver } = designByName(0, "Vented QB3");
     const result = simulateDesign(driver, design, { powerW: 25, outputs: ["spl"] });

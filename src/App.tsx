@@ -289,6 +289,12 @@ const DEFAULT_CHART_Y_RANGES = {
   port: [0, 0.2],
 } satisfies Record<ChartTab, [number, number]>;
 const optimizerGoals: OptimizerGoal[] = ["balanced", "flat", "deep", "compact", "transient", "output"];
+const APERIODIC_DAMPING_PRESETS = [
+  { key: "light", ql: 4.5 },
+  { key: "medium", ql: 1.7 },
+  { key: "heavy", ql: 0.8 },
+] as const;
+type AperiodicDampingPresetKey = (typeof APERIODIC_DAMPING_PRESETS)[number]["key"];
 
 const UI_TEXT = {
   ru: {
@@ -508,6 +514,12 @@ const UI_TEXT = {
     analysisCalculating: "Расчет...",
     analysisStale: "Метрики и оптимизатор ждут пересчета",
     aperiodicDamping: "Демпф. Ql",
+    aperiodicDampingPreset: "Демпф.",
+    aperiodicDampingPresets: {
+      light: "Легкий",
+      medium: "Средний",
+      heavy: "Сильный",
+    } satisfies Record<AperiodicDampingPresetKey, string>,
     aperiodicVentDiameter: "Отверстие Ø",
     aperiodicVentShape: "Отверстие",
     aperiodicVentCount: "Отверстия",
@@ -805,6 +817,12 @@ const UI_TEXT = {
     analysisCalculating: "Calculating...",
     analysisStale: "Metrics and optimizer need recalculation",
     aperiodicDamping: "Damping Ql",
+    aperiodicDampingPreset: "Damping",
+    aperiodicDampingPresets: {
+      light: "Light",
+      medium: "Medium",
+      heavy: "Heavy",
+    } satisfies Record<AperiodicDampingPresetKey, string>,
     aperiodicVentDiameter: "Vent Ø",
     aperiodicVentShape: "Vent",
     aperiodicVentCount: "Vents",
@@ -2430,6 +2448,9 @@ function DesignEditor({
   const ventCountLabel = hasAperiodicVent ? text.aperiodicVentCount : text.ports;
   const dampingLabel = hasAperiodicVent ? text.aperiodicDamping : "Ql";
   const aperiodicSummary = hasAperiodicVent ? aperiodicVentSummary(design, driver, text) : undefined;
+  const selectedDampingPreset = hasAperiodicVent
+    ? selectedAperiodicDampingPreset(design.ql ?? 1.7)
+    : undefined;
 
   return (
     <article className={`design-card ${design.enabled ? "" : "muted"} ${focused ? "focused" : ""}`}>
@@ -2477,6 +2498,25 @@ function DesignEditor({
         ) : null}
         {design.kind !== "sealed" && design.kind !== "infinite" ? (
           <NumberField label={dampingLabel} unit="" value={design.ql ?? (design.kind === "aperiodic" ? 1.7 : 7)} min={0.1} step="0.1" onChange={(ql) => onChange({ ql })} />
+        ) : null}
+        {hasAperiodicVent ? (
+          <div className="aperiodic-preset-control" role="group" aria-label={text.aperiodicDampingPreset}>
+            <span>{text.aperiodicDampingPreset}</span>
+            <div className="aperiodic-preset-buttons">
+              {APERIODIC_DAMPING_PRESETS.map((preset) => (
+                <button
+                  key={preset.key}
+                  type="button"
+                  className={selectedDampingPreset === preset.key ? "active" : ""}
+                  aria-pressed={selectedDampingPreset === preset.key}
+                  title={`Ql ${formatCompactNumber(preset.ql)}`}
+                  onClick={() => onChange({ ql: preset.ql })}
+                >
+                  {text.aperiodicDampingPresets[preset.key]}
+                </button>
+              ))}
+            </div>
+          </div>
         ) : null}
         {hasVentGeometry ? (
           <>
@@ -2620,6 +2660,10 @@ function designKindPatch(kind: BoxKind, design: BoxDesign, driver: SpeakerDriver
 function defaultAperiodicVentDiameterCm(driver: SpeakerDriver): number {
   const targetAreaCm2 = Math.max(0.5, driver.sdCm2 * 0.1);
   return roundTo(Math.sqrt((targetAreaCm2 * 4) / Math.PI), 1);
+}
+
+function selectedAperiodicDampingPreset(ql: number): AperiodicDampingPresetKey | undefined {
+  return APERIODIC_DAMPING_PRESETS.find((preset) => Math.abs(preset.ql - ql) <= 0.05)?.key;
 }
 
 function aperiodicVentSummary(

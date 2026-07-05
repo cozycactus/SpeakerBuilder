@@ -1652,6 +1652,54 @@ h2 {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.aperiodic-preset-control {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: 6px;
+}
+
+.aperiodic-preset-control > span {
+  color: #66758a;
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.aperiodic-preset-buttons {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  min-width: 0;
+}
+
+.aperiodic-preset-buttons button {
+  min-width: 0;
+  min-height: 34px;
+  border: 1px solid #cfd8e5;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #344155;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 850;
+  overflow: hidden;
+  padding: 0 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aperiodic-preset-buttons button:hover {
+  border-color: #94a3b8;
+}
+
+.aperiodic-preset-buttons button.active {
+  border-color: #0d9488;
+  background: #e6f7f4;
+  color: #0f766e;
+}
+
 .design-readout {
   display: grid;
   grid-column: 1 / -1;
