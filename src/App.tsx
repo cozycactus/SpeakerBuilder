@@ -87,22 +87,22 @@ const UI_TEXT = {
     add: "Добавить",
     activeCount: (active: number, total?: number) =>
       total === undefined ? `${active} активно` : `${active} активно / ${total}`,
+    appTitle: "Конструктор АС",
     appSubtitle: "расчет корпусов по T/S",
-    bandpass: "Bandpass",
     boxLabels: {
       sealed: "Закрытый",
-      vented: "ФИ",
+      vented: "Фазоинвертор",
       passive: "Пассивный радиатор",
       aperiodic: "Апериодический",
-      infinite: "Infinite baffle",
-      bandpass: "Bandpass",
+      infinite: "Бесконечный экран",
+      bandpass: "Бандпасс",
     } satisfies Record<BoxKind, string>,
     chartAria: "Графики",
     chartTabs: {
       response: "АЧХ",
       excursion: "Ход",
-      groupDelay: "Group delay",
-      step: "Step",
+      groupDelay: "Групповая задержка",
+      step: "Переходная",
       phase: "Фаза",
       impedance: "Импеданс",
       port: "Порт",
@@ -110,15 +110,34 @@ const UI_TEXT = {
     chartTitles: {
       response: "АЧХ",
       excursion: "Ход диффузора",
-      groupDelay: "Group delay",
-      step: "Step response",
+      groupDelay: "Групповая задержка",
+      step: "Переходная характеристика",
       phase: "Фаза",
       impedance: "Импеданс",
       port: "Скорость в порту",
     } satisfies Record<ChartTab, string>,
     configs: "Конфигурации",
+    copySuffix: "копия",
     delete: "Удалить",
     design: "Конфигурация",
+    designNames: {
+      "Closed Bessel Qtc 0.58": "Закрытый Бессель Qtc 0.58",
+      "Closed Butterworth Qtc 0.71": "Закрытый Баттерворт Qtc 0.71",
+      "Vented QB3": "ФИ QB3",
+      "Vented EBS": "ФИ EBS",
+      "Closed compact Qtc 0.90": "Закрытый компактный Qtc 0.90",
+      "Vented BB4": "ФИ BB4",
+      "Vented SBB4": "ФИ SBB4",
+      "Passive radiator": "Пассивный радиатор",
+      "Aperiodic damped": "Апериодический демпфированный",
+      "Bandpass 4th order": "Бандпасс 4-го порядка",
+    } satisfies Record<string, string>,
+    driverNames: {
+      "6.5 inch midwoofer": "6.5\" мидвуфер",
+      "10 inch woofer": "10\" вуфер",
+      "12 inch subwoofer": "12\" сабвуфер",
+      "Imported driver": "Импортированный динамик",
+    } satisfies Record<string, string>,
     drivers: "Динамики",
     duplicate: "Дублировать",
     excursion: "Ход",
@@ -138,10 +157,19 @@ const UI_TEXT = {
     reset: "Сбросить",
     resizeConfigPanel: "Изменить ширину панели конфигураций",
     resizeDriverPanel: "Изменить ширину панели динамиков",
+    notes: {
+      highQts: "Динамику с высоким Qts может лучше подойти закрытый или апериодический корпус",
+      highVentAirSpeed: (mach: string) => `Высокая скорость воздуха в порту: Mach ${mach}`,
+      invalidBoxVolume: "Некорректный объем корпуса",
+      qesEstimated: "Qes оценен по Qts",
+      qmsEstimated: "Qms оценен по Qts/Qes",
+      ventTooShort: "Порт слишком короткий для этого диаметра/настройки",
+      xmaxExceeded: (frequency: string) => `Превышен Xmax на ${frequency} Hz`,
+    },
     table: {
       design: "Конфигурация",
       excursion: "Ход",
-      gd: "GD 30 / 40",
+      gd: "ГЗ 30 / 40",
       peak: "Пик",
       port: "Порт",
       tune: "Настройка",
@@ -154,8 +182,8 @@ const UI_TEXT = {
     add: "Add",
     activeCount: (active: number, total?: number) =>
       total === undefined ? `${active} active` : `${active} active / ${total}`,
+    appTitle: "Speaker Builder",
     appSubtitle: "T/S enclosure workbench",
-    bandpass: "Bandpass",
     boxLabels: {
       sealed: "Closed",
       vented: "Vented",
@@ -184,8 +212,11 @@ const UI_TEXT = {
       port: "Port velocity",
     } satisfies Record<ChartTab, string>,
     configs: "Configurations",
+    copySuffix: "copy",
     delete: "Delete",
     design: "Design",
+    designNames: {} satisfies Record<string, string>,
+    driverNames: {} satisfies Record<string, string>,
     drivers: "Drivers",
     duplicate: "Duplicate",
     excursion: "Excursion",
@@ -205,6 +236,15 @@ const UI_TEXT = {
     reset: "Reset",
     resizeConfigPanel: "Resize configuration panel",
     resizeDriverPanel: "Resize driver panel",
+    notes: {
+      highQts: "High Qts driver may prefer sealed or aperiodic loading",
+      highVentAirSpeed: (mach: string) => `High vent air speed: Mach ${mach}`,
+      invalidBoxVolume: "Invalid box volume",
+      qesEstimated: "Qes estimated from Qts",
+      qmsEstimated: "Qms estimated from Qts/Qes",
+      ventTooShort: "Vent is too short for this diameter/tuning",
+      xmaxExceeded: (frequency: string) => `Xmax exceeded at ${frequency} Hz`,
+    },
     table: {
       design: "Design",
       excursion: "Excursion",
@@ -244,7 +284,8 @@ function App() {
   useEffect(() => {
     localStorage.setItem(LANGUAGE_STORAGE_KEY, language);
     document.documentElement.lang = language;
-  }, [language]);
+    document.title = text.appTitle;
+  }, [language, text.appTitle]);
 
   useEffect(() => {
     localStorage.setItem(DRIVER_STORAGE_KEY, JSON.stringify(drivers));
@@ -327,7 +368,9 @@ function App() {
     [designs, powerW, selectedDriver],
   );
   const allWarnings = enabledResults.flatMap((result) =>
-    result.metrics.notes.map((note) => `${result.design.name}: ${note}`),
+    result.metrics.notes.map((note) =>
+      `${displayDesignName(result.design.name, text)}: ${translateNote(note, text)}`,
+    ),
   );
 
   function updateDriverField(key: keyof SpeakerDriver, value: string) {
@@ -349,7 +392,7 @@ function App() {
     const next: SpeakerDriver = {
       ...selectedDriver,
       id: newId("driver"),
-      name: `${selectedDriver.name} copy`,
+      name: `${displayDriverName(selectedDriver, text)} ${text.copySuffix}`,
     };
     setDrivers((current) => [...current, next]);
     setSelectedDriverId(next.id);
@@ -426,7 +469,7 @@ function App() {
     const next = {
       ...design,
       id: newId("design"),
-      name: `${design.name} copy`,
+      name: `${displayDesignName(design.name, text)} ${text.copySuffix}`,
       enabled: true,
     };
     setDesigns((current) => [
@@ -517,7 +560,7 @@ function App() {
             <Speaker size={22} />
           </div>
           <div>
-            <h1>Speaker Builder</h1>
+            <h1>{text.appTitle}</h1>
             <p>{text.appSubtitle}</p>
           </div>
         </div>
@@ -591,7 +634,7 @@ function App() {
             >
               {drivers.map((driver) => (
                 <option key={driver.id} value={driver.id}>
-                  {driver.name}
+                  {displayDriverName(driver, text)}
                 </option>
               ))}
             </select>
@@ -603,7 +646,7 @@ function App() {
               <span>{text.model}</span>
               <input
                 type="text"
-                value={selectedDriver.name}
+                value={displayDriverName(selectedDriver, text)}
                 onChange={(event) => updateDriverField("name", event.target.value)}
               />
             </label>
@@ -641,7 +684,7 @@ function App() {
             <div className="chart-header">
               <div>
                 <h2>{chartProps.title}</h2>
-                <span>{selectedDriver.name}</span>
+                <span>{displayDriverName(selectedDriver, text)}</span>
               </div>
               <div className="tabs" role="tablist" aria-label={text.chartAria}>
                 {chartTabs.map((tab) => (
@@ -686,7 +729,7 @@ function App() {
                     {designs.map((design) => (
                       <option key={design.id} value={design.id}>
                         {design.enabled ? "" : text.inactivePrefix}
-                        {design.name}
+                        {displayDesignName(design.name, text)}
                       </option>
                     ))}
                   </select>
@@ -815,7 +858,7 @@ function DesignEditor({
         <input
           className="design-name"
           type="text"
-          value={design.name}
+          value={displayDesignName(design.name, text)}
           onChange={(event) => onChange({ name: event.target.value })}
         />
         <button type="button" className="icon-button" onClick={onDuplicate} title={text.duplicate}>
@@ -937,7 +980,7 @@ function MetricsTable({
             <tr className={result.design.id === focusedDesignId ? "focused-row" : ""} key={result.design.id}>
               <td>
                 <span className="color-dot" style={{ background: result.design.color }} />
-                {result.design.name}
+                {displayDesignName(result.design.name, text)}
               </td>
               <td>{fmt(result.design.vbLiters, 1)} L</td>
               <td>
@@ -1093,7 +1136,7 @@ function getChartProps(
         { y: -3, label: "-3" },
         { y: -6, label: "-6" },
       ],
-      series: toSeriesList(results, "responseDb", focusedDesignId),
+      series: toSeriesList(results, "responseDb", focusedDesignId, text),
     };
   }
   if (tab === "excursion") {
@@ -1105,7 +1148,7 @@ function getChartProps(
       yLabel: "mm",
       yDomain: [0, niceCeil(max * 1.18)],
       referenceLines: driver.xmaxMm ? [{ y: driver.xmaxMm, label: "Xmax" }] : [],
-      series: toSeriesList(results, "excursionMm", focusedDesignId),
+      series: toSeriesList(results, "excursionMm", focusedDesignId, text),
     };
   }
   if (tab === "groupDelay") {
@@ -1116,7 +1159,7 @@ function getChartProps(
       title: text.chartTitles.groupDelay,
       yLabel: "ms",
       yDomain: [0, niceCeil(max * 1.12)],
-      series: toSeriesList(results, "groupDelayMs", focusedDesignId),
+      series: toSeriesList(results, "groupDelayMs", focusedDesignId, text),
     };
   }
   if (tab === "step") {
@@ -1128,7 +1171,7 @@ function getChartProps(
       xDomain: [0, 250],
       yDomain: [-1.1, 1.1],
       referenceLines: [{ y: 0, label: "0" }],
-      series: toSeriesList(results, "step", focusedDesignId),
+      series: toSeriesList(results, "step", focusedDesignId, text),
     };
   }
   if (tab === "phase") {
@@ -1139,7 +1182,7 @@ function getChartProps(
       title: text.chartTitles.phase,
       yLabel: "deg",
       yDomain: domain,
-      series: toSeriesList(results, "phaseDeg", focusedDesignId),
+      series: toSeriesList(results, "phaseDeg", focusedDesignId, text),
     };
   }
   if (tab === "impedance") {
@@ -1150,7 +1193,7 @@ function getChartProps(
       title: text.chartTitles.impedance,
       yLabel: "Ω",
       yDomain: [0, niceCeil(max * 1.1)],
-      series: toSeriesList(results, "impedanceOhm", focusedDesignId),
+      series: toSeriesList(results, "impedanceOhm", focusedDesignId, text),
     };
   }
   const points = results.flatMap((result) => result.portMach);
@@ -1164,7 +1207,7 @@ function getChartProps(
       { y: 0.1, label: "0.10" },
       { y: 0.16, label: "0.16" },
     ],
-    series: toSeriesList(results, "portMach", focusedDesignId),
+    series: toSeriesList(results, "portMach", focusedDesignId, text),
   };
 }
 
@@ -1172,16 +1215,59 @@ function toSeriesList(
   results: SimulationResult[],
   key: keyof SimulationResult,
   focusedDesignId: string,
+  text: UiText,
 ): Series[] {
   const hasFocusedResult = results.some((result) => result.design.id === focusedDesignId);
 
   return results.map((result) => ({
-    name: result.design.name,
+    name: displayDesignName(result.design.name, text),
     color: result.design.color,
     points: result[key] as Point[],
     focused: result.design.id === focusedDesignId,
     muted: hasFocusedResult && result.design.id !== focusedDesignId,
   }));
+}
+
+function displayDriverName(driver: SpeakerDriver, text: UiText): string {
+  return displayKnownName(driver.name, text.driverNames);
+}
+
+function displayDesignName(name: string, text: UiText): string {
+  return displayKnownName(name, text.designNames);
+}
+
+function displayKnownName(name: string, names: Readonly<Record<string, string>>): string {
+  return names[name] ?? name;
+}
+
+function translateNote(note: string, text: UiText): string {
+  const xmax = note.match(/^Xmax exceeded at ([\d.]+) Hz$/);
+  if (xmax) {
+    return text.notes.xmaxExceeded(xmax[1]);
+  }
+
+  const ventSpeed = note.match(/^High vent air speed: Mach ([\d.]+)$/);
+  if (ventSpeed) {
+    return text.notes.highVentAirSpeed(ventSpeed[1]);
+  }
+
+  if (note === "Qes estimated from Qts") {
+    return text.notes.qesEstimated;
+  }
+  if (note === "Qms estimated from Qts/Qes") {
+    return text.notes.qmsEstimated;
+  }
+  if (note === "Vent is too short for this diameter/tuning") {
+    return text.notes.ventTooShort;
+  }
+  if (note === "High Qts driver may prefer sealed or aperiodic loading") {
+    return text.notes.highQts;
+  }
+  if (note === "Invalid box volume") {
+    return text.notes.invalidBoxVolume;
+  }
+
+  return note;
 }
 
 function pathForSeries(
