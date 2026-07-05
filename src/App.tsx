@@ -31,6 +31,7 @@ import {
   SimulationResult,
   SimulationOutput,
   SpeakerDriver,
+  SplLimitReason,
   createDefaultDesigns,
   createDesignFromTemplate,
   getDesignTemplates,
@@ -39,7 +40,7 @@ import {
   simulateDesign,
 } from "./lib/acoustics";
 
-type ChartTab = "response" | "excursion" | "groupDelay" | "step" | "phase" | "impedance" | "port";
+type ChartTab = "response" | "spl" | "excursion" | "groupDelay" | "step" | "phase" | "impedance" | "port";
 type Language = "ru" | "en";
 type ScaleMode = "linear" | "log";
 type ResizeTarget = "left" | "right";
@@ -152,7 +153,7 @@ const driverFields: Array<{
   { key: "blTm", label: "BL", unit: "Tm", step: "0.1" },
 ];
 
-const chartTabs: ChartTab[] = ["response", "excursion", "groupDelay", "step", "phase", "impedance", "port"];
+const chartTabs: ChartTab[] = ["response", "spl", "excursion", "groupDelay", "step", "phase", "impedance", "port"];
 const optimizerGoals: OptimizerGoal[] = ["balanced", "flat", "deep", "compact", "transient", "output"];
 
 const UI_TEXT = {
@@ -173,6 +174,7 @@ const UI_TEXT = {
     chartAria: "Графики",
     chartTabs: {
       response: "АЧХ",
+      spl: "SPL",
       excursion: "Ход",
       groupDelay: "Групповая задержка",
       step: "Переходная",
@@ -182,6 +184,7 @@ const UI_TEXT = {
     } satisfies Record<ChartTab, string>,
     chartTitles: {
       response: "АЧХ",
+      spl: "SPL",
       excursion: "Ход диффузора",
       groupDelay: "Групповая задержка",
       step: "Переходная характеристика",
@@ -283,6 +286,7 @@ const UI_TEXT = {
       noCandidates: "Нет вариантов",
       peak: "Пик",
       port: "Порт",
+      maxSpl: "Макс. SPL",
       score: "Оценка",
       title: "Оптимизатор",
       tune: "Настройка",
@@ -293,7 +297,11 @@ const UI_TEXT = {
       highQts: "Динамику с высоким Qts может лучше подойти закрытый или апериодический корпус",
       highVentAirSpeed: (mach: string) => `Высокая скорость воздуха в порту: Mach ${mach}`,
       invalidBoxVolume: "Некорректный объем корпуса",
+      maxSplLimitedByPe: (frequency: string) => `SPL ограничен Pe на ${frequency} Hz`,
+      maxSplLimitedByPort: (frequency: string) => `SPL ограничен портом на ${frequency} Hz`,
+      maxSplLimitedByXmax: (frequency: string) => `SPL ограничен Xmax на ${frequency} Hz`,
       multiplePortsLong: "Несколько портов сильно увеличивают требуемую длину",
+      powerExceeded: (power: string) => `Заданная мощность выше Pe: ${power} W`,
       portDiameterSmall: "Диаметр порта мал для площади диффузора",
       portMayNotFit: "Порт может не поместиться в корпус",
       portNearNoise: (mach: string) => `Скорость воздуха близка к шумовому пределу: Mach ${mach}`,
@@ -307,12 +315,19 @@ const UI_TEXT = {
       design: "Конфигурация",
       excursion: "Ход",
       gd: "ГЗ 30 / 40",
+      maxSpl: "Макс. SPL",
       peak: "Пик",
       port: "Порт",
+      spl: "SPL 50 / 80",
       tune: "Настройка",
       vb: "Vb",
       zmin: "Zmin",
     },
+    limitReasons: {
+      power: "Pe",
+      port: "порт",
+      xmax: "Xmax",
+    } satisfies Record<SplLimitReason, string>,
     type: "Тип",
   },
   en: {
@@ -332,6 +347,7 @@ const UI_TEXT = {
     chartAria: "Charts",
     chartTabs: {
       response: "Response",
+      spl: "SPL",
       excursion: "Excursion",
       groupDelay: "Group delay",
       step: "Step",
@@ -341,6 +357,7 @@ const UI_TEXT = {
     } satisfies Record<ChartTab, string>,
     chartTitles: {
       response: "Frequency response",
+      spl: "SPL",
       excursion: "Cone excursion",
       groupDelay: "Group delay",
       step: "Step response",
@@ -426,6 +443,7 @@ const UI_TEXT = {
       noCandidates: "No candidates",
       peak: "Peak",
       port: "Port",
+      maxSpl: "Max SPL",
       score: "Score",
       title: "Optimizer",
       tune: "Tune",
@@ -436,7 +454,11 @@ const UI_TEXT = {
       highQts: "High Qts driver may prefer sealed or aperiodic loading",
       highVentAirSpeed: (mach: string) => `High vent air speed: Mach ${mach}`,
       invalidBoxVolume: "Invalid box volume",
+      maxSplLimitedByPe: (frequency: string) => `Max SPL limited by Pe at ${frequency} Hz`,
+      maxSplLimitedByPort: (frequency: string) => `Max SPL limited by port at ${frequency} Hz`,
+      maxSplLimitedByXmax: (frequency: string) => `Max SPL limited by Xmax at ${frequency} Hz`,
       multiplePortsLong: "Multiple ports make the tuning tube long",
+      powerExceeded: (power: string) => `Power exceeds Pe: ${power} W`,
       portDiameterSmall: "Port diameter is small for cone area",
       portMayNotFit: "Port may not fit inside the box",
       portNearNoise: (mach: string) => `Port air speed near noise limit: Mach ${mach}`,
@@ -450,12 +472,19 @@ const UI_TEXT = {
       design: "Design",
       excursion: "Excursion",
       gd: "GD 30 / 40",
+      maxSpl: "Max SPL",
       peak: "Peak",
       port: "Port",
+      spl: "SPL 50 / 80",
       tune: "Tune",
       vb: "Vb",
       zmin: "Zmin",
     },
+    limitReasons: {
+      power: "Pe",
+      port: "port",
+      xmax: "Xmax",
+    } satisfies Record<SplLimitReason, string>,
     type: "Type",
   },
 } as const;
@@ -1582,6 +1611,7 @@ function OptimizerPanel({
               <span>{`${text.optimizer.tune} ${formatTune(candidate.result, text)}`}</span>
               <span>{`${text.optimizer.f3} ${formatHz(candidate.result.metrics.f3Hz)}`}</span>
               <span>{`${text.optimizer.peak} ${fmt(candidate.result.metrics.peakDb, 1)} dB`}</span>
+              <span>{`${text.optimizer.maxSpl} ${formatMaxSplShort(candidate.result.metrics, text)}`}</span>
               <span>{`${text.optimizer.gd} ${fmt(candidate.result.metrics.groupDelay40Ms, 1)} ms`}</span>
               <span>{`${text.optimizer.flatness} ${fmt(candidate.flatnessDb, 1)} dB`}</span>
               <span>{`${text.optimizer.port} ${formatPort(candidate.result)}`}</span>
@@ -1618,6 +1648,8 @@ function MetricsTable({
             <th>{text.table.tune}</th>
             <th>F3 / F6</th>
             <th>{text.table.peak}</th>
+            <th>{text.table.spl}</th>
+            <th>{text.table.maxSpl}</th>
             <th>{text.table.gd}</th>
             <th>{text.table.excursion}</th>
             <th>{text.table.port}</th>
@@ -1645,6 +1677,10 @@ function MetricsTable({
               <td>
                 {fmt(result.metrics.peakDb, 1)} dB @ {formatHz(result.metrics.peakHz)}
               </td>
+              <td>
+                {fmt(result.metrics.spl50HzDb, 1)} / {fmt(result.metrics.spl80HzDb, 1)} dB
+              </td>
+              <td>{formatMaxSpl(result.metrics, text)}</td>
               <td>
                 {fmt(result.metrics.groupDelay30Ms, 1)} / {fmt(result.metrics.groupDelay40Ms, 1)} ms
               </td>
@@ -1870,6 +1906,9 @@ function outputsForChartTab(tab: ChartTab): SimulationOutput[] {
   if (tab === "response") {
     return ["response"];
   }
+  if (tab === "spl") {
+    return ["spl"];
+  }
   if (tab === "excursion") {
     return ["excursion"];
   }
@@ -1924,6 +1963,21 @@ function getChartProps(
         { y: -6, label: "-6" },
       ],
       series: toSeriesList(results, "responseDb", focusedDesignId, text),
+    };
+  }
+  if (tab === "spl") {
+    const points = results.flatMap((result) => result.splDb);
+    const domain = splDomain(points.map((point) => point.y));
+    return {
+      ...base,
+      title: text.chartTitles.spl,
+      yLabel: "dB SPL",
+      yDomain: domain,
+      referenceLines: [
+        { y: 85, label: "85 dB" },
+        { y: 100, label: "100" },
+      ].filter((line) => line.y >= domain[0] && line.y <= domain[1]),
+      series: toSeriesList(results, "splDb", focusedDesignId, text),
     };
   }
   if (tab === "excursion") {
@@ -2044,6 +2098,26 @@ function translateNote(note: string, text: UiText): string {
     return text.notes.portNearNoise(ventNearNoise[1]);
   }
 
+  const powerExceeded = note.match(/^Power exceeds Pe: ([\d.]+) W$/);
+  if (powerExceeded) {
+    return text.notes.powerExceeded(powerExceeded[1]);
+  }
+
+  const maxSplXmax = note.match(/^Max SPL limited by Xmax at ([\d.]+) Hz$/);
+  if (maxSplXmax) {
+    return text.notes.maxSplLimitedByXmax(maxSplXmax[1]);
+  }
+
+  const maxSplPort = note.match(/^Max SPL limited by port at ([\d.]+) Hz$/);
+  if (maxSplPort) {
+    return text.notes.maxSplLimitedByPort(maxSplPort[1]);
+  }
+
+  const maxSplPe = note.match(/^Max SPL limited by Pe at ([\d.]+) Hz$/);
+  if (maxSplPe) {
+    return text.notes.maxSplLimitedByPe(maxSplPe[1]);
+  }
+
   if (note === "Qes estimated from Qts") {
     return text.notes.qesEstimated;
   }
@@ -2092,6 +2166,28 @@ function formatPort(result: SimulationResult): string {
   }
 
   return `M ${fmt(result.metrics.maxPortMach, 2)} / ${fmt(result.metrics.portLengthCm, 1)} cm`;
+}
+
+function formatMaxSpl(metrics: SimulationResult["metrics"], text: UiText): string {
+  if (metrics.maxUsableSplDb === undefined) {
+    return "—";
+  }
+
+  const reason = metrics.maxUsableSplReason
+    ? ` / ${text.limitReasons[metrics.maxUsableSplReason]}`
+    : "";
+  return `${fmt(metrics.maxUsableSplDb, 1)} dB @ ${formatHz(metrics.maxUsableSplHz)}${reason}`;
+}
+
+function formatMaxSplShort(metrics: SimulationResult["metrics"], text: UiText): string {
+  if (metrics.maxUsableSplDb === undefined) {
+    return "—";
+  }
+
+  const reason = metrics.maxUsableSplReason
+    ? ` ${text.limitReasons[metrics.maxUsableSplReason]}`
+    : "";
+  return `${fmt(metrics.maxUsableSplDb, 1)} dB${reason}`;
 }
 
 function serializeSvg(svg: SVGSVGElement): string {
@@ -2180,6 +2276,9 @@ function formatAxisReadout(value: number, label: string): string {
   }
   if (label === "dB") {
     return `${fmt(value, 1)} dB`;
+  }
+  if (label === "dB SPL") {
+    return `${fmt(value, 1)} dB SPL`;
   }
   if (label === "mm") {
     return `${fmt(value, 2)} mm`;
@@ -2487,6 +2586,16 @@ function paddedDomain(values: number[], fallback: [number, number]): [number, nu
   const max = Math.max(...valid);
   const padding = Math.max(10, (max - min) * 0.08);
   return [Math.floor((min - padding) / 30) * 30, Math.ceil((max + padding) / 30) * 30];
+}
+
+function splDomain(values: number[]): [number, number] {
+  const valid = values.filter(Number.isFinite);
+  if (valid.length === 0) {
+    return [60, 110];
+  }
+  const min = Math.max(30, Math.floor((Math.min(...valid) - 6) / 5) * 5);
+  const max = Math.ceil((Math.max(...valid) + 6) / 5) * 5;
+  return [min, Math.max(min + 10, max)];
 }
 
 function niceCeil(value: number): number {

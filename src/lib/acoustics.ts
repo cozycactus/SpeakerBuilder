@@ -43,6 +43,7 @@ export interface SimulationOptions {
 
 export type SimulationOutput =
   | "response"
+  | "spl"
   | "phase"
   | "groupDelay"
   | "excursion"
@@ -58,9 +59,12 @@ export interface Point {
   y: number;
 }
 
+export type SplLimitReason = "xmax" | "port" | "power";
+
 export interface SimulationResult {
   design: BoxDesign;
   responseDb: Point[];
+  splDb: Point[];
   phaseDeg: Point[];
   groupDelayMs: Point[];
   excursionMm: Point[];
@@ -72,6 +76,16 @@ export interface SimulationResult {
     f6Hz?: number;
     peakDb: number;
     peakHz: number;
+    currentMaxSplDb: number;
+    currentMaxSplHz: number;
+    spl50HzDb?: number;
+    spl80HzDb?: number;
+    maxUsableSplDb?: number;
+    maxUsableSplHz?: number;
+    maxUsableSplReason?: SplLimitReason;
+    maxSplByExcursionDb?: number;
+    maxSplByPortDb?: number;
+    maxSplByPowerDb?: number;
     groupDelay30Ms?: number;
     groupDelay40Ms?: number;
     groupDelayAtF3Ms?: number;
@@ -124,11 +138,28 @@ interface ResponseAtFrequency {
   inputImpedance: Complex;
 }
 
+interface SplLimitPoint {
+  db: number;
+  frequency: number;
+  reason: SplLimitReason;
+}
+
+interface SplLimitSummary {
+  excursion?: SplLimitPoint;
+  port?: SplLimitPoint;
+  power?: SplLimitPoint;
+  usable?: SplLimitPoint;
+}
+
 const RHO = 1.204;
 const SPEED_OF_SOUND = 343;
 const TWO_PI = Math.PI * 2;
+const REFERENCE_PRESSURE_PA = 20e-6;
+const SPL_DISTANCE_M = 1;
+const PORT_LIMIT_MACH = 0.16;
 const DEFAULT_SIMULATION_OUTPUTS: SimulationOutput[] = [
   "response",
+  "spl",
   "phase",
   "groupDelay",
   "excursion",
@@ -348,12 +379,14 @@ export function simulateDesign(
   const outputs = new Set(options.outputs ?? DEFAULT_SIMULATION_OUTPUTS);
   const needsMetrics = outputs.has("metrics");
   const needsResponse = outputs.has("response") || needsMetrics;
+  const needsSpl = outputs.has("spl") || needsMetrics;
   const needsPhase = outputs.has("phase") || outputs.has("groupDelay") || needsMetrics;
   const needsGroupDelay = outputs.has("groupDelay") || needsMetrics;
   const needsExcursion = outputs.has("excursion") || needsMetrics;
   const needsPort = outputs.has("port") || needsMetrics;
   const needsImpedance = outputs.has("impedance") || needsMetrics;
-  const voltageRms = Math.sqrt(Math.max(0.1, options.powerW) * derived.reOhm);
+  const powerW = Math.max(0.1, options.powerW);
+  const voltageRms = Math.sqrt(powerW * derived.reOhm);
   const raw = FREQUENCIES.map((frequency) => ({
     frequency,
     response: responseAtFrequency(derived, design, frequency),
@@ -368,6 +401,12 @@ export function simulateDesign(
     ? raw.map((item) => ({
         x: item.frequency,
         y: db(cabs(item.response.acoustic) / refMagnitude),
+      }))
+    : [];
+  const splDb = needsSpl
+    ? raw.map((item) => ({
+        x: item.frequency,
+        y: splAtOneMeter(item.response.acoustic, voltageRms),
       }))
     : [];
   const rawFrequencies = raw.map((point) => point.frequency);
@@ -413,6 +452,10 @@ export function simulateDesign(
   let f3Hz: number | undefined;
   let f6Hz: number | undefined;
   let peak = { x: 0, y: 0 };
+  let currentMaxSpl = { x: 0, y: 0 };
+  let spl50HzDb: number | undefined;
+  let spl80HzDb: number | undefined;
+  let splLimits: SplLimitSummary = {};
   let maxExcursion = { x: 0, y: 0 };
   let maxPort = { x: 0, y: 0 };
   let minImpedance = { x: 0, y: 0 };
@@ -424,9 +467,21 @@ export function simulateDesign(
     f3Hz = findCutoff(responseDb, -3);
     f6Hz = findCutoff(responseDb, -6);
     peak = maxPoint(responseDb, (point) => point.y);
+    currentMaxSpl = maxPoint(splDb, (point) => point.y);
+    spl50HzDb = valueAt(splDb, 50);
+    spl80HzDb = valueAt(splDb, 80);
     maxExcursion = maxPoint(excursionMm, (point) => point.y);
     maxPort = maxPoint(portMach, (point) => point.y);
     minImpedance = minPoint(impedanceOhm, (point) => point.y);
+    splLimits = calculateSplLimits({
+      design,
+      driver,
+      excursionMm,
+      f3Hz,
+      portMach,
+      powerW,
+      splDb,
+    });
     qtc = design.kind === "sealed" || design.kind === "aperiodic"
       ? sealedQtc(driver, design.vbLiters)
       : undefined;
@@ -436,10 +491,22 @@ export function simulateDesign(
     if (driver.xmaxMm && maxExcursion.y > driver.xmaxMm) {
       notes.push(`Xmax exceeded at ${roundTo(maxExcursion.x, 1)} Hz`);
     }
-    if (design.kind === "vented" && maxPort.y > 0.16) {
+    if (driver.peW && powerW > driver.peW) {
+      notes.push(`Power exceeds Pe: ${roundTo(powerW, 1)} W`);
+    }
+    if (splLimits.usable?.reason === "xmax") {
+      notes.push(`Max SPL limited by Xmax at ${roundTo(splLimits.usable.frequency, 1)} Hz`);
+    }
+    if (splLimits.usable?.reason === "port") {
+      notes.push(`Max SPL limited by port at ${roundTo(splLimits.usable.frequency, 1)} Hz`);
+    }
+    if (splLimits.usable?.reason === "power") {
+      notes.push(`Max SPL limited by Pe at ${roundTo(splLimits.usable.frequency, 1)} Hz`);
+    }
+    if (design.kind === "vented" && maxPort.y > PORT_LIMIT_MACH) {
       notes.push(`High vent air speed: Mach ${roundTo(maxPort.y, 2)}`);
     }
-    if (design.kind === "vented" && maxPort.y > 0.1 && maxPort.y <= 0.16) {
+    if (design.kind === "vented" && maxPort.y > 0.1 && maxPort.y <= PORT_LIMIT_MACH) {
       notes.push(`Port air speed near noise limit: Mach ${roundTo(maxPort.y, 2)}`);
     }
     if (design.kind === "vented" && portLengthCm !== undefined && portLengthCm <= 1) {
@@ -473,6 +540,7 @@ export function simulateDesign(
   return {
     design,
     responseDb: outputs.has("response") || needsMetrics ? responseDb : [],
+    splDb: outputs.has("spl") || needsMetrics ? splDb : [],
     phaseDeg,
     groupDelayMs: outputs.has("groupDelay") || needsMetrics ? groupDelayMs : [],
     excursionMm: outputs.has("excursion") || needsMetrics ? excursionMm : [],
@@ -484,6 +552,16 @@ export function simulateDesign(
       f6Hz,
       peakDb: peak.y,
       peakHz: peak.x,
+      currentMaxSplDb: currentMaxSpl.y,
+      currentMaxSplHz: currentMaxSpl.x,
+      spl50HzDb,
+      spl80HzDb,
+      maxUsableSplDb: splLimits.usable?.db,
+      maxUsableSplHz: splLimits.usable?.frequency,
+      maxUsableSplReason: splLimits.usable?.reason,
+      maxSplByExcursionDb: splLimits.excursion?.db,
+      maxSplByPortDb: splLimits.port?.db,
+      maxSplByPowerDb: splLimits.power?.db,
       groupDelay30Ms: needsMetrics ? valueAt(groupDelayMs, 30) : undefined,
       groupDelay40Ms: needsMetrics ? valueAt(groupDelayMs, 40) : undefined,
       groupDelayAtF3Ms: needsMetrics && f3Hz ? valueAt(groupDelayMs, f3Hz) : undefined,
@@ -624,6 +702,9 @@ function scoreOptimizerCandidate(
     : metrics.portLengthCm !== undefined && metrics.portLengthCm < 4
       ? 8
       : 0;
+  const outputPenalty = metrics.maxUsableSplDb
+    ? clamp((112 - metrics.maxUsableSplDb) * 1.35, 0, 90)
+    : 22;
   const limitPenalty = excursionPenalty + portPenalty + portLengthPenalty;
   const weights = optimizerWeights(goal);
   const weightedPenalty =
@@ -632,6 +713,7 @@ function scoreOptimizerCandidate(
     volumePenalty * weights.volume +
     groupDelayPenalty * weights.groupDelay +
     limitPenalty * weights.limits +
+    outputPenalty * weights.output +
     optimizerKindPenalty(result.design.kind, goal);
 
   return clamp(100 - weightedPenalty, 0, 100);
@@ -653,25 +735,26 @@ function optimizerWeights(goal: OptimizerGoal): {
   flat: number;
   groupDelay: number;
   limits: number;
+  output: number;
   volume: number;
 } {
   if (goal === "flat") {
-    return { f3: 0.12, flat: 0.52, groupDelay: 0.13, limits: 0.15, volume: 0.08 };
+    return { f3: 0.12, flat: 0.5, groupDelay: 0.13, limits: 0.12, output: 0.05, volume: 0.08 };
   }
   if (goal === "deep") {
-    return { f3: 0.55, flat: 0.12, groupDelay: 0.05, limits: 0.2, volume: 0.08 };
+    return { f3: 0.52, flat: 0.12, groupDelay: 0.05, limits: 0.16, output: 0.07, volume: 0.08 };
   }
   if (goal === "compact") {
-    return { f3: 0.12, flat: 0.18, groupDelay: 0.08, limits: 0.1, volume: 0.52 };
+    return { f3: 0.11, flat: 0.17, groupDelay: 0.08, limits: 0.08, output: 0.04, volume: 0.52 };
   }
   if (goal === "transient") {
-    return { f3: 0.12, flat: 0.2, groupDelay: 0.46, limits: 0.1, volume: 0.12 };
+    return { f3: 0.11, flat: 0.19, groupDelay: 0.45, limits: 0.08, output: 0.05, volume: 0.12 };
   }
   if (goal === "output") {
-    return { f3: 0.18, flat: 0.12, groupDelay: 0.05, limits: 0.6, volume: 0.05 };
+    return { f3: 0.12, flat: 0.08, groupDelay: 0.04, limits: 0.34, output: 0.38, volume: 0.04 };
   }
 
-  return { f3: 0.28, flat: 0.27, groupDelay: 0.12, limits: 0.15, volume: 0.18 };
+  return { f3: 0.26, flat: 0.25, groupDelay: 0.11, limits: 0.14, output: 0.06, volume: 0.18 };
 }
 
 function optimizerF3TargetFactor(goal: OptimizerGoal): number {
@@ -978,6 +1061,87 @@ function valueAt(points: Point[], x: number): number | undefined {
   return undefined;
 }
 
+function calculateSplLimits({
+  design,
+  driver,
+  excursionMm,
+  f3Hz,
+  portMach,
+  powerW,
+  splDb,
+}: {
+  design: BoxDesign;
+  driver: SpeakerDriver;
+  excursionMm: Point[];
+  f3Hz?: number;
+  portMach: Point[];
+  powerW: number;
+  splDb: Point[];
+}): SplLimitSummary {
+  const lowHz = clamp(f3Hz ?? 30, 20, 80);
+  const bandIndexes = splDb
+    .map((point, index) => ({ index, frequency: point.x }))
+    .filter((point) => point.frequency >= lowHz && point.frequency <= 200)
+    .map((point) => point.index);
+  const indexes = bandIndexes.length > 0
+    ? bandIndexes
+    : splDb
+        .map((point, index) => ({ index, frequency: point.x }))
+        .filter((point) => point.frequency >= 30 && point.frequency <= 200)
+        .map((point) => point.index);
+
+  const excursion = driver.xmaxMm
+    ? minimumSplLimit(indexes, splDb, powerW, "xmax", (index) => {
+        const excursion = excursionMm[index]?.y ?? 0;
+        return excursion > 0.0001 ? powerW * Math.pow(driver.xmaxMm! / excursion, 2) : undefined;
+      })
+    : undefined;
+  const port = design.kind === "vented"
+    ? minimumSplLimit(indexes, splDb, powerW, "port", (index) => {
+        const mach = portMach[index]?.y ?? 0;
+        return mach > 0.00001 ? powerW * Math.pow(PORT_LIMIT_MACH / mach, 2) : undefined;
+      })
+    : undefined;
+  const power = driver.peW
+    ? minimumSplLimit(indexes, splDb, powerW, "power", () => driver.peW)
+    : undefined;
+  const usable = [excursion, port, power]
+    .filter((limit): limit is SplLimitPoint => Boolean(limit))
+    .reduce<SplLimitPoint | undefined>(
+      (best, limit) => (!best || limit.db < best.db ? limit : best),
+      undefined,
+    );
+
+  return { excursion, port, power, usable };
+}
+
+function minimumSplLimit(
+  indexes: number[],
+  splDb: Point[],
+  powerW: number,
+  reason: SplLimitReason,
+  allowedPowerAt: (index: number) => number | undefined,
+): SplLimitPoint | undefined {
+  let best: SplLimitPoint | undefined;
+  for (const index of indexes) {
+    const allowedPowerW = allowedPowerAt(index);
+    const spl = splDb[index];
+    if (!spl || allowedPowerW === undefined || !Number.isFinite(allowedPowerW) || allowedPowerW <= 0) {
+      continue;
+    }
+    const limitedSplDb = spl.y + powerRatioDb(allowedPowerW / powerW);
+    if (!best || limitedSplDb < best.db) {
+      best = {
+        db: limitedSplDb,
+        frequency: spl.x,
+        reason,
+      };
+    }
+  }
+
+  return best;
+}
+
 function sealedForQtc(driver: SpeakerDriver, qtc: number): number {
   const ratio = Math.pow(qtc / Math.max(0.05, driver.qts), 2) - 1;
   if (ratio <= 0) {
@@ -1145,6 +1309,16 @@ function minPoint(points: Point[], selector: (point: Point) => number): Point {
 
 function db(value: number): number {
   return 20 * Math.log10(Math.max(1e-9, value));
+}
+
+function powerRatioDb(value: number): number {
+  return 10 * Math.log10(Math.max(1e-9, value));
+}
+
+function splAtOneMeter(acousticProxy: Complex, voltageRms: number): number {
+  const pressurePa =
+    (cabs(acousticProxy) * voltageRms * RHO) / (4 * Math.PI * SPL_DISTANCE_M);
+  return db(pressurePa / REFERENCE_PRESSURE_PA);
 }
 
 function c(re: number, im: number): Complex {
