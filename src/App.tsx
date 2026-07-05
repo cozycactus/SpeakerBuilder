@@ -248,8 +248,11 @@ const UI_TEXT = {
       open: "Открыть",
       sourceUnknown: "Источник не указан",
       manual: "ручной ввод",
+      modified: "изменено",
       verified: "проверено",
+      reset: "Вернуть",
       notes: {
+        modifiedFromDatasheet: "Параметры изменены относительно даташита",
         usherPeRms: "Pe внесен как 70 W RMS; в даташите также указан максимум 100 W",
         sbXmaxPeakToPeak: "Xmax внесен как 5.5 mm в одну сторону из 11 mm пик-пик",
       } satisfies Record<DriverSourceNote, string>,
@@ -416,8 +419,11 @@ const UI_TEXT = {
       open: "Open",
       sourceUnknown: "Source not specified",
       manual: "manual entry",
+      modified: "modified",
       verified: "verified",
+      reset: "Reset",
       notes: {
+        modifiedFromDatasheet: "Parameters are modified from the datasheet values",
         usherPeRms: "Pe is entered as 70 W RMS; the datasheet also lists 100 W maximum input",
         sbXmaxPeakToPeak: "Xmax is entered as 5.5 mm one-way from 11 mm peak-to-peak travel",
       } satisfies Record<DriverSourceNote, string>,
@@ -772,18 +778,40 @@ function App() {
   }, [analysisSnapshot, optimizerGoal]);
 
   function updateDriverField(key: keyof SpeakerDriver, value: string) {
-    setDrivers((current) =>
-      current.map((driver) => {
-        if (driver.id !== selectedDriver.id) {
-          return driver;
-        }
-        if (key === "name") {
-          return { ...driver, name: value };
-        }
-        const parsed = Number.parseFloat(value);
-        return { ...driver, [key]: Number.isFinite(parsed) ? parsed : undefined };
-      }),
-    );
+    const editedDriver = applyDriverFieldValue(selectedDriver, key, value);
+    const shouldForkPreset = isProtectedPresetDriver(selectedDriver);
+    const nextDriver: SpeakerDriver = {
+      ...editedDriver,
+      id: shouldForkPreset ? newId("driver") : editedDriver.id,
+      name: shouldForkPreset && key !== "name"
+        ? `${displayDriverName(selectedDriver, text)} ${text.copySuffix}`
+        : editedDriver.name,
+      source: selectedDriver.source?.verified ? markSourceModified(selectedDriver.source) : selectedDriver.source,
+    };
+
+    setDrivers((current) => {
+      if (shouldForkPreset) {
+        return [...current, nextDriver];
+      }
+      return current.map((driver) => (driver.id === selectedDriver.id ? nextDriver : driver));
+    });
+
+    if (shouldForkPreset) {
+      setSelectedDriverId(nextDriver.id);
+    }
+  }
+
+  function resetDriverToDatasheet() {
+    const preset = findPresetForDriver(selectedDriver);
+    if (!preset?.source) {
+      return;
+    }
+    const nextDriver: SpeakerDriver = {
+      ...preset,
+      id: selectedDriver.id,
+      name: selectedDriver.name,
+    };
+    setDrivers((current) => current.map((driver) => (driver.id === selectedDriver.id ? nextDriver : driver)));
   }
 
   function selectDriverWithDefaults(driver: SpeakerDriver) {
@@ -1186,7 +1214,12 @@ function App() {
               ))}
             </select>
             {status ? <div className="status-line">{status}</div> : null}
-            <DriverSourcePanel driver={selectedDriver} text={text} />
+            <DriverSourcePanel
+              canReset={Boolean(findPresetForDriver(selectedDriver)?.source)}
+              driver={selectedDriver}
+              text={text}
+              onReset={resetDriverToDatasheet}
+            />
           </section>
 
           <section className="section">
@@ -1549,31 +1582,49 @@ function NumberField({
 }
 
 function DriverSourcePanel({
+  canReset,
   driver,
   text,
+  onReset,
 }: {
+  canReset: boolean;
   driver: SpeakerDriver;
   text: UiText;
+  onReset: () => void;
 }) {
   const source = driver.source;
+  const sourceStatus = source?.modified ? "modified" : source?.verified ? "verified" : "";
+  const sourceStatusText = source?.modified
+    ? text.driverSource.modified
+    : source?.verified
+      ? text.driverSource.verified
+      : text.driverSource.manual;
 
   return (
-    <div className={`driver-source ${source?.verified ? "verified" : ""}`}>
+    <div className={`driver-source ${sourceStatus}`}>
       <div className="driver-source-head">
         <div>
           <FileCheck2 size={15} />
           <h3>{text.driverSource.title}</h3>
         </div>
-        <span>{source?.verified ? text.driverSource.verified : text.driverSource.manual}</span>
+        <span>{sourceStatusText}</span>
       </div>
       <div className="driver-source-body">
         <span>{source?.title ?? text.driverSource.sourceUnknown}</span>
-        {source?.url ? (
-          <a href={source.url} target="_blank" rel="noreferrer">
-            <ExternalLink size={14} />
-            {text.driverSource.open}
-          </a>
-        ) : null}
+        <div className="driver-source-actions">
+          {source?.url ? (
+            <a href={source.url} target="_blank" rel="noreferrer">
+              <ExternalLink size={14} />
+              {text.driverSource.open}
+            </a>
+          ) : null}
+          {canReset ? (
+            <button type="button" onClick={onReset}>
+              <RefreshCw size={14} />
+              {text.driverSource.reset}
+            </button>
+          ) : null}
+        </div>
       </div>
       {source?.notes?.length ? (
         <div className="driver-source-notes">
@@ -2542,6 +2593,42 @@ function mergePresetDrivers(drivers: SpeakerDriver[]): SpeakerDriver[] {
   return [...enrichedDrivers, ...missingPresets];
 }
 
+function applyDriverFieldValue(driver: SpeakerDriver, key: keyof SpeakerDriver, value: string): SpeakerDriver {
+  if (key === "name") {
+    return { ...driver, name: value };
+  }
+  if (key === "id" || key === "source") {
+    return driver;
+  }
+  const parsed = Number.parseFloat(value);
+  return { ...driver, [key]: Number.isFinite(parsed) ? parsed : undefined };
+}
+
+function isProtectedPresetDriver(driver: SpeakerDriver): boolean {
+  return Boolean(driver.source?.verified && PRESET_DRIVERS.some((preset) => preset.id === driver.id));
+}
+
+function findPresetForDriver(driver: SpeakerDriver): SpeakerDriver | undefined {
+  const sourceTitle = driver.source?.title.trim().toLowerCase();
+  return PRESET_DRIVERS.find((preset) =>
+    preset.id === driver.id ||
+    preset.name.trim().toLowerCase() === driver.name.trim().toLowerCase() ||
+    (sourceTitle !== undefined && preset.source?.title.trim().toLowerCase() === sourceTitle),
+  );
+}
+
+function markSourceModified(source: SpeakerDriver["source"]): SpeakerDriver["source"] {
+  if (!source) {
+    return source;
+  }
+  return {
+    ...source,
+    verified: false,
+    modified: true,
+    notes: Array.from(new Set(["modifiedFromDatasheet", ...(source.notes ?? [])])),
+  };
+}
+
 function enrichPresetDriver(driver: SpeakerDriver): SpeakerDriver {
   const preset = PRESET_DRIVERS.find((item) =>
     item.id === driver.id || item.name.trim().toLowerCase() === driver.name.trim().toLowerCase(),
@@ -2549,10 +2636,32 @@ function enrichPresetDriver(driver: SpeakerDriver): SpeakerDriver {
   if (!preset?.source) {
     return driver;
   }
+  if (!driverMatchesPreset(driver, preset)) {
+    return {
+      ...driver,
+      source: markSourceModified(preset.source),
+    };
+  }
   return {
     ...driver,
     source: preset.source,
   };
+}
+
+function driverMatchesPreset(driver: SpeakerDriver, preset: SpeakerDriver): boolean {
+  return driver.name === preset.name &&
+    driver.fsHz === preset.fsHz &&
+    driver.qts === preset.qts &&
+    driver.qes === preset.qes &&
+    driver.qms === preset.qms &&
+    driver.vasL === preset.vasL &&
+    driver.sdCm2 === preset.sdCm2 &&
+    driver.reOhm === preset.reOhm &&
+    driver.leMh === preset.leMh &&
+    driver.xmaxMm === preset.xmaxMm &&
+    driver.peW === preset.peW &&
+    driver.mmsG === preset.mmsG &&
+    driver.blTm === preset.blTm;
 }
 
 function loadLanguage(): Language {

@@ -24,12 +24,13 @@ export interface SpeakerDriver {
   source?: DriverSource;
 }
 
-export type DriverSourceNote = "usherPeRms" | "sbXmaxPeakToPeak";
+export type DriverSourceNote = "usherPeRms" | "sbXmaxPeakToPeak" | "modifiedFromDatasheet";
 
 export interface DriverSource {
   title: string;
   url?: string;
   verified?: boolean;
+  modified?: boolean;
   notes?: DriverSourceNote[];
 }
 

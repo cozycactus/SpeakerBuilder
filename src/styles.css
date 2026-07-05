@@ -301,10 +301,17 @@ h2 {
   background: #f1fbf8;
 }
 
+.driver-source.modified {
+  border-color: #f0c36a;
+  background: #fff8e8;
+}
+
 .driver-source-head,
 .driver-source-head div,
 .driver-source-body,
-.driver-source-body a,
+.driver-source-actions,
+.driver-source-actions a,
+.driver-source-actions button,
 .driver-source-notes {
   min-width: 0;
 }
@@ -342,6 +349,11 @@ h2 {
   text-transform: uppercase;
 }
 
+.driver-source.modified .driver-source-head span {
+  background: #fff0c7;
+  color: #92400e;
+}
+
 .driver-source-body > span {
   overflow: hidden;
   color: #35445a;
@@ -352,18 +364,31 @@ h2 {
   white-space: nowrap;
 }
 
-.driver-source-body a {
+.driver-source-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.driver-source-actions a,
+.driver-source-actions button {
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
   gap: 5px;
+  border: 0;
+  background: transparent;
   color: #0f766e;
+  cursor: pointer;
   font-size: 12px;
   font-weight: 800;
+  font-family: inherit;
   text-decoration: none;
 }
 
-.driver-source-body a:hover {
+.driver-source-actions a:hover,
+.driver-source-actions button:hover {
   text-decoration: underline;
 }
 
@@ -380,6 +405,11 @@ h2 {
   font-size: 12px;
   font-weight: 650;
   line-height: 1.25;
+}
+
+.driver-source.modified .driver-source-notes span {
+  background: #ffefc2;
+  color: #6f3d0b;
 }
 
 .driver-analysis {
