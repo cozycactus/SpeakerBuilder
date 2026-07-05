@@ -315,6 +315,32 @@ const UI_TEXT = {
       } satisfies Record<DriverRecommendation, string>,
       title: "Проверка T/S",
     },
+    driverImpact: {
+      current: "текущий",
+      rows: {
+        damping: {
+          charts: "АЧХ, SPL, фаза, задержка, ход, импеданс",
+          params: "Fs, Vas, Qts/Qes/Qms, Mms, BL",
+        },
+        level: {
+          charts: "SPL и уровень чувствительности",
+          params: "Sens.",
+        },
+        limits: {
+          charts: "ход, Max SPL, предупреждения",
+          params: "Xmax, Pe",
+        },
+        motor: {
+          charts: "импеданс и верхняя часть диапазона",
+          params: "Re, Le",
+        },
+        piston: {
+          charts: "ход, порт, SPL, импеданс",
+          params: "Sd",
+        },
+      },
+      title: "Влияние параметров",
+    },
     driverSource: {
       title: "Паспорт данных",
       open: "Открыть",
@@ -536,6 +562,32 @@ const UI_TEXT = {
         vented: "Good vented candidate",
       } satisfies Record<DriverRecommendation, string>,
       title: "T/S check",
+    },
+    driverImpact: {
+      current: "current",
+      rows: {
+        damping: {
+          charts: "response, SPL, phase, delay, excursion, impedance",
+          params: "Fs, Vas, Qts/Qes/Qms, Mms, BL",
+        },
+        level: {
+          charts: "SPL and sensitivity level",
+          params: "Sens.",
+        },
+        limits: {
+          charts: "excursion, Max SPL, warnings",
+          params: "Xmax, Pe",
+        },
+        motor: {
+          charts: "impedance and upper range",
+          params: "Re, Le",
+        },
+        piston: {
+          charts: "excursion, port, SPL, impedance",
+          params: "Sd",
+        },
+      },
+      title: "Parameter impact",
     },
     driverSource: {
       title: "Data passport",
@@ -1535,6 +1587,7 @@ function App() {
             </label>
           ))}
         </div>
+        <DriverImpactPanel activeTab={activeTab} text={text} />
         <DriverAnalysisPanel profile={driverProfile} text={text} />
       </>
     );
@@ -2446,6 +2499,41 @@ function DriverComparePanel({
         })}
       </div>
     </section>
+  );
+}
+
+function DriverImpactPanel({
+  activeTab,
+  text,
+}: {
+  activeTab: ChartTab;
+  text: UiText;
+}) {
+  const rows: Array<{ id: keyof UiText["driverImpact"]["rows"]; tabs: ChartTab[] }> = [
+    { id: "damping", tabs: ["response", "spl", "phase", "groupDelay", "step", "excursion", "impedance"] },
+    { id: "level", tabs: ["spl"] },
+    { id: "limits", tabs: ["spl", "excursion"] },
+    { id: "motor", tabs: ["impedance", "response", "spl"] },
+    { id: "piston", tabs: ["excursion", "port", "spl", "impedance"] },
+  ];
+
+  return (
+    <div className="driver-impact">
+      <h3>{text.driverImpact.title}</h3>
+      <div className="driver-impact-list">
+        {rows.map((row) => {
+          const copy = text.driverImpact.rows[row.id];
+          const isCurrent = row.tabs.includes(activeTab);
+          return (
+            <div className={`driver-impact-row ${isCurrent ? "active" : ""}`} key={row.id}>
+              <span>{copy.params}</span>
+              <em>{copy.charts}</em>
+              {isCurrent ? <strong>{text.driverImpact.current}</strong> : null}
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
@@ -3720,7 +3808,53 @@ function applyDriverFieldValue(driver: SpeakerDriver, key: keyof SpeakerDriver, 
   const normalized = limits
     ? clampNumber(parsed, limits.min, limits.max ?? Number.POSITIVE_INFINITY)
     : parsed;
-  return { ...driver, [key]: normalized };
+  return reconcileDriverQualityFields({ ...driver, [key]: normalized }, key);
+}
+
+function reconcileDriverQualityFields(driver: SpeakerDriver, changedKey: keyof SpeakerDriver): SpeakerDriver {
+  if (changedKey === "qts") {
+    const qts = driver.qts;
+    if (!Number.isFinite(qts) || qts <= 0) {
+      return driver;
+    }
+
+    if (driver.qms !== undefined && driver.qms > qts) {
+      const qes = qesFromQtsQms(qts, driver.qms);
+      return qes ? { ...driver, qes: roundTo(qes, 4) } : driver;
+    }
+    if (driver.qes !== undefined && driver.qes > qts) {
+      const qms = qmsFromQtsQes(qts, driver.qes);
+      return qms ? { ...driver, qms: roundTo(qms, 4) } : driver;
+    }
+
+    const qes = qts * 1.2;
+    const qms = qmsFromQtsQes(qts, qes);
+    return qms ? { ...driver, qes: roundTo(qes, 4), qms: roundTo(qms, 4) } : driver;
+  }
+
+  if (changedKey === "qes" || changedKey === "qms") {
+    if (driver.qes === undefined || driver.qms === undefined || driver.qes <= 0 || driver.qms <= 0) {
+      return driver;
+    }
+    const qts = (driver.qes * driver.qms) / (driver.qes + driver.qms);
+    const limits = driverFieldLimits.get("qts");
+    const normalizedQts = limits
+      ? clampNumber(qts, limits.min, limits.max ?? Number.POSITIVE_INFINITY)
+      : qts;
+    return { ...driver, qts: roundTo(normalizedQts, 4) };
+  }
+
+  return driver;
+}
+
+function qesFromQtsQms(qts: number, qms: number): number | undefined {
+  const denominator = 1 / qts - 1 / qms;
+  return denominator > 0 ? 1 / denominator : undefined;
+}
+
+function qmsFromQtsQes(qts: number, qes: number): number | undefined {
+  const denominator = 1 / qts - 1 / qes;
+  return denominator > 0 ? 1 / denominator : undefined;
 }
 
 function isProtectedPresetDriver(driver: SpeakerDriver): boolean {
