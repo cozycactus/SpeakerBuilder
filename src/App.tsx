@@ -11,6 +11,8 @@ import {
   Gauge,
   GripVertical,
   Languages,
+  Maximize2,
+  Minimize2,
   Plus,
   RefreshCw,
   Search,
@@ -26,9 +28,11 @@ import type {
   ChangeEvent,
   DragEvent as ReactDragEvent,
   KeyboardEvent as ReactKeyboardEvent,
+  MouseEvent as ReactMouseEvent,
   PointerEvent as ReactPointerEvent,
   ReactNode,
   Ref,
+  WheelEvent as ReactWheelEvent,
 } from "react";
 import {
   BoxDesign,
@@ -315,6 +319,10 @@ const UI_TEXT = {
       warning: "Выше 500 Гц T/S расчет не заменяет измеренную FRD: не учитываются резонансы диффузора, направленность и детали конструкции.",
       yMax: "Y макс",
       yMin: "Y мин",
+    },
+    chartView: {
+      collapse: "Свернуть график",
+      expand: "Развернуть график",
     },
     chartMarkers: {
       f3: "F3",
@@ -603,6 +611,10 @@ const UI_TEXT = {
       yMax: "Y max",
       yMin: "Y min",
     },
+    chartView: {
+      collapse: "Collapse chart",
+      expand: "Expand chart",
+    },
     chartMarkers: {
       f3: "F3",
       f6: "F6",
@@ -858,6 +870,7 @@ function App() {
   const [chartFrequencyMinHz, setChartFrequencyMinHz] = useState(initialProject.chartFrequencyMinHz);
   const [chartFrequencyMaxHz, setChartFrequencyMaxHz] = useState(initialProject.chartFrequencyMaxHz);
   const [chartYScales, setChartYScales] = useState<Record<ChartTab, ChartYScaleState>>(() => initialProject.chartYScales);
+  const [chartExpanded, setChartExpanded] = useState(false);
   const [optimizerGoal, setOptimizerGoal] = useState<OptimizerGoal>(initialProject.optimizerGoal);
   const [powerW, setPowerW] = useState(initialProject.powerW);
   const [referenceByTab, setReferenceByTab] = useState<ReferenceByTab>(() => initialProject.referenceByTab);
@@ -1052,6 +1065,21 @@ function App() {
     setFocusedDesignId(designs.find((design) => design.enabled)?.id ?? designs[0]?.id ?? "");
   }, [designs, focusedDesignId]);
 
+  useEffect(() => {
+    if (!chartExpanded) {
+      return undefined;
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setChartExpanded(false);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [chartExpanded]);
+
   const templates = useMemo(() => getDesignTemplates(selectedDriver), [selectedDriver]);
   const driverProfile = useMemo(() => analyzeDriver(selectedDriver), [selectedDriver]);
   const filteredDrivers = useMemo(() => filterDrivers(drivers, libraryFilters), [drivers, libraryFilters]);
@@ -1089,6 +1117,11 @@ function App() {
         },
       };
     });
+  };
+  const updateChartFrequencyDomain = (domain: [number, number]) => {
+    const [nextMin, nextMax] = normalizeChartFrequencyDomain(domain[0], domain[1]);
+    setChartFrequencyMinHz(roundFrequencyForInput(nextMin));
+    setChartFrequencyMaxHz(roundFrequencyForInput(nextMax));
   };
   const analysisStale =
     analysisSnapshot.driver !== selectedDriver ||
@@ -1908,7 +1941,7 @@ function App() {
         />
 
         <section className="main-column">
-          <div className="panel chart-panel">
+          <div className={`panel chart-panel ${chartExpanded ? "expanded" : ""}`}>
             <div className="chart-header">
               <div>
                 <h2>{chartProps.title}</h2>
@@ -1932,6 +1965,15 @@ function App() {
                     ))}
                   </div>
                   <div className="chart-export-actions">
+                    <button
+                      type="button"
+                      className="icon-button"
+                      onClick={() => setChartExpanded((expanded) => !expanded)}
+                      title={chartExpanded ? text.chartView.collapse : text.chartView.expand}
+                      aria-label={chartExpanded ? text.chartView.collapse : text.chartView.expand}
+                    >
+                      {chartExpanded ? <Minimize2 size={17} /> : <Maximize2 size={17} />}
+                    </button>
                     <button type="button" className="text-button" onClick={freezeReference} title={text.freezeReference}>
                       <Target size={16} />
                       {text.reference}
@@ -2023,6 +2065,11 @@ function App() {
                   referenceLabel={text.reference}
                   referenceSeries={currentReference?.series ?? []}
                   svgRef={chartSvgRef}
+                  xLimit={[CHART_FREQUENCY_MIN_LIMIT_HZ, MAX_FREQUENCY_MAX_HZ]}
+                  onXDomainChange={activeTab === "step" ? undefined : updateChartFrequencyDomain}
+                  onXDomainReset={activeTab === "step"
+                    ? undefined
+                    : () => updateChartFrequencyDomain([DEFAULT_CHART_FREQUENCY_MIN_HZ, DEFAULT_FREQUENCY_MAX_HZ])}
                 />
               </div>
 
@@ -3005,6 +3052,9 @@ function LineChart({
   yLabel,
   referenceLines = [],
   svgRef,
+  xLimit,
+  onXDomainChange,
+  onXDomainReset,
 }: {
   title: string;
   series: Series[];
@@ -3018,6 +3068,9 @@ function LineChart({
   yLabel: string;
   referenceLines?: Array<{ y: number; label: string }>;
   svgRef?: Ref<SVGSVGElement>;
+  xLimit?: [number, number];
+  onXDomainChange?: (domain: [number, number]) => void;
+  onXDomainReset?: () => void;
 }) {
   const width = 960;
   const [chartHeight, setChartHeight] = useState(540);
@@ -3026,12 +3079,18 @@ function LineChart({
   const innerWidth = width - margin.left - margin.right;
   const innerHeight = height - margin.top - margin.bottom;
   const chartBoxRef = useRef<HTMLDivElement>(null);
+  const panDragRef = useRef<{
+    pointerId: number;
+    startClientX: number;
+    startDomain: [number, number];
+  } | null>(null);
   const [hover, setHover] = useState<{
     svgX: number;
     svgY: number;
     xValue: number;
     values: Array<{ color: string; name: string; x: number; y: number }>;
   } | null>(null);
+  const [isPanning, setIsPanning] = useState(false);
 
   useEffect(() => {
     const chartBox = chartBoxRef.current;
@@ -3093,17 +3152,88 @@ function LineChart({
 
     return xDomain[0] + ratio * (xDomain[1] - xDomain[0]);
   };
+  const domainToScaled = (value: number) =>
+    xScale === "log" ? Math.log10(Math.max(0.001, value)) : value;
+  const scaledToDomain = (value: number) =>
+    xScale === "log" ? Math.pow(10, value) : value;
+  const constrainedScaledDomain = (scaledMin: number, scaledMax: number): [number, number] => {
+    const limit = xLimit ?? xDomain;
+    const limitMin = domainToScaled(limit[0]);
+    const limitMax = domainToScaled(limit[1]);
+    const maxSpan = limitMax - limitMin;
+    const minSpan = Math.min(maxSpan, xScale === "log" ? Math.log10(1.08) : 1);
+    let span = clampNumber(scaledMax - scaledMin, minSpan, maxSpan);
+    let min = scaledMin;
+    let max = min + span;
+
+    if (min < limitMin) {
+      min = limitMin;
+      max = min + span;
+    }
+    if (max > limitMax) {
+      max = limitMax;
+      min = max - span;
+    }
+
+    span = max - min;
+    if (span < minSpan) {
+      max = Math.min(limitMax, min + minSpan);
+      min = Math.max(limitMin, max - minSpan);
+    }
+
+    return [min, max];
+  };
+  const emitScaledXDomain = (scaledMin: number, scaledMax: number) => {
+    if (!onXDomainChange) {
+      return;
+    }
+    const [nextMin, nextMax] = constrainedScaledDomain(scaledMin, scaledMax);
+    onXDomainChange([scaledToDomain(nextMin), scaledToDomain(nextMax)]);
+  };
+  const pointerPosition = (event: ReactPointerEvent<SVGSVGElement> | ReactWheelEvent<SVGSVGElement> | ReactMouseEvent<SVGSVGElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    return {
+      svgX: ((event.clientX - rect.left) / rect.width) * width,
+      svgY: ((event.clientY - rect.top) / rect.height) * height,
+    };
+  };
+  const pointerInPlot = (svgX: number, svgY: number) =>
+    svgX >= margin.left &&
+    svgX <= width - margin.right &&
+    svgY >= margin.top &&
+    svgY <= height - margin.bottom;
+
+  function handlePointerDown(event: ReactPointerEvent<SVGSVGElement>) {
+    if (!onXDomainChange || event.button !== 0) {
+      return;
+    }
+    const { svgX, svgY } = pointerPosition(event);
+    if (!pointerInPlot(svgX, svgY)) {
+      return;
+    }
+
+    event.preventDefault();
+    panDragRef.current = {
+      pointerId: event.pointerId,
+      startClientX: event.clientX,
+      startDomain: xDomain,
+    };
+    setIsPanning(true);
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
 
   function handlePointerMove(event: ReactPointerEvent<SVGSVGElement>) {
-    const rect = event.currentTarget.getBoundingClientRect();
-    const svgX = ((event.clientX - rect.left) / rect.width) * width;
-    const svgY = ((event.clientY - rect.top) / rect.height) * height;
-    if (
-      svgX < margin.left ||
-      svgX > width - margin.right ||
-      svgY < margin.top ||
-      svgY > height - margin.bottom
-    ) {
+    const drag = panDragRef.current;
+    if (drag && onXDomainChange) {
+      event.preventDefault();
+      const deltaX = event.clientX - drag.startClientX;
+      const shift = (deltaX / innerWidth) * (domainToScaled(drag.startDomain[1]) - domainToScaled(drag.startDomain[0]));
+      emitScaledXDomain(domainToScaled(drag.startDomain[0]) - shift, domainToScaled(drag.startDomain[1]) - shift);
+      return;
+    }
+
+    const { svgX, svgY } = pointerPosition(event);
+    if (!pointerInPlot(svgX, svgY)) {
       setHover(null);
       return;
     }
@@ -3130,6 +3260,49 @@ function LineChart({
     setHover({ svgX, svgY, xValue, values });
   }
 
+  function stopPanning(event: ReactPointerEvent<SVGSVGElement>) {
+    if (panDragRef.current?.pointerId !== event.pointerId) {
+      return;
+    }
+    panDragRef.current = null;
+    setIsPanning(false);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  }
+
+  function handleWheel(event: ReactWheelEvent<SVGSVGElement>) {
+    if (!onXDomainChange) {
+      return;
+    }
+    const { svgX, svgY } = pointerPosition(event);
+    if (!pointerInPlot(svgX, svgY)) {
+      return;
+    }
+
+    event.preventDefault();
+    const currentMin = domainToScaled(xDomain[0]);
+    const currentMax = domainToScaled(xDomain[1]);
+    const anchor = domainToScaled(unscaleX(svgX));
+    const zoomFactor = Math.exp(clampNumber(event.deltaY, -240, 240) * 0.002);
+    emitScaledXDomain(
+      anchor - (anchor - currentMin) * zoomFactor,
+      anchor + (currentMax - anchor) * zoomFactor,
+    );
+  }
+
+  function handleDoubleClick(event: ReactMouseEvent<SVGSVGElement>) {
+    if (!onXDomainReset) {
+      return;
+    }
+    const { svgX, svgY } = pointerPosition(event);
+    if (!pointerInPlot(svgX, svgY)) {
+      return;
+    }
+    event.preventDefault();
+    onXDomainReset();
+  }
+
   const tooltipValues = hover?.values.slice(0, 7) ?? [];
   const tooltipWidth = 320;
   const tooltipHeight = 40 + tooltipValues.length * 20;
@@ -3137,14 +3310,23 @@ function LineChart({
   const tooltipY = hover ? Math.max(8, Math.min(height - tooltipHeight - 8, hover.svgY - 18)) : 0;
 
   return (
-    <div className="chart-box" ref={chartBoxRef}>
+    <div className={`chart-box ${onXDomainChange ? "interactive" : ""} ${isPanning ? "panning" : ""}`} ref={chartBoxRef}>
       <svg
         ref={svgRef}
         viewBox={`0 0 ${width} ${height}`}
         role="img"
         aria-label={title}
-        onPointerLeave={() => setHover(null)}
+        onDoubleClick={handleDoubleClick}
+        onPointerCancel={stopPanning}
+        onPointerDown={handlePointerDown}
+        onPointerLeave={() => {
+          if (!panDragRef.current) {
+            setHover(null);
+          }
+        }}
         onPointerMove={handlePointerMove}
+        onPointerUp={stopPanning}
+        onWheel={handleWheel}
       >
         <rect className="plot-bg" x={margin.left} y={margin.top} width={innerWidth} height={innerHeight} />
         {xTicks.map((tick) => (
@@ -4698,6 +4880,13 @@ function roundTo(value: number, decimals: number): number {
 
 function clampNumber(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+function roundFrequencyForInput(value: number): number {
+  if (value < 100) {
+    return roundTo(value, 1);
+  }
+  return roundTo(value, 0);
 }
 
 function normalizeChartFrequencyDomain(minHz: number, maxHz: number): [number, number] {
