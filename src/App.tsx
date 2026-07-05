@@ -206,21 +206,25 @@ const driverFields: Array<{
   label: string;
   unit: string;
   step: string;
+  min: number;
+  max?: number;
 }> = [
-  { key: "fsHz", label: "Fs", unit: "Hz", step: "0.1" },
-  { key: "qts", label: "Qts", unit: "", step: "0.01" },
-  { key: "qes", label: "Qes", unit: "", step: "0.01" },
-  { key: "qms", label: "Qms", unit: "", step: "0.1" },
-  { key: "vasL", label: "Vas", unit: "L", step: "0.1" },
-  { key: "sdCm2", label: "Sd", unit: "cm²", step: "0.1" },
-  { key: "reOhm", label: "Re", unit: "Ω", step: "0.01" },
-  { key: "leMh", label: "Le", unit: "mH", step: "0.01" },
-  { key: "xmaxMm", label: "Xmax", unit: "mm", step: "0.1" },
-  { key: "peW", label: "Pe", unit: "W", step: "1" },
-  { key: "sensitivityDb", label: "Sens.", unit: "dB", step: "0.1" },
-  { key: "mmsG", label: "Mms", unit: "g", step: "0.1" },
-  { key: "blTm", label: "BL", unit: "Tm", step: "0.1" },
+  { key: "fsHz", label: "Fs", unit: "Hz", step: "0.1", min: 1, max: 2000 },
+  { key: "qts", label: "Qts", unit: "", step: "0.01", min: 0.01, max: 5 },
+  { key: "qes", label: "Qes", unit: "", step: "0.01", min: 0.01, max: 10 },
+  { key: "qms", label: "Qms", unit: "", step: "0.1", min: 0.1, max: 100 },
+  { key: "vasL", label: "Vas", unit: "L", step: "0.1", min: 0.01, max: 10000 },
+  { key: "sdCm2", label: "Sd", unit: "cm²", step: "0.1", min: 0.1, max: 10000 },
+  { key: "reOhm", label: "Re", unit: "Ω", step: "0.01", min: 0.01, max: 100 },
+  { key: "leMh", label: "Le", unit: "mH", step: "0.01", min: 0, max: 100 },
+  { key: "xmaxMm", label: "Xmax", unit: "mm", step: "0.1", min: 0.01, max: 100 },
+  { key: "peW", label: "Pe", unit: "W", step: "1", min: 0.1, max: 100000 },
+  { key: "sensitivityDb", label: "Sens.", unit: "dB", step: "0.1", min: 40, max: 130 },
+  { key: "mmsG", label: "Mms", unit: "g", step: "0.1", min: 0.01, max: 10000 },
+  { key: "blTm", label: "BL", unit: "Tm", step: "0.1", min: 0.01, max: 100 },
 ];
+const driverFieldLimits = new Map(driverFields.map((field) => [field.key, { min: field.min, max: field.max }]));
+const requiredDriverNumberFields = new Set<keyof SpeakerDriver>(["fsHz", "qts", "vasL", "sdCm2", "reOhm"]);
 
 const chartTabs: ChartTab[] = ["response", "spl", "excursion", "groupDelay", "step", "phase", "impedance", "port"];
 const optimizerGoals: OptimizerGoal[] = ["balanced", "flat", "deep", "compact", "transient", "output"];
@@ -1522,6 +1526,8 @@ function App() {
               </span>
               <input
                 type="number"
+                min={field.min}
+                max={field.max}
                 step={field.step}
                 value={String(selectedDriver[field.key] ?? "")}
                 onChange={(event) => updateDriverField(field.key, event.target.value)}
@@ -1677,9 +1683,10 @@ function App() {
             <input
               type="number"
               min="0.1"
+              max="100000"
               step="1"
               value={powerW}
-              onChange={(event) => setPowerW(Number.parseFloat(event.target.value) || 1)}
+              onChange={(event) => setPowerW(parseBoundedNumber(event.target.value, powerW, 0.1, 100000))}
             />
             <span>W</span>
           </label>
@@ -2079,12 +2086,12 @@ function DesignEditor({
             ))}
           </select>
         </label>
-        <NumberField label={text.table.vb} unit="L" value={design.vbLiters} step="0.1" onChange={(vbLiters) => onChange({ vbLiters })} />
+        <NumberField label={text.table.vb} unit="L" value={design.vbLiters} min={0.1} step="0.1" onChange={(vbLiters) => onChange({ vbLiters })} />
         {hasTuning ? (
-          <NumberField label="Fb" unit="Hz" value={design.fbHz ?? 30} step="0.1" onChange={(fbHz) => onChange({ fbHz })} />
+          <NumberField label="Fb" unit="Hz" value={design.fbHz ?? 30} min={1} step="0.1" onChange={(fbHz) => onChange({ fbHz })} />
         ) : null}
         {design.kind !== "sealed" && design.kind !== "infinite" ? (
-          <NumberField label="Ql" unit="" value={design.ql ?? (design.kind === "aperiodic" ? 1.7 : 7)} step="0.1" onChange={(ql) => onChange({ ql })} />
+          <NumberField label="Ql" unit="" value={design.ql ?? (design.kind === "aperiodic" ? 1.7 : 7)} min={0.1} step="0.1" onChange={(ql) => onChange({ ql })} />
         ) : null}
         {hasPort ? (
           <>
@@ -2104,6 +2111,7 @@ function DesignEditor({
                   label={text.portWidth}
                   unit="cm"
                   value={design.portWidthCm ?? 20}
+                  min={0.1}
                   step="0.1"
                   onChange={(portWidthCm) => onChange({ portWidthCm })}
                 />
@@ -2111,6 +2119,7 @@ function DesignEditor({
                   label={text.portHeight}
                   unit="cm"
                   value={design.portHeightCm ?? 3}
+                  min={0.1}
                   step="0.1"
                   onChange={(portHeightCm) => onChange({ portHeightCm })}
                 />
@@ -2120,6 +2129,7 @@ function DesignEditor({
                 label={text.portDiameter}
                 unit="cm"
                 value={design.portDiameterCm ?? 7}
+                min={0.1}
                 step="0.1"
                 onChange={(portDiameterCm) => onChange({ portDiameterCm })}
               />
@@ -2128,6 +2138,7 @@ function DesignEditor({
               label={text.ports}
               unit=""
               value={design.portCount ?? 1}
+              min={1}
               step="1"
               onChange={(portCount) => onChange({ portCount: Math.max(1, Math.round(portCount)) })}
             />
@@ -2142,6 +2153,8 @@ function NumberField({
   label,
   unit,
   value,
+  min,
+  max,
   step,
   disabled,
   onChange,
@@ -2149,10 +2162,20 @@ function NumberField({
   label: string;
   unit: string;
   value: number;
+  min?: number;
+  max?: number;
   step: string;
   disabled?: boolean;
   onChange: (value: number) => void;
 }) {
+  function handleChange(value: string) {
+    const parsed = Number.parseFloat(value);
+    if (!Number.isFinite(parsed)) {
+      return;
+    }
+    onChange(clampNumber(parsed, min ?? Number.NEGATIVE_INFINITY, max ?? Number.POSITIVE_INFINITY));
+  }
+
   return (
     <label className="field">
       <span>
@@ -2161,10 +2184,12 @@ function NumberField({
       </span>
       <input
         type="number"
+        min={min}
+        max={max}
         step={step}
         disabled={disabled}
         value={Number.isFinite(value) ? value : ""}
-        onChange={(event) => onChange(Number.parseFloat(event.target.value) || 0)}
+        onChange={(event) => handleChange(event.target.value)}
       />
     </label>
   );
@@ -2331,10 +2356,10 @@ function AcousticCorrectionsPanel({
         <h3>{text.corrections.title}</h3>
       </div>
       <div className="mini-grid">
-        <NumberField label={text.corrections.roomGain} unit="dB" value={options.roomGainDb} step="0.5" onChange={(roomGainDb) => update({ roomGainDb })} />
-        <NumberField label={text.corrections.roomStart} unit="Hz" value={options.roomGainStartHz} step="5" onChange={(roomGainStartHz) => update({ roomGainStartHz })} />
-        <NumberField label={text.corrections.baffleStep} unit="dB" value={options.baffleStepDb} step="0.5" onChange={(baffleStepDb) => update({ baffleStepDb })} />
-        <NumberField label={text.corrections.baffleHz} unit="Hz" value={options.baffleStepHz} step="10" onChange={(baffleStepHz) => update({ baffleStepHz })} />
+        <NumberField label={text.corrections.roomGain} unit="dB" value={options.roomGainDb} min={-24} max={24} step="0.5" onChange={(roomGainDb) => update({ roomGainDb })} />
+        <NumberField label={text.corrections.roomStart} unit="Hz" value={options.roomGainStartHz} min={1} max={500} step="5" onChange={(roomGainStartHz) => update({ roomGainStartHz })} />
+        <NumberField label={text.corrections.baffleStep} unit="dB" value={options.baffleStepDb} min={-24} max={24} step="0.5" onChange={(baffleStepDb) => update({ baffleStepDb })} />
+        <NumberField label={text.corrections.baffleHz} unit="Hz" value={options.baffleStepHz} min={1} max={20000} step="10" onChange={(baffleStepHz) => update({ baffleStepHz })} />
       </div>
     </section>
   );
@@ -3683,8 +3708,19 @@ function applyDriverFieldValue(driver: SpeakerDriver, key: keyof SpeakerDriver, 
   if (key === "id" || key === "source") {
     return driver;
   }
-  const parsed = Number.parseFloat(value);
-  return { ...driver, [key]: Number.isFinite(parsed) ? parsed : undefined };
+  const trimmed = value.trim();
+  const parsed = Number.parseFloat(trimmed);
+  if (!Number.isFinite(parsed)) {
+    if (!requiredDriverNumberFields.has(key) && trimmed === "") {
+      return { ...driver, [key]: undefined };
+    }
+    return driver;
+  }
+  const limits = driverFieldLimits.get(key);
+  const normalized = limits
+    ? clampNumber(parsed, limits.min, limits.max ?? Number.POSITIVE_INFINITY)
+    : parsed;
+  return { ...driver, [key]: normalized };
 }
 
 function isProtectedPresetDriver(driver: SpeakerDriver): boolean {
@@ -3964,6 +4000,11 @@ function roundTo(value: number, decimals: number): number {
 
 function clampNumber(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+function parseBoundedNumber(value: string, fallback: number, min: number, max: number): number {
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? clampNumber(parsed, min, max) : fallback;
 }
 
 function newId(prefix: string): string {
