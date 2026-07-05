@@ -24,6 +24,13 @@ function presetById(id: string) {
   return driver!;
 }
 
+function nearestY(points: Array<{ x: number; y: number }>, x: number): number {
+  const point = points.reduce((best, candidate) =>
+    Math.abs(candidate.x - x) < Math.abs(best.x - x) ? candidate : best,
+  );
+  return point.y;
+}
+
 describe("acoustic reference scenarios", () => {
   it("keeps datasheet-backed preset T/S parameters in expected units", () => {
     expect(presetById("usher-8945p")).toMatchObject({
@@ -190,6 +197,14 @@ describe("acoustic reference scenarios", () => {
     expectNear(result.metrics.maxPortMach, 0.051, 0.01);
     expectNear(result.metrics.maxUsableSplDb, 102.4, 1);
     expect(result.metrics.maxUsableSplReason).toBe("port");
+  });
+
+  it("changes aperiodic damping when vent area changes", () => {
+    const { design, driver } = designByName(0, "Aperiodic damped");
+    const smallVent = simulateDesign(driver, { ...design, portDiameterCm: 1, portCount: 1 }, { powerW: 25 });
+    const largeVent = simulateDesign(driver, { ...design, portDiameterCm: 8, portCount: 1 }, { powerW: 25 });
+
+    expect(Math.abs(nearestY(smallVent.responseDb, driver.fsHz) - nearestY(largeVent.responseDb, driver.fsHz))).toBeGreaterThan(0.15);
   });
 
   it("can calculate only the SPL graph without filling unrelated series", () => {

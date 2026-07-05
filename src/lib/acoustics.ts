@@ -441,6 +441,9 @@ export function createDefaultDesigns(driver: SpeakerDriver): BoxDesign[] {
       enabled: false,
       vbLiters: sealedBw * 0.68,
       ql: 1.7,
+      portShape: "round",
+      portDiameterCm: aperiodicVentDiameterCm(driver),
+      portCount: 1,
       color: DESIGN_COLORS[8],
     },
     {
@@ -756,6 +759,8 @@ function createOptimizerDesigns(driver: SpeakerDriver): BoxDesign[] {
         kind: "aperiodic",
         vbLiters: volumeForQtc(driver, qtc) * 0.72,
         ql,
+        portDiameterCm: aperiodicVentDiameterCm(driver),
+        portCount: 1,
       });
     }
   }
@@ -1036,7 +1041,10 @@ function enclosureLoad(
 
   const yBox = cmul(s, c(cab, 0));
   const ql = design.kind === "aperiodic" ? clamp(design.ql ?? 1.7, 0.5, 5) : 0;
-  const leakAdmittance = ql > 0 ? c((TWO_PI * driver.fsHz * cab) / ql, 0) : c(0, 0);
+  const leakAreaFactor = design.kind === "aperiodic"
+    ? clamp(aperiodicVentAreaRatio(driver, design) / 0.1, 0.05, 4)
+    : 1;
+  const leakAdmittance = ql > 0 ? c(((TWO_PI * driver.fsHz * cab) / ql) * leakAreaFactor, 0) : c(0, 0);
   const zAcoustic = cdiv(c(1, 0), cadd(yBox, leakAdmittance));
   return {
     zload: cmul(c(driver.sdM2 * driver.sdM2, 0), zAcoustic),
@@ -1303,6 +1311,20 @@ function sealedQtc(driver: SpeakerDriver, vbLiters: number): number {
 
 function ventedBaseVolumeFactor(qts: number): number {
   return clamp(12 * Math.pow(clamp(qts, 0.18, 0.65), 2.4), 0.25, 1.7);
+}
+
+function aperiodicVentDiameterCm(driver: SpeakerDriver): number {
+  const targetAreaCm2 = Math.max(0.5, driver.sdCm2 * 0.1);
+  return roundTo(Math.sqrt((targetAreaCm2 * 4) / Math.PI), 1);
+}
+
+function aperiodicVentAreaRatio(driver: DerivedDriver, design: BoxDesign): number {
+  const geometry = getPortGeometry(design);
+  if (!geometry) {
+    return 0.1;
+  }
+  const count = Math.max(1, design.portCount ?? 1);
+  return clamp((geometry.singleAreaM2 * count) / Math.max(0.0001, driver.sdM2), 0.005, 0.6);
 }
 
 function portLength(design: BoxDesign): number | undefined {

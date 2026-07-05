@@ -507,6 +507,14 @@ const UI_TEXT = {
     analysisCurrent: "Метрики актуальны",
     analysisCalculating: "Расчет...",
     analysisStale: "Метрики и оптимизатор ждут пересчета",
+    aperiodicDamping: "Демпф. Ql",
+    aperiodicVentDiameter: "Отверстие Ø",
+    aperiodicVentShape: "Отверстие",
+    aperiodicVentCount: "Отверстия",
+    aperiodicVentRatio: "Avent/Sd",
+    aperiodicVentWeak: "слабое влияние",
+    aperiodicVentNormal: "рабочий диапазон",
+    aperiodicVentLarge: "нужен плотный материал",
     model: "Модель",
     noActiveDesigns: "Нет активных конфигураций.",
     portDiameter: "Порт Ø",
@@ -796,6 +804,14 @@ const UI_TEXT = {
     analysisCurrent: "Metrics are current",
     analysisCalculating: "Calculating...",
     analysisStale: "Metrics and optimizer need recalculation",
+    aperiodicDamping: "Damping Ql",
+    aperiodicVentDiameter: "Vent Ø",
+    aperiodicVentShape: "Vent",
+    aperiodicVentCount: "Vents",
+    aperiodicVentRatio: "Avent/Sd",
+    aperiodicVentWeak: "weak effect",
+    aperiodicVentNormal: "working range",
+    aperiodicVentLarge: "needs dense material",
     model: "Model",
     noActiveDesigns: "No active configurations.",
     portDiameter: "Port Ø",
@@ -2197,6 +2213,7 @@ function App() {
                       key={design.id}
                       boxLabels={text.boxLabels}
                       design={design}
+                      driver={selectedDriver}
                       focused={design.id === focusedDesignId}
                       text={text}
                       onChange={(patch) => updateDesign(design.id, patch)}
@@ -2388,6 +2405,7 @@ function FilterNumber({
 function DesignEditor({
   boxLabels,
   design,
+  driver,
   focused,
   text,
   onChange,
@@ -2396,6 +2414,7 @@ function DesignEditor({
 }: {
   boxLabels: Record<BoxKind, string>;
   design: BoxDesign;
+  driver: SpeakerDriver;
   focused: boolean;
   text: UiText;
   onChange: (patch: Partial<BoxDesign>) => void;
@@ -2404,6 +2423,13 @@ function DesignEditor({
 }) {
   const hasTuning = design.kind === "vented" || design.kind === "passive" || design.kind === "bandpass";
   const hasPort = design.kind === "vented" || design.kind === "bandpass";
+  const hasAperiodicVent = design.kind === "aperiodic";
+  const hasVentGeometry = hasPort || hasAperiodicVent;
+  const ventShapeLabel = hasAperiodicVent ? text.aperiodicVentShape : text.portShape;
+  const ventDiameterLabel = hasAperiodicVent ? text.aperiodicVentDiameter : text.portDiameter;
+  const ventCountLabel = hasAperiodicVent ? text.aperiodicVentCount : text.ports;
+  const dampingLabel = hasAperiodicVent ? text.aperiodicDamping : "Ql";
+  const aperiodicSummary = hasAperiodicVent ? aperiodicVentSummary(design, driver, text) : undefined;
 
   return (
     <article className={`design-card ${design.enabled ? "" : "muted"} ${focused ? "focused" : ""}`}>
@@ -2436,7 +2462,7 @@ function DesignEditor({
           <span>{text.type}</span>
           <select
             value={design.kind}
-            onChange={(event) => onChange({ kind: event.target.value as BoxKind })}
+            onChange={(event) => onChange(designKindPatch(event.target.value as BoxKind, design, driver))}
           >
             {Object.entries(boxLabels).map(([kind, label]) => (
               <option key={kind} value={kind}>
@@ -2450,12 +2476,12 @@ function DesignEditor({
           <NumberField label="Fb" unit="Hz" value={design.fbHz ?? 30} min={1} step="0.1" onChange={(fbHz) => onChange({ fbHz })} />
         ) : null}
         {design.kind !== "sealed" && design.kind !== "infinite" ? (
-          <NumberField label="Ql" unit="" value={design.ql ?? (design.kind === "aperiodic" ? 1.7 : 7)} min={0.1} step="0.1" onChange={(ql) => onChange({ ql })} />
+          <NumberField label={dampingLabel} unit="" value={design.ql ?? (design.kind === "aperiodic" ? 1.7 : 7)} min={0.1} step="0.1" onChange={(ql) => onChange({ ql })} />
         ) : null}
-        {hasPort ? (
+        {hasVentGeometry ? (
           <>
             <label className="field">
-              <span>{text.portShape}</span>
+              <span>{ventShapeLabel}</span>
               <select
                 value={design.portShape ?? "round"}
                 onChange={(event) => onChange({ portShape: event.target.value as BoxDesign["portShape"] })}
@@ -2485,16 +2511,16 @@ function DesignEditor({
               </>
             ) : (
               <NumberField
-                label={text.portDiameter}
+                label={ventDiameterLabel}
                 unit="cm"
-                value={design.portDiameterCm ?? 7}
+                value={design.portDiameterCm ?? (hasAperiodicVent ? defaultAperiodicVentDiameterCm(driver) : 7)}
                 min={0.1}
                 step="0.1"
                 onChange={(portDiameterCm) => onChange({ portDiameterCm })}
               />
             )}
             <NumberField
-              label={text.ports}
+              label={ventCountLabel}
               unit=""
               value={design.portCount ?? 1}
               min={1}
@@ -2502,6 +2528,13 @@ function DesignEditor({
               onChange={(portCount) => onChange({ portCount: Math.max(1, Math.round(portCount)) })}
             />
           </>
+        ) : null}
+        {aperiodicSummary ? (
+          <div className={`design-readout ${aperiodicSummary.tone}`}>
+            <span>{text.aperiodicVentRatio}</span>
+            <strong>{aperiodicSummary.value}</strong>
+            <em>{aperiodicSummary.note}</em>
+          </div>
         ) : null}
       </div>
     </article>
@@ -2552,6 +2585,71 @@ function NumberField({
       />
     </label>
   );
+}
+
+function designKindPatch(kind: BoxKind, design: BoxDesign, driver: SpeakerDriver): Partial<BoxDesign> {
+  if (kind === "aperiodic") {
+    return {
+      kind,
+      ql: design.ql ?? 1.7,
+      portShape: design.portShape ?? "round",
+      portDiameterCm: design.portDiameterCm ?? defaultAperiodicVentDiameterCm(driver),
+      portCount: design.portCount ?? 1,
+    };
+  }
+  if (kind === "vented" || kind === "bandpass") {
+    return {
+      kind,
+      fbHz: design.fbHz ?? Math.max(15, driver.fsHz),
+      ql: design.ql ?? (kind === "bandpass" ? 0.74 : 7),
+      portShape: design.portShape ?? "round",
+      portDiameterCm: design.portDiameterCm ?? 7,
+      portCount: design.portCount ?? 1,
+    };
+  }
+  if (kind === "passive") {
+    return {
+      kind,
+      fbHz: design.fbHz ?? Math.max(15, driver.fsHz * 0.78),
+      ql: design.ql ?? 9,
+    };
+  }
+  return { kind };
+}
+
+function defaultAperiodicVentDiameterCm(driver: SpeakerDriver): number {
+  const targetAreaCm2 = Math.max(0.5, driver.sdCm2 * 0.1);
+  return roundTo(Math.sqrt((targetAreaCm2 * 4) / Math.PI), 1);
+}
+
+function aperiodicVentSummary(
+  design: BoxDesign,
+  driver: SpeakerDriver,
+  text: UiText,
+): { note: string; tone: "weak" | "normal" | "large"; value: string } {
+  const areaCm2 = designVentAreaCm2(design, driver);
+  const ratio = driver.sdCm2 > 0 ? areaCm2 / driver.sdCm2 : 0;
+  const note = ratio < 0.03
+    ? text.aperiodicVentWeak
+    : ratio > 0.3
+      ? text.aperiodicVentLarge
+      : text.aperiodicVentNormal;
+  const tone = ratio < 0.03 ? "weak" : ratio > 0.3 ? "large" : "normal";
+  return {
+    note,
+    tone,
+    value: `${formatCompactNumber(areaCm2)} cm² / ${fmt(ratio * 100, 1)}%`,
+  };
+}
+
+function designVentAreaCm2(design: BoxDesign, driver?: SpeakerDriver): number {
+  const count = Math.max(1, design.portCount ?? 1);
+  if (design.portShape === "slot") {
+    return Math.max(0, design.portWidthCm ?? 0) * Math.max(0, design.portHeightCm ?? 0) * count;
+  }
+  const diameterCm = design.portDiameterCm ?? (driver ? defaultAperiodicVentDiameterCm(driver) : 0);
+  const radiusCm = Math.max(0, diameterCm) / 2;
+  return Math.PI * radiusCm * radiusCm * count;
 }
 
 function MovablePanel({
@@ -3053,8 +3151,8 @@ function chartInputGroups(
         { label: text.design, value: text.boxLabels[design.kind] },
         { label: "Vb", value: `${formatCompactNumber(design.vbLiters)} L` },
         ...(design.fbHz !== undefined ? [{ label: "Fb", value: `${formatCompactNumber(design.fbHz)} Hz` }] : []),
-        ...(design.ql !== undefined ? [{ label: "Ql", value: formatCompactNumber(design.ql) }] : []),
-        ...(chartUsesPort(activeTab, design) ? portInputItems(design, text) : []),
+        ...(design.ql !== undefined ? [{ label: design.kind === "aperiodic" ? text.aperiodicDamping : "Ql", value: formatCompactNumber(design.ql) }] : []),
+        ...(chartUsesPort(activeTab, design) ? portInputItems(design, driver, text) : []),
       ]
     : [{ label: text.design, value: text.chartInputs.notes.noFocusedDesign, tone: "warning" as const }];
 
@@ -3108,22 +3206,33 @@ function chartUsesCorrections(activeTab: ChartTab): boolean {
 
 function chartUsesPort(activeTab: ChartTab, design: BoxDesign): boolean {
   return (activeTab === "port" || activeTab === "response" || activeTab === "spl" || activeTab === "impedance") &&
-    (design.kind === "vented" || design.kind === "passive" || design.kind === "bandpass");
+    (design.kind === "vented" || design.kind === "passive" || design.kind === "bandpass" || design.kind === "aperiodic");
 }
 
-function portInputItems(design: BoxDesign, text: UiText): ChartInputItem[] {
-  if (design.portShape === "slot") {
+function portInputItems(design: BoxDesign, driver: SpeakerDriver, text: UiText): ChartInputItem[] {
+  const isAperiodic = design.kind === "aperiodic";
+  const countLabel = isAperiodic ? text.aperiodicVentCount : text.ports;
+  const diameterLabel = isAperiodic ? text.aperiodicVentDiameter : text.portDiameter;
+  const items = design.portShape === "slot"
+    ? [
+        { label: text.portWidth, value: `${formatCompactNumber(design.portWidthCm ?? 0)} cm` },
+        { label: text.portHeight, value: `${formatCompactNumber(design.portHeightCm ?? 0)} cm` },
+        { label: countLabel, value: formatCompactNumber(design.portCount ?? 1) },
+      ]
+    : [
+        { label: diameterLabel, value: `${formatCompactNumber(design.portDiameterCm ?? (isAperiodic ? defaultAperiodicVentDiameterCm(driver) : 0))} cm` },
+        { label: countLabel, value: formatCompactNumber(design.portCount ?? 1) },
+      ];
+
+  if (isAperiodic) {
+    const summary = aperiodicVentSummary(design, driver, text);
     return [
-      { label: text.portWidth, value: `${formatCompactNumber(design.portWidthCm ?? 0)} cm` },
-      { label: text.portHeight, value: `${formatCompactNumber(design.portHeightCm ?? 0)} cm` },
-      { label: text.ports, value: formatCompactNumber(design.portCount ?? 1) },
+      ...items,
+      { label: text.aperiodicVentRatio, value: summary.value, note: summary.note, tone: summary.tone === "normal" ? undefined : "warning" },
     ];
   }
 
-  return [
-    { label: text.portDiameter, value: `${formatCompactNumber(design.portDiameterCm ?? 0)} cm` },
-    { label: text.ports, value: formatCompactNumber(design.portCount ?? 1) },
-  ];
+  return items;
 }
 
 function formatDriverInputValue(key: keyof SpeakerDriver, driver: SpeakerDriver): string {
