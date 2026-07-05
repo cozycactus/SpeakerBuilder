@@ -1868,17 +1868,47 @@ function App() {
                 </span>
               </div>
               <div className="chart-tools">
-                <div className="tabs" role="tablist" aria-label={text.chartAria}>
-                  {chartTabs.map((tab) => (
-                    <button
-                      key={tab}
-                      type="button"
-                      className={activeTab === tab ? "active" : ""}
-                      onClick={() => setActiveTab(tab)}
-                    >
-                      {text.chartTabs[tab]}
+                <div className="chart-tool-row">
+                  <div className="tabs" role="tablist" aria-label={text.chartAria}>
+                    {chartTabs.map((tab) => (
+                      <button
+                        key={tab}
+                        type="button"
+                        className={activeTab === tab ? "active" : ""}
+                        onClick={() => setActiveTab(tab)}
+                      >
+                        {text.chartTabs[tab]}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="chart-export-actions">
+                    <button type="button" className="text-button" onClick={freezeReference} title={text.freezeReference}>
+                      <Target size={16} />
+                      {text.reference}
                     </button>
-                  ))}
+                    <button
+                      type="button"
+                      className="text-button"
+                      disabled={!currentReference}
+                      onClick={clearReference}
+                      title={text.clearReference}
+                    >
+                      <RefreshCw size={16} />
+                      {text.clearReference}
+                    </button>
+                    <button type="button" className="text-button" onClick={exportChartSvg} title={text.exportSvg}>
+                      <Download size={16} />
+                      SVG
+                    </button>
+                    <button type="button" className="text-button" onClick={exportChartPng} title={text.exportPng}>
+                      <Download size={16} />
+                      PNG
+                    </button>
+                    <button type="button" className="text-button" onClick={() => measurementInputRef.current?.click()} title={text.measurements.import}>
+                      <Upload size={16} />
+                      FRD/ZMA
+                    </button>
+                  </div>
                 </div>
                 <div className="chart-actions">
                   <ChartScaleControls
@@ -1923,32 +1953,6 @@ function App() {
                       setChartYMin(parseBoundedNumber(value, chartYMin, -CHART_Y_LIMIT, CHART_Y_LIMIT));
                     }}
                   />
-                  <button type="button" className="text-button" onClick={freezeReference} title={text.freezeReference}>
-                    <Target size={16} />
-                    {text.reference}
-                  </button>
-                  <button
-                    type="button"
-                    className="text-button"
-                    disabled={!currentReference}
-                    onClick={clearReference}
-                    title={text.clearReference}
-                  >
-                    <RefreshCw size={16} />
-                    {text.clearReference}
-                  </button>
-                  <button type="button" className="text-button" onClick={exportChartSvg} title={text.exportSvg}>
-                    <Download size={16} />
-                    SVG
-                  </button>
-                  <button type="button" className="text-button" onClick={exportChartPng} title={text.exportPng}>
-                    <Download size={16} />
-                    PNG
-                  </button>
-                  <button type="button" className="text-button" onClick={() => measurementInputRef.current?.click()} title={text.measurements.import}>
-                    <Upload size={16} />
-                    FRD/ZMA
-                  </button>
                 </div>
               </div>
             </div>
@@ -2238,12 +2242,14 @@ function DesignEditor({
           value={displayDesignName(design.name, text)}
           onChange={(event) => onChange({ name: event.target.value })}
         />
-        <button type="button" className="icon-button" onClick={onDuplicate} title={text.duplicate}>
-          <Copy size={16} />
-        </button>
-        <button type="button" className="icon-button" onClick={onDelete} title={text.delete}>
-          <Trash2 size={16} />
-        </button>
+        <div className="design-head-actions">
+          <button type="button" className="icon-button" onClick={onDuplicate} title={text.duplicate}>
+            <Copy size={16} />
+          </button>
+          <button type="button" className="icon-button" onClick={onDelete} title={text.delete}>
+            <Trash2 size={16} />
+          </button>
+        </div>
       </div>
       <div className="design-grid">
         <label className="field">
@@ -2660,9 +2666,10 @@ function ChartScaleControls({
           </button>
         ))}
       </div>
-      <label className="chart-range-control">
-        <span>{text.chartScale.from}</span>
+      <div className="chart-range-control x-range-control" aria-label={`${text.chartScale.from} ${text.chartScale.to}`}>
+        <span>X</span>
         <input
+          aria-label={text.chartScale.from}
           type="number"
           min={CHART_FREQUENCY_MIN_LIMIT_HZ}
           max={CHART_FREQUENCY_MIN_MAX_HZ}
@@ -2670,11 +2677,9 @@ function ChartScaleControls({
           value={frequencyMinHz}
           onChange={(event) => onFrequencyMinChange(event.target.value)}
         />
-        <em>Hz</em>
-      </label>
-      <label className="chart-range-control">
-        <span>{text.chartScale.to}</span>
+        <em>-</em>
         <input
+          aria-label={text.chartScale.to}
           type="number"
           min={MIN_FREQUENCY_MAX_HZ}
           max={MAX_FREQUENCY_MAX_HZ}
@@ -2683,7 +2688,7 @@ function ChartScaleControls({
           onChange={(event) => onFrequencyMaxChange(event.target.value)}
         />
         <em>Hz</em>
-      </label>
+      </div>
       <label className="chart-range-control compact">
         <input
           type="checkbox"
@@ -2692,29 +2697,30 @@ function ChartScaleControls({
         />
         <span>{text.chartScale.autoY}</span>
       </label>
-      <label className="chart-range-control y-field">
-        <span>{text.chartScale.yMin}</span>
-        <input
-          type="number"
-          disabled={yAuto}
-          step="1"
-          value={yMin}
-          onChange={(event) => onYMinChange(event.target.value)}
-        />
-      </label>
-      <label className="chart-range-control y-field">
-        <span>{text.chartScale.yMax}</span>
-        <input
-          type="number"
-          disabled={yAuto}
-          step="1"
-          value={yMax}
-          onChange={(event) => onYMaxChange(event.target.value)}
-        />
-      </label>
-      <button type="button" className="text-button" onClick={onReset}>
+      {!yAuto ? (
+        <div className="chart-y-range-controls">
+          <label className="chart-range-control y-field">
+            <span>{text.chartScale.yMin}</span>
+            <input
+              type="number"
+              step="1"
+              value={yMin}
+              onChange={(event) => onYMinChange(event.target.value)}
+            />
+          </label>
+          <label className="chart-range-control y-field">
+            <span>{text.chartScale.yMax}</span>
+            <input
+              type="number"
+              step="1"
+              value={yMax}
+              onChange={(event) => onYMaxChange(event.target.value)}
+            />
+          </label>
+        </div>
+      ) : null}
+      <button type="button" className="icon-button chart-reset-button" onClick={onReset} title={text.chartScale.reset} aria-label={text.chartScale.reset}>
         <RefreshCw size={16} />
-        {text.chartScale.reset}
       </button>
     </div>
   );

@@ -125,7 +125,7 @@ h2 {
 .language-control,
 .power-control,
 .chart-range-control {
-  gap: 8px;
+  gap: 7px;
   height: 38px;
   padding: 0 10px;
   border: 1px solid #cfd8e3;
@@ -153,14 +153,14 @@ h2 {
 }
 
 .chart-range-control {
-  height: 32px;
+  height: 30px;
   color: #344155;
   font-size: 12px;
   font-weight: 700;
 }
 
 .chart-range-control input {
-  width: 86px;
+  width: 72px;
 }
 
 .chart-range-control em {
@@ -170,7 +170,8 @@ h2 {
 }
 
 .chart-scale-controls,
-.chart-scale-presets {
+.chart-scale-presets,
+.chart-y-range-controls {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
@@ -179,10 +180,11 @@ h2 {
 
 .chart-scale-controls {
   max-width: 100%;
+  justify-content: flex-end;
 }
 
 .chart-scale-presets button {
-  height: 32px;
+  height: 30px;
   border: 1px solid #cfd8e3;
   border-radius: 8px;
   background: #ffffff;
@@ -197,6 +199,14 @@ h2 {
   color: #0f766e;
 }
 
+.x-range-control {
+  padding: 0 8px;
+}
+
+.x-range-control input {
+  width: 64px;
+}
+
 .chart-range-control.compact input {
   width: 16px;
   height: 16px;
@@ -204,7 +214,7 @@ h2 {
 }
 
 .chart-range-control.y-field input {
-  width: 66px;
+  width: 58px;
 }
 
 .chart-range-control input:disabled {
@@ -811,10 +821,24 @@ h2 {
 }
 
 .chart-tools {
-  flex-wrap: wrap;
-  justify-content: flex-end;
+  display: grid;
+  justify-items: end;
   gap: 10px;
   min-width: 0;
+}
+
+.chart-tool-row,
+.chart-export-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.chart-tool-row {
+  width: 100%;
 }
 
 .tabs {
@@ -825,13 +849,26 @@ h2 {
 }
 
 .chart-actions {
+  width: 100%;
   gap: 8px;
+  justify-content: flex-end;
 }
 
+.chart-export-actions .text-button,
 .chart-actions .text-button {
   height: 32px;
   padding: 0 9px;
   font-size: 12px;
+}
+
+.chart-export-actions .icon-button,
+.chart-actions .icon-button {
+  width: 32px;
+  height: 32px;
+}
+
+.chart-reset-button {
+  flex: 0 0 auto;
 }
 
 .chart-range-warning {
@@ -1371,9 +1408,20 @@ h2 {
 
 .design-head {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
+}
+
+.design-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.design-head-actions .icon-button {
+  width: 32px;
+  height: 32px;
 }
 
 .check {
@@ -1397,6 +1445,22 @@ h2 {
 .design-name {
   width: 100%;
   font-weight: 700;
+}
+
+.config-rail .design-head {
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.config-rail .design-name {
+  grid-column: 1 / -1;
+  height: 34px;
+  padding: 0 6px;
+  font-size: 12px;
+}
+
+.config-rail .design-head-actions {
+  grid-column: 2;
+  justify-content: flex-end;
 }
 
 .design-grid {
@@ -1466,6 +1530,8 @@ h2 {
   .tabs,
   .inline-actions,
   .design-toolbar,
+  .chart-tool-row,
+  .chart-export-actions,
   .chart-actions {
     width: 100%;
     justify-content: flex-start;
@@ -1477,6 +1543,7 @@ h2 {
 
   .chart-scale-controls {
     width: 100%;
+    justify-content: flex-start;
   }
 
   .chart-scale-presets {
