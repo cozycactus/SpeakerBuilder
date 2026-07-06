@@ -230,6 +230,41 @@ test("manual Cms change offers resonance and acoustic recalculations", async ({ 
   expect(fs).not.toBe(fsBefore);
 });
 
+test("manual edit of a derived field pins it back as measured", async ({ page }) => {
+  await page.getByTestId("driver-select").selectOption({ label: "Usher 8945P" });
+  await expect(field(page, "cmsMmN")).toBeVisible();
+
+  await setMeasured(page, "cmsMmN");
+  await mode(page, "cmsMmN", "derive").click();
+  await expect(mode(page, "cmsMmN", "derive")).toContainText(/расчет|derived/i);
+
+  await input(page, "cmsMmN").fill("1.7");
+
+  await expect(mode(page, "cmsMmN", "derive")).toContainText(/рассчитать|derive/i);
+  await expect(chain(page, "fsHz")).toContainText("Cms -> Fs");
+  await expect(chain(page, "mmsG")).toContainText("Cms -> Mms");
+});
+
+test("fixed formula fields suppress recalculation prompts until released", async ({ page }) => {
+  await page.getByTestId("driver-select").selectOption({ label: "Usher 8945P" });
+  await expect(field(page, "qes")).toBeVisible();
+
+  await setMeasured(page, "qes");
+  await setMeasured(page, "reOhm");
+  await setMeasured(page, "blTm");
+
+  await mode(page, "qes", "fixed").click();
+  await expect(mode(page, "qes", "fixed")).toHaveClass(/active/);
+
+  await input(page, "reOhm").fill("6.4");
+  await expect(chain(page, "qes")).toHaveCount(0);
+  await expect(chain(page, "blTm")).toContainText("Re -> BL");
+
+  await mode(page, "qes", "measured").click();
+  await input(page, "reOhm").fill("6.5");
+  await expect(chain(page, "qes")).toContainText("Re -> Qes");
+});
+
 test("manual Qms change offers Qts and Qes quality recalculations", async ({ page }) => {
   await page.getByTestId("driver-select").selectOption({ label: "Usher 8945P" });
   await expect(field(page, "qms")).toBeVisible();
