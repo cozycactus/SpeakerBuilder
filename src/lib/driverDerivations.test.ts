@@ -67,6 +67,13 @@ function complianceMmNFromFsMms(fsHz: number, mmsG: number): number {
   return roundTo(1000 / (omegaS * omegaS * (mmsG / 1000)), 4);
 }
 
+function sdFromComplianceVas(cmsMmN: number, vasL: number): number {
+  const cmsMN = cmsMmN / 1000;
+  const vasM3 = vasL / 1000;
+  const sdM2 = Math.sqrt(vasM3 / (cmsMN * AIR_DENSITY * SPEED_OF_SOUND * SPEED_OF_SOUND));
+  return roundTo(sdM2 * 10000, 4);
+}
+
 function vasFromComplianceSd(cmsMmN: number, sdCm2: number): number {
   const cmsMN = cmsMmN / 1000;
   const sdM2 = sdCm2 / 10000;
@@ -333,5 +340,25 @@ describe("driver derivation cascades", () => {
     expect(after.fsHz).toBe(deriveMotorField(withManualMms, "fsHz"));
     expect(after.cmsMmN).toBe(deriveMechanicalField(after, "cmsMmN", "fsHz"));
     expect(after.cmsMmN).not.toBe(withManualMms.cmsMmN);
+  });
+
+  it("uses resonance priority when Cms is derived from a changed Fs", () => {
+    const before = createDriver();
+    const after = withManualValue(before, "fsHz", 45);
+
+    expect(deriveMechanicalField(after, "cmsMmN", "fsHz")).toBe(complianceMmNFromFsMms(after.fsHz, after.mmsG ?? 0));
+    expect(deriveMechanicalField(after, "cmsMmN", "fsHz")).not.toBe(deriveMechanicalField(after, "cmsMmN"));
+  });
+
+  it("uses explicit Cms before acoustic self-reference when Sd is derived from a changed Vas", () => {
+    const before = createDriver();
+    const after = {
+      ...before,
+      cmsMmN: 1.55,
+      vasL: 42,
+    };
+
+    expect(deriveMechanicalField(after, "sdCm2", "vasL")).toBe(sdFromComplianceVas(1.55, 42));
+    expect(deriveMechanicalField(after, "sdCm2", "vasL")).not.toBe(before.sdCm2);
   });
 });

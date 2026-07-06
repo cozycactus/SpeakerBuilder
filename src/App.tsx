@@ -1804,9 +1804,10 @@ function App() {
   function deriveDriverFormulaField(
     field: MechanicalDerivedField | MotorDerivedField | QualityDerivedField,
     formula: DriverFormulaKind,
+    sourceChangedKey?: keyof SpeakerDriver,
   ) {
     const primaryDerivedDriver = formula === "mechanical" && isMechanicalDerivedField(field)
-      ? reconcileMechanicalDerivedField(selectedDriver, field)
+      ? reconcileMechanicalDerivedField(selectedDriver, field, sourceChangedKey)
       : formula === "motor" && isMotorDerivedField(field)
         ? reconcileMotorDerivedField(selectedDriver, field)
         : formula === "quality" && isQualityDerivedField(field)
@@ -2551,7 +2552,11 @@ function App() {
                           type="button"
                           onClick={(event) => {
                             event.preventDefault();
-                            deriveDriverFormulaField(derivableField, promptFormula ?? defaultFormulaForField(derivableField));
+                            deriveDriverFormulaField(
+                              derivableField,
+                              promptFormula ?? defaultFormulaForField(derivableField),
+                              promptSource?.changedKey,
+                            );
                           }}
                         >
                           {isDerivedField && derivedFieldText

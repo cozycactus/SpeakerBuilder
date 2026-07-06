@@ -19,35 +19,61 @@ const input = (page: Page, key: DriverFieldKey) => page.getByTestId(`driver-inpu
 const mode = (page: Page, key: DriverFieldKey, name: FieldMode) => page.getByTestId(`driver-mode-${key}-${name}`);
 const chain = (page: Page, key: DriverFieldKey) => page.getByTestId(`driver-chain-${key}`);
 
+const AIR_DENSITY = 1.204;
+const SPEED_OF_SOUND = 343;
+
+function roundTo(value: number, decimals: number): number {
+  const factor = 10 ** decimals;
+  return Math.round(value * factor) / factor;
+}
+
+function expectedFsHz(mmsG: number, cmsMmN: number): number {
+  const fs = 1 / (Math.PI * 2 * Math.sqrt((mmsG / 1000) * (cmsMmN / 1000)));
+  return roundTo(fs, 4);
+}
+
 function expectedCmsMmN(fsHz: number, mmsG: number): number {
   const cms = 1000 / ((Math.PI * 2 * fsHz) ** 2 * (mmsG / 1000));
-  return Math.round(cms * 10000) / 10000;
+  return roundTo(cms, 4);
+}
+
+function expectedVasL(cmsMmN: number, sdCm2: number): number {
+  const cms = cmsMmN / 1000;
+  const sdM2 = sdCm2 / 10000;
+  return roundTo(cms * AIR_DENSITY * SPEED_OF_SOUND * SPEED_OF_SOUND * sdM2 * sdM2 * 1000, 4);
+}
+
+function expectedSdCm2(vasL: number, cmsMmN: number): number {
+  const vasM3 = vasL / 1000;
+  const cms = cmsMmN / 1000;
+  const sdM2 = Math.sqrt(vasM3 / (cms * AIR_DENSITY * SPEED_OF_SOUND * SPEED_OF_SOUND));
+  return roundTo(sdM2 * 10000, 4);
 }
 
 function expectedQts(qes: number, qms: number): number {
-  return Math.round(((qes * qms) / (qes + qms)) * 10000) / 10000;
+  return roundTo((qes * qms) / (qes + qms), 4);
 }
 
 function expectedQes(qts: number, qms: number): number {
-  return Math.round((1 / (1 / qts - 1 / qms)) * 10000) / 10000;
+  return roundTo(1 / (1 / qts - 1 / qms), 4);
 }
 
 function expectedMotorQes(fsHz: number, mmsG: number, reOhm: number, blTm: number): number {
   const mmsKg = mmsG / 1000;
   const qes = (Math.PI * 2 * fsHz * mmsKg * reOhm) / (blTm * blTm);
-  return Math.round(qes * 10000) / 10000;
+  return roundTo(qes, 4);
 }
 
 function expectedReOhm(fsHz: number, mmsG: number, qes: number, blTm: number): number {
   const mmsKg = mmsG / 1000;
   const re = (qes * blTm * blTm) / (Math.PI * 2 * fsHz * mmsKg);
-  return Math.round(re * 10000) / 10000;
+  return roundTo(re, 4);
 }
 
 function expectedBlTm(fsHz: number, mmsG: number, reOhm: number, qes: number): number {
   const mmsKg = mmsG / 1000;
   const bl = Math.sqrt((Math.PI * 2 * fsHz * mmsKg * reOhm) / qes);
-  return Math.round(bl * 10000) / 10000;
+  return roundTo(bl, 4);
 }
 
 async function setMeasured(page: Page, key: DriverFieldKey) {
@@ -97,6 +123,111 @@ test("manual Mms change offers motor recalculations and cascades active Cms afte
 
   expect(cms).toBeCloseTo(expectedCmsMmN(fs, mms), 4);
   expect(cms).not.toBe(cmsBefore);
+});
+
+test("manual Fs change offers mechanical recalculations and can derive Cms", async ({ page }) => {
+  await page.getByTestId("driver-select").selectOption({ label: "Usher 8945P" });
+  await expect(field(page, "fsHz")).toBeVisible();
+
+  await setMeasured(page, "fsHz");
+  await setMeasured(page, "mmsG");
+  await setMeasured(page, "cmsMmN");
+  await setMeasured(page, "vasL");
+  await setMeasured(page, "sdCm2");
+
+  await input(page, "cmsMmN").fill("1.55");
+  await input(page, "fsHz").fill("36");
+
+  await expect(chain(page, "mmsG")).toContainText("Fs -> Mms");
+  await expect(chain(page, "cmsMmN")).toContainText("Fs -> Cms");
+  await expect(chain(page, "vasL")).toContainText("Fs -> Vas");
+  await expect(chain(page, "sdCm2")).toContainText("Fs -> Sd");
+
+  await mode(page, "cmsMmN", "derive").click();
+
+  const fs = await numberValue(page, "fsHz");
+  const mms = await numberValue(page, "mmsG");
+  const cms = await numberValue(page, "cmsMmN");
+
+  expect(cms).toBeCloseTo(expectedCmsMmN(fs, mms), 4);
+});
+
+test("manual Vas change can derive Sd from an explicit Cms", async ({ page }) => {
+  await page.getByTestId("driver-select").selectOption({ label: "Usher 8945P" });
+  await expect(field(page, "vasL")).toBeVisible();
+
+  await setMeasured(page, "vasL");
+  await setMeasured(page, "sdCm2");
+  await setMeasured(page, "cmsMmN");
+
+  const sdBefore = await numberValue(page, "sdCm2");
+  await input(page, "cmsMmN").fill("1.55");
+  await input(page, "vasL").fill("42");
+
+  await expect(chain(page, "sdCm2")).toContainText("Vas -> Sd");
+  await expect(chain(page, "cmsMmN")).toContainText("Vas -> Cms");
+
+  await mode(page, "sdCm2", "derive").click();
+
+  const vas = await numberValue(page, "vasL");
+  const cms = await numberValue(page, "cmsMmN");
+  const sd = await numberValue(page, "sdCm2");
+
+  expect(sd).toBeCloseTo(expectedSdCm2(vas, cms), 4);
+  expect(sd).not.toBe(sdBefore);
+});
+
+test("manual Sd change can derive Vas from an explicit Cms", async ({ page }) => {
+  await page.getByTestId("driver-select").selectOption({ label: "Usher 8945P" });
+  await expect(field(page, "sdCm2")).toBeVisible();
+
+  await setMeasured(page, "vasL");
+  await setMeasured(page, "sdCm2");
+  await setMeasured(page, "cmsMmN");
+
+  const vasBefore = await numberValue(page, "vasL");
+  await input(page, "cmsMmN").fill("1.55");
+  await input(page, "sdCm2").fill("150");
+
+  await expect(chain(page, "vasL")).toContainText("Sd -> Vas");
+  await expect(chain(page, "cmsMmN")).toContainText("Sd -> Cms");
+
+  await mode(page, "vasL", "derive").click();
+
+  const cms = await numberValue(page, "cmsMmN");
+  const sd = await numberValue(page, "sdCm2");
+  const vas = await numberValue(page, "vasL");
+
+  expect(vas).toBeCloseTo(expectedVasL(cms, sd), 4);
+  expect(vas).not.toBe(vasBefore);
+});
+
+test("manual Cms change offers resonance and acoustic recalculations", async ({ page }) => {
+  await page.getByTestId("driver-select").selectOption({ label: "Usher 8945P" });
+  await expect(field(page, "cmsMmN")).toBeVisible();
+
+  await setMeasured(page, "fsHz");
+  await setMeasured(page, "mmsG");
+  await setMeasured(page, "cmsMmN");
+  await setMeasured(page, "vasL");
+  await setMeasured(page, "sdCm2");
+
+  const fsBefore = await numberValue(page, "fsHz");
+  await input(page, "cmsMmN").fill("1.7");
+
+  await expect(chain(page, "fsHz")).toContainText("Cms -> Fs");
+  await expect(chain(page, "mmsG")).toContainText("Cms -> Mms");
+  await expect(chain(page, "vasL")).toContainText("Cms -> Vas");
+  await expect(chain(page, "sdCm2")).toContainText("Cms -> Sd");
+
+  await mode(page, "fsHz", "derive").click();
+
+  const fs = await numberValue(page, "fsHz");
+  const mms = await numberValue(page, "mmsG");
+  const cms = await numberValue(page, "cmsMmN");
+
+  expect(fs).toBeCloseTo(expectedFsHz(mms, cms), 4);
+  expect(fs).not.toBe(fsBefore);
 });
 
 test("manual Qms change offers Qts and Qes quality recalculations", async ({ page }) => {

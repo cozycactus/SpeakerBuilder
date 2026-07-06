@@ -78,7 +78,11 @@ export function deriveMechanicalField(
     if (sdCm2 === undefined) {
       return undefined;
     }
-    const cms = complianceForDriver(driver, changedKey, "resonanceFirst");
+    const cms = complianceForDriver(
+      driver,
+      changedKey,
+      changedKey === "vasL" || changedKey === "sdCm2" ? "explicitThenResonance" : "resonanceFirst",
+    );
     if (cms === undefined) {
       return undefined;
     }
@@ -97,7 +101,11 @@ export function deriveMechanicalField(
     if (vasL === undefined) {
       return undefined;
     }
-    const cms = complianceForDriver(driver, changedKey, "resonanceFirst");
+    const cms = complianceForDriver(
+      driver,
+      changedKey,
+      changedKey === "vasL" || changedKey === "sdCm2" ? "explicitThenResonance" : "resonanceFirst",
+    );
     if (cms === undefined) {
       return undefined;
     }
@@ -457,7 +465,7 @@ export function deriveDriverFormulaValue(
 function complianceForDriver(
   driver: SpeakerDriver,
   changedKey?: keyof SpeakerDriver,
-  priority: "explicitFirst" | "resonanceFirst" = "explicitFirst",
+  priority: "explicitFirst" | "explicitThenResonance" | "resonanceFirst" = "explicitFirst",
 ): number | undefined {
   const fsHz = positiveNumber(driver.fsHz);
   const mmsG = positiveNumber(driver.mmsG);
@@ -473,6 +481,9 @@ function complianceForDriver(
   }
   if (changedKey === "fsHz" || changedKey === "mmsG") {
     return resonanceCms ?? explicitCms ?? acousticCms;
+  }
+  if (priority === "explicitThenResonance") {
+    return explicitCms ?? resonanceCms ?? acousticCms;
   }
   if (changedKey === "vasL" || changedKey === "sdCm2") {
     return acousticCms ?? explicitCms ?? resonanceCms;
