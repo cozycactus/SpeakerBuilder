@@ -729,6 +729,7 @@ const UI_TEXT = {
     },
     power: "Мощность",
     projectImported: "Проект загружен",
+    projectSynced: "Проект обновлен из другой вкладки",
     requiredFieldsMissing: "Файл не содержит обязательные поля Fs, Qts, Vas, Sd, Re.",
     recalculate: "Пересчитать",
     reference: "Эталон",
@@ -1142,6 +1143,7 @@ const UI_TEXT = {
     },
     power: "Power",
     projectImported: "Project loaded",
+    projectSynced: "Project updated from another tab",
     requiredFieldsMissing: "File must contain Fs, Qts, Vas, Sd, and Re.",
     recalculate: "Recalculate",
     reference: "Reference",
@@ -1290,6 +1292,7 @@ function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const measurementInputRef = useRef<HTMLInputElement>(null);
   const chartSvgRef = useRef<SVGSVGElement>(null);
+  const persistedProjectJsonRef = useRef<string | null>(null);
   const simulationWorkerRef = useRef<Worker | null>(null);
   const simulationRequestIdRef = useRef({ analysis: 0, chart: 0 });
   const panelDragRef = useRef<PanelDragState | null>(null);
@@ -1349,38 +1352,40 @@ function App() {
   }, [drivers]);
 
   useEffect(() => {
-    localStorage.setItem(
-      PROJECT_STORAGE_KEY,
-      JSON.stringify(
-        createProjectFile({
-          acousticOptions,
-          activeTab,
-          chartFrequencyMinHz,
-          chartFrequencyMaxHz,
-          chartStepTimeMinMs,
-          chartStepTimeMaxMs,
-          chartYScales,
-          compareDriverIds,
-          compareEnabled,
-          designs,
-          drivers,
-          focusedDesignId,
-          fixedDriverFields,
-          language,
-          libraryFilters,
-          mechanicalDerivedField,
-          motorDerivedField,
-          qualityDerivedField,
-          measurements,
-          optimizerGoal,
-          powerW,
-          referenceByTab,
-          selectedDriverId,
-          sealedZma,
-          splInputMode,
-        }),
-      ),
+    const projectJson = JSON.stringify(
+      createProjectFile({
+        acousticOptions,
+        activeTab,
+        chartFrequencyMinHz,
+        chartFrequencyMaxHz,
+        chartStepTimeMinMs,
+        chartStepTimeMaxMs,
+        chartYScales,
+        compareDriverIds,
+        compareEnabled,
+        designs,
+        drivers,
+        focusedDesignId,
+        fixedDriverFields,
+        language,
+        libraryFilters,
+        mechanicalDerivedField,
+        motorDerivedField,
+        qualityDerivedField,
+        measurements,
+        optimizerGoal,
+        powerW,
+        referenceByTab,
+        selectedDriverId,
+        sealedZma,
+        splInputMode,
+      }),
     );
+    if (projectJson === persistedProjectJsonRef.current) {
+      return;
+    }
+    localStorage.setItem(PROJECT_STORAGE_KEY, projectJson);
+    persistedProjectJsonRef.current = projectJson;
   }, [
     acousticOptions,
     activeTab,
@@ -1408,6 +1413,31 @@ function App() {
     sealedZma,
     splInputMode,
   ]);
+
+  useEffect(() => {
+    const handleProjectStorage = (event: StorageEvent) => {
+      if (
+        event.storageArea !== localStorage ||
+        event.key !== PROJECT_STORAGE_KEY ||
+        event.newValue === null ||
+        event.newValue === persistedProjectJsonRef.current
+      ) {
+        return;
+      }
+
+      const project = parseProjectFile(event.newValue);
+      if (!project) {
+        return;
+      }
+
+      persistedProjectJsonRef.current = event.newValue;
+      applyProject(project);
+      setStatus(UI_TEXT[project.language].projectSynced);
+    };
+
+    window.addEventListener("storage", handleProjectStorage);
+    return () => window.removeEventListener("storage", handleProjectStorage);
+  }, []);
 
   useEffect(() => {
     localStorage.setItem(LEFT_PANEL_STORAGE_KEY, String(leftPanelWidth));

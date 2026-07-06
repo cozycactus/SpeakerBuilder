@@ -87,6 +87,14 @@ async function numberValue(page: Page, key: DriverFieldKey): Promise<number> {
   return value;
 }
 
+async function selectedDriverLabel(page: Page): Promise<string> {
+  return page.getByTestId("driver-select").evaluate((select) =>
+    select instanceof HTMLSelectElement
+      ? select.selectedOptions[0]?.textContent ?? ""
+      : "",
+  );
+}
+
 async function waitForPersistedFormulaModes(page: Page) {
   await page.waitForFunction((storageKey) => {
     const raw = window.localStorage.getItem(storageKey);
@@ -311,6 +319,25 @@ test("formula modes persist after reload", async ({ page }) => {
   await expect(mode(page, "cmsMmN", "derive")).toContainText(/расчет|derived/i);
   await expect(mode(page, "qes", "derive")).toContainText(/расчет|derived/i);
   await expect(mode(page, "blTm", "fixed")).toHaveClass(/active/);
+});
+
+test("project changes sync to another tab", async ({ page, context }) => {
+  const peer = await context.newPage();
+  await peer.goto("/");
+  await expect(field(peer, "cmsMmN")).toBeVisible();
+
+  await page.getByTestId("driver-select").selectOption({ label: "Usher 8945P" });
+  await expect(field(page, "cmsMmN")).toBeVisible();
+
+  await setMeasured(page, "cmsMmN");
+  await mode(page, "cmsMmN", "derive").click();
+  await expect(mode(page, "cmsMmN", "derive")).toContainText(/расчет|derived/i);
+
+  await expect(mode(peer, "cmsMmN", "derive")).toContainText(/расчет|derived/i);
+  await expect.poll(() => selectedDriverLabel(peer)).toContain("Usher 8945P");
+  await expect(peer.locator(".status-line")).toContainText(/другой вкладки|another tab/i);
+
+  await peer.close();
 });
 
 test("manual Qms change offers Qts and Qes quality recalculations", async ({ page }) => {
