@@ -32,6 +32,18 @@ function expectedQes(qts: number, qms: number): number {
   return Math.round((1 / (1 / qts - 1 / qms)) * 10000) / 10000;
 }
 
+function expectedMotorQes(fsHz: number, mmsG: number, reOhm: number, blTm: number): number {
+  const mmsKg = mmsG / 1000;
+  const qes = (Math.PI * 2 * fsHz * mmsKg * reOhm) / (blTm * blTm);
+  return Math.round(qes * 10000) / 10000;
+}
+
+function expectedReOhm(fsHz: number, mmsG: number, qes: number, blTm: number): number {
+  const mmsKg = mmsG / 1000;
+  const re = (qes * blTm * blTm) / (Math.PI * 2 * fsHz * mmsKg);
+  return Math.round(re * 10000) / 10000;
+}
+
 function expectedBlTm(fsHz: number, mmsG: number, reOhm: number, qes: number): number {
   const mmsKg = mmsG / 1000;
   const bl = Math.sqrt((Math.PI * 2 * fsHz * mmsKg * reOhm) / qes);
@@ -246,4 +258,90 @@ test("manual Qes change can derive BL from the motor formula", async ({ page }) 
 
   expect(bl).toBeCloseTo(expectedBlTm(fs, mms, re, qes), 4);
   expect(bl).not.toBe(blBefore);
+});
+
+test("manual Re change offers motor recalculations and can derive BL", async ({ page }) => {
+  await page.getByTestId("driver-select").selectOption({ label: "Usher 8945P" });
+  await expect(field(page, "reOhm")).toBeVisible();
+
+  await setMeasured(page, "fsHz");
+  await setMeasured(page, "qes");
+  await setMeasured(page, "reOhm");
+  await setMeasured(page, "blTm");
+
+  const blBefore = await numberValue(page, "blTm");
+  await input(page, "reOhm").fill("6.4");
+
+  await expect(chain(page, "fsHz")).toContainText("Re -> Fs");
+  await expect(chain(page, "qes")).toContainText("Re -> Qes");
+  await expect(chain(page, "blTm")).toContainText("Re -> BL");
+
+  await mode(page, "blTm", "derive").click();
+
+  const fs = await numberValue(page, "fsHz");
+  const mms = await numberValue(page, "mmsG");
+  const re = await numberValue(page, "reOhm");
+  const qes = await numberValue(page, "qes");
+  const bl = await numberValue(page, "blTm");
+
+  expect(bl).toBeCloseTo(expectedBlTm(fs, mms, re, qes), 4);
+  expect(bl).not.toBe(blBefore);
+});
+
+test("manual BL change offers motor recalculations and can derive Re", async ({ page }) => {
+  await page.getByTestId("driver-select").selectOption({ label: "Usher 8945P" });
+  await expect(field(page, "blTm")).toBeVisible();
+
+  await setMeasured(page, "fsHz");
+  await setMeasured(page, "qes");
+  await setMeasured(page, "reOhm");
+  await setMeasured(page, "blTm");
+
+  const reBefore = await numberValue(page, "reOhm");
+  await input(page, "blTm").fill("6.1");
+
+  await expect(chain(page, "fsHz")).toContainText("BL -> Fs");
+  await expect(chain(page, "qes")).toContainText("BL -> Qes");
+  await expect(chain(page, "reOhm")).toContainText("BL -> Re");
+
+  await mode(page, "reOhm", "derive").click();
+
+  const fs = await numberValue(page, "fsHz");
+  const mms = await numberValue(page, "mmsG");
+  const qes = await numberValue(page, "qes");
+  const bl = await numberValue(page, "blTm");
+  const re = await numberValue(page, "reOhm");
+
+  expect(re).toBeCloseTo(expectedReOhm(fs, mms, qes, bl), 4);
+  expect(re).not.toBe(reBefore);
+});
+
+test("manual Re change cascades through derived Qes into active Qts", async ({ page }) => {
+  await page.getByTestId("driver-select").selectOption({ label: "Usher 8945P" });
+  await expect(field(page, "reOhm")).toBeVisible();
+
+  await setMeasured(page, "qts");
+  await setMeasured(page, "qes");
+  await setMeasured(page, "reOhm");
+
+  await mode(page, "qts", "derive").click();
+  await expect(mode(page, "qts", "derive")).toContainText(/расчет|derived/i);
+  const qtsBefore = await numberValue(page, "qts");
+
+  await input(page, "reOhm").fill("6.4");
+  await expect(chain(page, "qes")).toContainText("Re -> Qes");
+
+  await mode(page, "qes", "derive").click();
+
+  const fs = await numberValue(page, "fsHz");
+  const mms = await numberValue(page, "mmsG");
+  const re = await numberValue(page, "reOhm");
+  const bl = await numberValue(page, "blTm");
+  const qes = await numberValue(page, "qes");
+  const qms = await numberValue(page, "qms");
+  const qts = await numberValue(page, "qts");
+
+  expect(qes).toBeCloseTo(expectedMotorQes(fs, mms, re, bl), 4);
+  expect(qts).toBeCloseTo(expectedQts(qes, qms), 4);
+  expect(qts).not.toBe(qtsBefore);
 });
