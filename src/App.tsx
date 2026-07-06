@@ -5,6 +5,8 @@ import {
   Copy,
   Download,
   ExternalLink,
+  Eye,
+  EyeOff,
   FileText,
   FileCheck2,
   Filter,
@@ -178,6 +180,7 @@ interface LibraryFilters {
 interface MeasurementTrace {
   color: string;
   driverId: string;
+  hidden: boolean;
   id: string;
   kind: MeasurementTraceKind;
   name: string;
@@ -635,6 +638,9 @@ const UI_TEXT = {
       clear: "Очистить все",
       clearCurrent: "Очистить драйвер",
       remove: "Удалить измерение",
+      rename: "Имя измерения",
+      show: "Показать на графике",
+      hide: "Скрыть с графика",
       applyToDriver: "Применить к динамику",
       applied: "Измеренные параметры применены к динамику",
       sealedZma: {
@@ -1098,6 +1104,9 @@ const UI_TEXT = {
       clear: "Clear all",
       clearCurrent: "Clear driver",
       remove: "Remove measurement",
+      rename: "Measurement name",
+      show: "Show on chart",
+      hide: "Hide from chart",
       applyToDriver: "Apply to driver",
       applied: "Measured values applied to the driver",
       sealedZma: {
@@ -1880,7 +1889,7 @@ function App() {
   const measurementSeries = useMemo(
     () => {
       const importedSeries = currentDriverMeasurements
-        .filter((measurement) => measurementVisibleOnTab(measurement, activeTab))
+        .filter((measurement) => !measurement.hidden && measurementVisibleOnTab(measurement, activeTab))
         .map((measurement) => ({
           color: measurement.color,
           measurement: true,
@@ -2197,6 +2206,7 @@ function App() {
         ...parsedTrace,
         color: DESIGN_COLORS[(driverMeasurements.length + 6) % DESIGN_COLORS.length],
         driverId: selectedDriver.id,
+        hidden: false,
         id: newId("measurement"),
         offsetDb: 0,
         tab: measurementKindToDefaultTab(parsedTrace.kind),
@@ -2214,6 +2224,21 @@ function App() {
 
   function removeMeasurement(id: string) {
     setMeasurements((current) => current.filter((measurement) => measurement.id !== id));
+  }
+
+  function renameMeasurement(id: string, name: string) {
+    if (!name) {
+      return;
+    }
+    setMeasurements((current) => current.map((measurement) =>
+      measurement.id === id ? { ...measurement, name } : measurement,
+    ));
+  }
+
+  function toggleMeasurementVisibility(id: string) {
+    setMeasurements((current) => current.map((measurement) =>
+      measurement.id === id ? { ...measurement, hidden: !measurement.hidden } : measurement,
+    ));
   }
 
   function applyMeasuredDriverValues(values: Partial<Record<DriverFormulaField, number | undefined>>) {
@@ -2960,7 +2985,9 @@ function App() {
           }}
           onMeasurementOffsetChange={updateMeasurementOffset}
           onRemoveMeasurement={removeMeasurement}
+          onRenameMeasurement={renameMeasurement}
           onSealedZmaChange={(patch) => setSealedZma((current) => normalizeSealedZmaState({ ...current, ...patch }))}
+          onToggleMeasurementVisibility={toggleMeasurementVisibility}
           onDragOver={(event) => dragPanelOver("chartTools", event)}
           onDrop={(event) => dropChartPanel(panelId, event)}
         />
@@ -4286,7 +4313,9 @@ function MeasurementPanel({
   onFreeAirZmaChange,
   onMeasurementOffsetChange,
   onRemoveMeasurement,
+  onRenameMeasurement,
   onSealedZmaChange,
+  onToggleMeasurementVisibility,
   onDragOver,
   onDrop,
 }: {
@@ -4313,7 +4342,9 @@ function MeasurementPanel({
   onFreeAirZmaChange: (patch: Partial<FreeAirZmaState>) => void;
   onMeasurementOffsetChange: (id: string, offsetDb: number) => void;
   onRemoveMeasurement: (id: string) => void;
+  onRenameMeasurement: (id: string, name: string) => void;
   onSealedZmaChange: (patch: Partial<SealedZmaState>) => void;
+  onToggleMeasurementVisibility: (id: string) => void;
   onDragOver?: (event: ReactDragEvent<HTMLElement>) => void;
   onDrop?: (event: ReactDragEvent<HTMLElement>) => void;
 }) {
@@ -4350,10 +4381,26 @@ function MeasurementPanel({
       {driverMeasurements.length > 0 ? (
         <ul className="measurement-list" data-testid="measurement-list">
           {driverMeasurements.map((measurement) => (
-            <li key={measurement.id}>
+            <li key={measurement.id} className={measurement.hidden ? "hidden-trace" : ""}>
               <i style={{ background: measurement.color }} />
-              <span className="measurement-name">{measurement.name}</span>
+              <input
+                type="text"
+                className="measurement-name"
+                value={measurement.name}
+                title={text.measurements.rename}
+                aria-label={text.measurements.rename}
+                onChange={(event) => onRenameMeasurement(measurement.id, event.target.value)}
+              />
               <span className="measurement-kind">{measurement.kind === "zma" ? "ZMA" : "FRD"}</span>
+              <button
+                type="button"
+                className="icon-button"
+                title={measurement.hidden ? text.measurements.show : text.measurements.hide}
+                aria-label={measurement.hidden ? text.measurements.show : text.measurements.hide}
+                onClick={() => onToggleMeasurementVisibility(measurement.id)}
+              >
+                {measurement.hidden ? <EyeOff size={14} /> : <Eye size={14} />}
+              </button>
               <button
                 type="button"
                 className="icon-button"
@@ -7569,6 +7616,7 @@ function normalizeMeasurementTrace(value: unknown, fallbackDriverId: string, ind
   return {
     color: typeof value.color === "string" ? value.color : DESIGN_COLORS[(index + 6) % DESIGN_COLORS.length],
     driverId: typeof value.driverId === "string" ? value.driverId : fallbackDriverId,
+    hidden: value.hidden === true,
     id: value.id,
     kind,
     name: value.name,

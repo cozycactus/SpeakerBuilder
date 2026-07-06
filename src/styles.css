@@ -1433,14 +1433,30 @@ h2 {
   border-radius: 3px;
 }
 
-.measurement-list .measurement-name {
+.measurement-list input.measurement-name {
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  padding: 2px 4px;
   color: #18212f;
   font-size: 12px;
+}
+
+.measurement-list input.measurement-name:hover,
+.measurement-list input.measurement-name:focus {
+  border-color: #cfd8e3;
+  background: #ffffff;
+}
+
+.measurement-list li.hidden-trace i,
+.measurement-list li.hidden-trace input.measurement-name,
+.measurement-list li.hidden-trace .measurement-kind {
+  opacity: 0.45;
 }
 
 .measurement-list .measurement-kind {
