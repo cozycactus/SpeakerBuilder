@@ -874,6 +874,7 @@ export function optimizeDesigns(
   goal: OptimizerGoal,
   splInputMode?: SplInputMode,
 ): OptimizerCandidate[] {
+  const seenAlignments = new Set<string>();
   return createOptimizerDesigns(driver)
     .map((design) => {
       const result = simulateDesign(driver, design, { powerW, splInputMode });
@@ -888,6 +889,16 @@ export function optimizeDesigns(
       };
     })
     .sort((left, right) => right.score - left.score)
+    .filter((candidate) => {
+      // Port variants of one alignment produce visually identical cards; keep the best-scored one.
+      const { kind, vbLiters, fbHz, ql } = candidate.design;
+      const key = `${kind}|${vbLiters}|${fbHz ?? ""}|${ql ?? ""}`;
+      if (seenAlignments.has(key)) {
+        return false;
+      }
+      seenAlignments.add(key);
+      return true;
+    })
     .slice(0, 8);
 }
 

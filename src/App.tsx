@@ -1769,6 +1769,7 @@ function App() {
       acousticOptions,
       chartSvg: svg ? serializeSvg(svg) : "",
       driver: selectedDriver,
+      language,
       measurements,
       powerW,
       splInputMode,
@@ -4296,7 +4297,6 @@ function LineChart({
     svgX: number;
     svgY: number;
     xValue: number;
-    values: Array<{ color: string; name: string; x: number; y: number }>;
   } | null>(null);
   const [isPanning, setIsPanning] = useState(false);
 
@@ -4508,26 +4508,7 @@ function LineChart({
       return;
     }
 
-    const xValue = unscaleX(svgX);
-    const values = [
-      ...series.map((item) => ({ ...item, name: item.name })),
-      ...referenceSeries.map((item) => ({ ...item, name: `${referenceLabel}: ${item.name}` })),
-    ]
-      .map((item) => {
-        const point = nearestPoint(item.points, xValue, xScale);
-        return point &&
-          Number.isFinite(point.x) &&
-          Number.isFinite(point.y) &&
-          point.x >= xDomain[0] &&
-          point.x <= xDomain[1] &&
-          point.y >= yDomain[0] &&
-          point.y <= yDomain[1]
-          ? { color: item.color, name: item.name, x: point.x, y: point.y }
-          : null;
-      })
-      .filter(Boolean) as Array<{ color: string; name: string; x: number; y: number }>;
-
-    setHover({ svgX, svgY, xValue, values });
+    setHover({ svgX, svgY, xValue: unscaleX(svgX) });
   }
 
   function stopPanning(event: ReactPointerEvent<SVGSVGElement>) {
@@ -4591,7 +4572,27 @@ function LineChart({
     onXDomainReset();
   }
 
-  const tooltipValues = hover?.values.slice(0, 7) ?? [];
+  // Derived at render so the readout tracks the current series when data changes under a resting cursor.
+  const hoverValues = hover
+    ? ([
+        ...series.map((item) => ({ ...item, name: item.name })),
+        ...referenceSeries.map((item) => ({ ...item, name: `${referenceLabel}: ${item.name}` })),
+      ]
+        .map((item) => {
+          const point = nearestPoint(item.points, hover.xValue, xScale);
+          return point &&
+            Number.isFinite(point.x) &&
+            Number.isFinite(point.y) &&
+            point.x >= xDomain[0] &&
+            point.x <= xDomain[1] &&
+            point.y >= yDomain[0] &&
+            point.y <= yDomain[1]
+            ? { color: item.color, name: item.name, x: point.x, y: point.y }
+            : null;
+        })
+        .filter(Boolean) as Array<{ color: string; name: string; x: number; y: number }>)
+    : [];
+  const tooltipValues = hoverValues.slice(0, 7);
   const tooltipWidth = 320;
   const tooltipHeight = 40 + tooltipValues.length * 20;
   const tooltipX = hover ? Math.min(width - tooltipWidth - 10, hover.svgX + 14) : 0;
@@ -5622,6 +5623,7 @@ function createReportHtml({
   acousticOptions,
   chartSvg,
   driver,
+  language,
   measurements,
   powerW,
   splInputMode,
@@ -5633,6 +5635,7 @@ function createReportHtml({
   acousticOptions: AcousticOptions;
   chartSvg: string;
   driver: SpeakerDriver;
+  language: Language;
   measurements: MeasurementTrace[];
   powerW: number;
   splInputMode: SplInputMode;
@@ -5658,7 +5661,7 @@ function createReportHtml({
     : escapeHtml(driver.source?.title ?? text.driverSource.sourceUnknown);
   const driveInput = resolveDriveInput(driver, { powerW, splInputMode });
   return `<!doctype html>
-<html lang="ru">
+<html lang="${language}">
 <head>
   <meta charset="utf-8" />
   <title>${escapeHtml(text.appTitle)} - ${escapeHtml(displayDriverName(driver, text))}</title>
