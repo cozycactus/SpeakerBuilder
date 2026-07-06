@@ -626,8 +626,10 @@ const UI_TEXT = {
       visibleHint: "FRD: АЧХ/SPL, ZMA: импеданс",
       clear: "Очистить все",
       clearCurrent: "Очистить драйвер",
+      remove: "Удалить измерение",
       sealedZma: {
         boxVolume: "Vb тест",
+        conditions: "Условия: ZMA снят с динамиком в закрытом ящике объёма Vb тест",
         confidence: {
           fair: "среднее",
           good: "хорошее",
@@ -652,6 +654,7 @@ const UI_TEXT = {
       },
       addedMass: {
         cmsByZma: "Cms по ZMA",
+        conditions: "Условия: ZMA снят в свободном воздухе с известным грузом на диффузоре",
         fm: "Fm",
         hint: "Fs и Sd берутся из параметров динамика",
         invalid: "Пик выбранного ZMA должен быть ниже Fs динамика",
@@ -665,6 +668,7 @@ const UI_TEXT = {
       splAlign: {
         aligned: "SPL выровнен по модели",
         auto: "Авто по модели",
+        conditions: "FRD может быть снят на любом уровне - сдвиг выравнивает его с моделью SPL",
         failed: "Не удалось выровнять - нет пересечения частот",
         frd: "FRD",
         hint: "Сдвиг применяется на вкладке SPL",
@@ -1071,8 +1075,10 @@ const UI_TEXT = {
       visibleHint: "FRD: response/SPL, ZMA: impedance",
       clear: "Clear all",
       clearCurrent: "Clear driver",
+      remove: "Remove measurement",
       sealedZma: {
         boxVolume: "Test Vb",
+        conditions: "Conditions: ZMA taken with the driver in a sealed box of the Test Vb volume",
         confidence: {
           fair: "fair",
           good: "good",
@@ -1097,6 +1103,7 @@ const UI_TEXT = {
       },
       addedMass: {
         cmsByZma: "Cms by ZMA",
+        conditions: "Conditions: ZMA taken in free air with a known mass on the cone",
         fm: "Fm",
         hint: "Fs and Sd come from the driver parameters",
         invalid: "The selected ZMA peak must be below the driver Fs",
@@ -1110,6 +1117,7 @@ const UI_TEXT = {
       splAlign: {
         aligned: "SPL aligned to the model",
         auto: "Auto to model",
+        conditions: "The FRD can be taken at any level - the offset aligns it with the modeled SPL",
         failed: "Alignment failed - no frequency overlap",
         frd: "FRD",
         hint: "The offset applies on the SPL tab",
@@ -2153,6 +2161,10 @@ function App() {
     }
   }
 
+  function removeMeasurement(id: string) {
+    setMeasurements((current) => current.filter((measurement) => measurement.id !== id));
+  }
+
   function updateMeasurementOffset(id: string, offsetDb: number) {
     setMeasurements((current) => current.map((measurement) =>
       measurement.id === id
@@ -2829,6 +2841,7 @@ function App() {
           count={currentDriverMeasurements.length}
           dragHandle={dragHandle}
           driver={selectedDriver}
+          driverMeasurements={currentDriverMeasurements}
           frdMeasurements={frdMeasurements}
           sealedBoxTsEstimate={sealedBoxTsEstimate}
           estimate={sealedZmaEstimate}
@@ -2843,6 +2856,7 @@ function App() {
             setMeasurements((current) => current.filter((measurement) => measurement.driverId !== selectedDriver.id));
           }}
           onMeasurementOffsetChange={updateMeasurementOffset}
+          onRemoveMeasurement={removeMeasurement}
           onSealedZmaChange={(patch) => setSealedZma((current) => normalizeSealedZmaState({ ...current, ...patch }))}
           onDragOver={(event) => dragPanelOver("chartTools", event)}
           onDrop={(event) => dropChartPanel(panelId, event)}
@@ -4151,6 +4165,7 @@ function MeasurementPanel({
   count,
   dragHandle,
   driver,
+  driverMeasurements,
   estimate,
   frdMeasurements,
   sealedBoxTsEstimate,
@@ -4163,6 +4178,7 @@ function MeasurementPanel({
   onClear,
   onClearCurrent,
   onMeasurementOffsetChange,
+  onRemoveMeasurement,
   onSealedZmaChange,
   onDragOver,
   onDrop,
@@ -4172,6 +4188,7 @@ function MeasurementPanel({
   count: number;
   dragHandle?: ReactNode;
   driver: SpeakerDriver;
+  driverMeasurements: MeasurementTrace[];
   estimate: SealedZmaEstimate | null;
   frdMeasurements: MeasurementTrace[];
   sealedBoxTsEstimate: SealedBoxTsEstimate | null;
@@ -4184,6 +4201,7 @@ function MeasurementPanel({
   onClear: () => void;
   onClearCurrent: () => void;
   onMeasurementOffsetChange: (id: string, offsetDb: number) => void;
+  onRemoveMeasurement: (id: string) => void;
   onSealedZmaChange: (patch: Partial<SealedZmaState>) => void;
   onDragOver?: (event: ReactDragEvent<HTMLElement>) => void;
   onDrop?: (event: ReactDragEvent<HTMLElement>) => void;
@@ -4218,11 +4236,32 @@ function MeasurementPanel({
           {text.measurements.clear}
         </button>
       </div>
+      {driverMeasurements.length > 0 ? (
+        <ul className="measurement-list" data-testid="measurement-list">
+          {driverMeasurements.map((measurement) => (
+            <li key={measurement.id}>
+              <i style={{ background: measurement.color }} />
+              <span className="measurement-name">{measurement.name}</span>
+              <span className="measurement-kind">{measurement.kind === "zma" ? "ZMA" : "FRD"}</span>
+              <button
+                type="button"
+                className="icon-button"
+                title={text.measurements.remove}
+                aria-label={text.measurements.remove}
+                onClick={() => onRemoveMeasurement(measurement.id)}
+              >
+                <Trash2 size={14} />
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
       <div className="sealed-zma-tool" data-testid="sealed-zma-tool">
         <div className="mini-panel-head">
           <h3>{text.measurements.sealedZma.title}</h3>
           {estimate ? <span>{text.measurements.sealedZma.confidence[estimate.confidence]}</span> : null}
         </div>
+        <p>{text.measurements.sealedZma.conditions}</p>
         {zmaMeasurements.length > 0 ? (
           <>
             <label className="field">
@@ -4316,6 +4355,7 @@ function MeasurementPanel({
         <div className="mini-panel-head">
           <h3>{text.measurements.addedMass.title}</h3>
         </div>
+        <p>{text.measurements.addedMass.conditions}</p>
         {zmaMeasurements.length > 0 ? (
           <>
             <label className="field">
@@ -4376,6 +4416,7 @@ function MeasurementPanel({
         <div className="mini-panel-head">
           <h3>{text.measurements.splAlign.title}</h3>
         </div>
+        <p>{text.measurements.splAlign.conditions}</p>
         {selectedFrdMeasurement ? (
           <>
             <label className="field">

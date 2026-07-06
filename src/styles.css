@@ -1411,6 +1411,46 @@ h2 {
   flex: 1 1 120px;
 }
 
+.measurement-list {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.measurement-list li {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.measurement-list i {
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+}
+
+.measurement-list .measurement-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #18212f;
+  font-size: 12px;
+}
+
+.measurement-list .measurement-kind {
+  flex: 0 0 auto;
+  color: #66758a;
+  font-size: 11px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
 .sealed-zma-tool {
   display: grid;
   gap: 8px;
