@@ -2432,6 +2432,7 @@ function App() {
               quality: qualityDerivedField,
             });
             const promptSource = driverFormulaPromptSourceForChangedFields(lastDriverFormulaChangeFields, field.key, {
+              mechanical: mechanicalDerivedField,
               motor: motorDerivedField,
             });
             const promptFormula = promptSource?.formula;

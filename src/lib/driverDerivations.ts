@@ -330,6 +330,7 @@ export function driverFormulaPromptForChangedFields(
   changedKeys: readonly (keyof SpeakerDriver)[],
   candidateKey: keyof SpeakerDriver,
   derivedFields: {
+    mechanical?: MechanicalDerivedField;
     motor?: MotorDerivedField;
   } = {},
 ): DriverFormulaKind | undefined {
@@ -340,13 +341,22 @@ export function driverFormulaPromptSourceForChangedFields(
   changedKeys: readonly (keyof SpeakerDriver)[],
   candidateKey: keyof SpeakerDriver,
   derivedFields: {
+    mechanical?: MechanicalDerivedField;
     motor?: MotorDerivedField;
   } = {},
 ): { changedKey: keyof SpeakerDriver; formula: DriverFormulaKind } | undefined {
   if (changedKeys.includes(candidateKey)) {
     return undefined;
   }
-  for (const changedKey of changedKeys) {
+  if (
+    derivedFields.mechanical !== undefined &&
+    changedKeys.includes(derivedFields.mechanical) &&
+    isMechanicalDerivedField(candidateKey)
+  ) {
+    return undefined;
+  }
+  for (let index = changedKeys.length - 1; index >= 0; index -= 1) {
+    const changedKey = changedKeys[index];
     const prompt = driverFormulaPromptForField(changedKey, candidateKey, derivedFields);
     if (prompt !== undefined) {
       return { changedKey, formula: prompt };

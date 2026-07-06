@@ -259,4 +259,23 @@ describe("driver derivation cascades", () => {
     expect(promptedQts).toBeDefined();
     expect(driverFormulaValueDiffers(after.qts, promptedQts as number)).toBe(false);
   });
+
+  it("uses a derived mechanical field as the prompt source and suppresses mechanical alternatives", () => {
+    const before = createDriver();
+    const after = cascade(before, "fsHz", 45, { mechanical: "mmsG" });
+    const changedFields = changedDriverFormulaFields(before, after, "fsHz");
+
+    expect(changedFields).toEqual(["fsHz", "mmsG"]);
+    expect(driverFormulaPromptSourceForChangedFields(changedFields, "qes")).toEqual({
+      changedKey: "mmsG",
+      formula: "motor",
+    });
+    expect(driverFormulaPromptSourceForChangedFields(changedFields, "blTm")).toEqual({
+      changedKey: "mmsG",
+      formula: "motor",
+    });
+    expect(driverFormulaPromptForChangedFields(changedFields, "vasL", { mechanical: "mmsG" })).toBeUndefined();
+    expect(driverFormulaPromptForChangedFields(changedFields, "sdCm2", { mechanical: "mmsG" })).toBeUndefined();
+    expect(driverFormulaPromptForChangedFields(changedFields, "cmsMmN", { mechanical: "mmsG" })).toBeUndefined();
+  });
 });
