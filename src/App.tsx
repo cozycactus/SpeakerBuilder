@@ -50,6 +50,7 @@ import {
   PRESET_DRIVERS,
   OptimizerCandidate,
   OptimizerGoal,
+  SealedBoxTsEstimate,
   SealedZmaEstimate,
   SimulationResult,
   SimulationOutput,
@@ -59,6 +60,7 @@ import {
   createDefaultDesigns,
   createDesignFromTemplate,
   estimateSealedBoxFromZma,
+  estimateSealedBoxTsFromZma,
   getDesignTemplates,
   optimizeDesigns,
   parseDriversFromFile,
@@ -625,10 +627,13 @@ const UI_TEXT = {
         fc: "Fc",
         noZma: "Загрузи ZMA закрытого ящика",
         qtc: "Qtc",
+        qtsByZma: "Qts по ZMA",
         responseHint: "На АЧХ появится пунктирная НЧ-оценка",
         targetQtc: "Цель Qtc",
         title: "Закрытый ящик по ZMA",
+        tsPredicted: "T/S Fc / Qtc",
         tsTargetVolume: "Vb по T/S для цели",
+        vasByZma: "Vas по ZMA",
         zma: "ZMA",
         zMax: "Zmax",
       },
@@ -1044,10 +1049,13 @@ const UI_TEXT = {
         fc: "Fc",
         noZma: "Load a sealed-box ZMA",
         qtc: "Qtc",
+        qtsByZma: "Qts by ZMA",
         responseHint: "A dashed LF estimate appears on Response",
         targetQtc: "Target Qtc",
         title: "Sealed box from ZMA",
+        tsPredicted: "T/S Fc / Qtc",
         tsTargetVolume: "T/S Vb for target",
+        vasByZma: "Vas by ZMA",
         zma: "ZMA",
         zMax: "Zmax",
       },
@@ -1727,6 +1735,10 @@ function App() {
   const sealedZmaEstimate = useMemo(
     () => selectedSealedZmaMeasurement ? estimateSealedBoxFromZma(selectedSealedZmaMeasurement.points) : null,
     [selectedSealedZmaMeasurement],
+  );
+  const sealedBoxTsEstimate = useMemo(
+    () => estimateSealedBoxTsFromZma(selectedDriver, sealedZmaEstimate, sealedZma.boxVolumeLiters),
+    [sealedZma.boxVolumeLiters, sealedZmaEstimate, selectedDriver],
   );
   const measurementSeries = useMemo(
     () => {
@@ -2709,6 +2721,7 @@ function App() {
           count={currentDriverMeasurements.length}
           dragHandle={dragHandle}
           driver={selectedDriver}
+          sealedBoxTsEstimate={sealedBoxTsEstimate}
           estimate={sealedZmaEstimate}
           sealedZma={sealedZma}
           text={text}
@@ -4025,6 +4038,7 @@ function MeasurementPanel({
   dragHandle,
   driver,
   estimate,
+  sealedBoxTsEstimate,
   sealedZma,
   text,
   totalCount,
@@ -4039,6 +4053,7 @@ function MeasurementPanel({
   dragHandle?: ReactNode;
   driver: SpeakerDriver;
   estimate: SealedZmaEstimate | null;
+  sealedBoxTsEstimate: SealedBoxTsEstimate | null;
   sealedZma: SealedZmaState;
   text: UiText;
   totalCount: number;
@@ -4139,6 +4154,28 @@ function MeasurementPanel({
                     <span>{text.measurements.sealedZma.tsTargetVolume}</span>
                     <strong>{fmt(targetVolume, 1)} L</strong>
                   </div>
+                ) : null}
+                {sealedBoxTsEstimate ? (
+                  <>
+                    <div>
+                      <span>{text.measurements.sealedZma.vasByZma}</span>
+                      <strong>{fmt(sealedBoxTsEstimate.vasL, 1)} L</strong>
+                    </div>
+                    {sealedBoxTsEstimate.qts !== undefined ? (
+                      <div>
+                        <span>{text.measurements.sealedZma.qtsByZma}</span>
+                        <strong>{fmt(sealedBoxTsEstimate.qts, 3)}</strong>
+                      </div>
+                    ) : null}
+                    <div>
+                      <span>{text.measurements.sealedZma.tsPredicted}</span>
+                      <strong>
+                        {formatHz(sealedBoxTsEstimate.fcFromTsHz)} / {sealedBoxTsEstimate.qtcFromTs !== undefined
+                          ? fmt(sealedBoxTsEstimate.qtcFromTs, 2)
+                          : "-"}
+                      </strong>
+                    </div>
+                  </>
                 ) : null}
               </div>
             ) : null}

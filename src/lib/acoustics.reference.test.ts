@@ -3,6 +3,7 @@ import {
   FREQUENCIES,
   createDefaultDesigns,
   estimateSealedBoxFromZma,
+  estimateSealedBoxTsFromZma,
   PRESET_DRIVERS,
   parseMeasurementTraceFile,
   resolveDriveInput,
@@ -206,6 +207,33 @@ describe("acoustic reference scenarios", () => {
     expectNear(estimate?.qtc, 1.2, 0.05);
     expect(estimate?.responseDb.length).toBeGreaterThan(40);
     expect(valueAt(estimate?.responseDb ?? [], 400)).toBeGreaterThan(-0.5);
+  });
+
+  it("derives Vas and Qts from a sealed-box ZMA estimate and known box volume", () => {
+    const targetOhm = Math.sqrt(30 * 6);
+    const estimate = estimateSealedBoxFromZma([
+      { x: 20, y: 6 },
+      { x: 32, y: 7 },
+      { x: 40, y: targetOhm },
+      { x: 60, y: 30 },
+      { x: 90, y: targetOhm },
+      { x: 140, y: 8 },
+      { x: 260, y: 6.5 },
+      { x: 500, y: 6.4 },
+    ]);
+    const driver = {
+      ...presetById("usher-8945p"),
+      fsHz: 30,
+      qts: 0.4,
+      vasL: 30,
+    };
+    const derived = estimateSealedBoxTsFromZma(driver, estimate, 10);
+
+    expect(derived).not.toBeNull();
+    expectNear(derived?.vasL, 30, 0.1);
+    expectNear(derived?.qts, 0.6, 0.03);
+    expectNear(derived?.fcFromTsHz, 60, 0.1);
+    expectNear(derived?.qtcFromTs, 0.8, 0.01);
   });
 
   it("can simulate each datasheet-backed preset without invalid metrics", () => {

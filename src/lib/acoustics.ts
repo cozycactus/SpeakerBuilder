@@ -115,6 +115,14 @@ export interface SealedZmaEstimate {
   zMaxOhm: number;
 }
 
+export interface SealedBoxTsEstimate {
+  alpha: number;
+  fcFromTsHz: number;
+  qtcFromTs?: number;
+  qts?: number;
+  vasL: number;
+}
+
 export type SplLimitReason = "xmax" | "passive" | "port" | "power";
 
 export interface SimulationResult {
@@ -1239,6 +1247,43 @@ export function estimateSealedBoxFromZma(points: Point[]): SealedZmaEstimate | n
     responseDb: qtc ? sealedResponseFromFcQtc(peak.x, qtc, validPoints) : [],
     targetOhm,
     zMaxOhm: peak.y,
+  };
+}
+
+export function estimateSealedBoxTsFromZma(
+  driver: SpeakerDriver,
+  estimate: SealedZmaEstimate | null,
+  boxVolumeLiters: number,
+): SealedBoxTsEstimate | null {
+  if (
+    !estimate ||
+    !Number.isFinite(boxVolumeLiters) ||
+    boxVolumeLiters <= 0 ||
+    !Number.isFinite(driver.fsHz) ||
+    driver.fsHz <= 0 ||
+    !Number.isFinite(estimate.fcHz) ||
+    estimate.fcHz <= driver.fsHz
+  ) {
+    return null;
+  }
+
+  const alpha = Math.pow(estimate.fcHz / driver.fsHz, 2) - 1;
+  if (!Number.isFinite(alpha) || alpha <= 0) {
+    return null;
+  }
+
+  const complianceRatio = Math.sqrt(1 + alpha);
+  const qts = estimate.qtc !== undefined && Number.isFinite(estimate.qtc) && estimate.qtc > 0
+    ? estimate.qtc / complianceRatio
+    : undefined;
+  const tsAlpha = driver.vasL > 0 ? driver.vasL / boxVolumeLiters : undefined;
+
+  return {
+    alpha,
+    fcFromTsHz: tsAlpha !== undefined ? driver.fsHz * Math.sqrt(1 + tsAlpha) : driver.fsHz,
+    qtcFromTs: tsAlpha !== undefined ? driver.qts * Math.sqrt(1 + tsAlpha) : undefined,
+    qts,
+    vasL: alpha * boxVolumeLiters,
   };
 }
 
