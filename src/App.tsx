@@ -286,6 +286,7 @@ const DRIVER_STORAGE_KEY = "speaker-builder-drivers-v1";
 const LANGUAGE_STORAGE_KEY = "speaker-builder-language-v1";
 const PROJECT_STORAGE_KEY = "speaker-builder-project-v1";
 const PROJECT_SHARE_HASH_PARAM = "project";
+const PROJECT_COMPRESSED_SHARE_HASH_PARAM = "projectz";
 const PROJECT_SHARE_URL_MAX_LENGTH = 120_000;
 const LEFT_PANEL_STORAGE_KEY = "speaker-builder-left-panel-width-v1";
 const RIGHT_PANEL_STORAGE_KEY = "speaker-builder-right-panel-width-v1";
@@ -1435,6 +1436,22 @@ function App() {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
+    void parseCompressedProjectShareHash(window.location.hash).then((project) => {
+      if (cancelled || !project) {
+        return;
+      }
+      applyProject(project);
+      setStatus(UI_TEXT[project.language].projectLinkLoaded);
+      clearProjectShareHash();
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     localStorage.setItem(DRIVER_STORAGE_KEY, JSON.stringify(drivers));
   }, [drivers]);
 
@@ -2102,7 +2119,7 @@ function App() {
   }
 
   async function copyProjectLink() {
-    const shareUrl = createProjectShareUrl(currentProjectFile);
+    const shareUrl = await createProjectShareUrl(currentProjectFile);
     if (shareUrl.length > PROJECT_SHARE_URL_MAX_LENGTH) {
       setStatus(text.projectLinkTooLarge);
       return;
@@ -6609,9 +6626,10 @@ function loadProjectState(): ProjectLoadState {
   };
 }
 
-function createProjectShareUrl(project: ProjectFile): string {
+async function createProjectShareUrl(project: ProjectFile): Promise<string> {
   const url = new URL(window.location.href);
-  url.hash = `${PROJECT_SHARE_HASH_PARAM}=${encodeBase64Url(JSON.stringify(project))}`;
+  const encodedProject = await encodeCompressedProjectSharePayload(JSON.stringify(project));
+  url.hash = `${PROJECT_COMPRESSED_SHARE_HASH_PARAM}=${encodedProject}`;
   return url.toString();
 }
 
@@ -6629,15 +6647,65 @@ function parseProjectShareHash(hash: string): ProjectState | null {
   }
 }
 
+async function parseCompressedProjectShareHash(hash: string): Promise<ProjectState | null> {
+  const normalizedHash = hash.startsWith("#") ? hash.slice(1) : hash;
+  if (!normalizedHash) {
+    return null;
+  }
+
+  try {
+    const encodedProject = new URLSearchParams(normalizedHash).get(PROJECT_COMPRESSED_SHARE_HASH_PARAM);
+    return encodedProject
+      ? parseProjectFile(await decodeCompressedProjectSharePayload(encodedProject))
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 function clearProjectShareHash() {
-  if (!parseProjectShareHash(window.location.hash)) {
+  if (!hasProjectShareHash(window.location.hash)) {
     return;
   }
   window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
 }
 
+function hasProjectShareHash(hash: string): boolean {
+  const normalizedHash = hash.startsWith("#") ? hash.slice(1) : hash;
+  if (!normalizedHash) {
+    return false;
+  }
+  const params = new URLSearchParams(normalizedHash);
+  return params.has(PROJECT_SHARE_HASH_PARAM) || params.has(PROJECT_COMPRESSED_SHARE_HASH_PARAM);
+}
+
+async function encodeCompressedProjectSharePayload(value: string): Promise<string> {
+  if (typeof CompressionStream === "undefined") {
+    return encodeBase64Url(value);
+  }
+
+  const stream = new Blob([value]).stream().pipeThrough(new CompressionStream("gzip"));
+  const buffer = await new Response(stream).arrayBuffer();
+  return encodeBytesBase64Url(new Uint8Array(buffer));
+}
+
+async function decodeCompressedProjectSharePayload(value: string): Promise<string> {
+  if (typeof DecompressionStream === "undefined") {
+    return decodeBase64Url(value);
+  }
+
+  const bytes = decodeBase64UrlToBytes(value);
+  const buffer = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(buffer).set(bytes);
+  const stream = new Blob([buffer]).stream().pipeThrough(new DecompressionStream("gzip"));
+  return new Response(stream).text();
+}
+
 function encodeBase64Url(value: string): string {
-  const bytes = new TextEncoder().encode(value);
+  return encodeBytesBase64Url(new TextEncoder().encode(value));
+}
+
+function encodeBytesBase64Url(bytes: Uint8Array): string {
   let binary = "";
   const chunkSize = 0x8000;
   for (let index = 0; index < bytes.length; index += chunkSize) {
@@ -6650,6 +6718,10 @@ function encodeBase64Url(value: string): string {
 }
 
 function decodeBase64Url(value: string): string {
+  return new TextDecoder().decode(decodeBase64UrlToBytes(value));
+}
+
+function decodeBase64UrlToBytes(value: string): Uint8Array {
   const base64 = value
     .replace(/-/g, "+")
     .replace(/_/g, "/")
@@ -6659,7 +6731,7 @@ function decodeBase64Url(value: string): string {
   for (let index = 0; index < binary.length; index += 1) {
     bytes[index] = binary.charCodeAt(index);
   }
-  return new TextDecoder().decode(bytes);
+  return bytes;
 }
 
 async function copyTextToClipboard(value: string): Promise<void> {

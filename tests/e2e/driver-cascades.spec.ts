@@ -364,7 +364,7 @@ test("project can be opened from a shared link", async ({ page, context }) => {
   const shareUrl = await page.evaluate(() =>
     (window as unknown as { __copiedProjectLink?: string }).__copiedProjectLink ?? "",
   );
-  expect(shareUrl).toContain("#project=");
+  expect(new URL(shareUrl).hash).toMatch(/^#projectz=/);
 
   const shared = await context.newPage();
   await shared.goto(shareUrl);
