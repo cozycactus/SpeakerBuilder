@@ -46,6 +46,7 @@ import {
   MAX_FREQUENCY_MAX_HZ,
   MIN_FREQUENCY_MAX_HZ,
   AddedMassTsEstimate,
+  FreeAirTsEstimate,
   MeasurementTraceKind,
   Point,
   PRESET_DRIVERS,
@@ -62,6 +63,7 @@ import {
   createDefaultDesigns,
   createDesignFromTemplate,
   estimateAddedMassTsFromZma,
+  estimateFreeAirTsFromZma,
   estimateSealedBoxFromZma,
   estimateSealedBoxTsFromZma,
   getDesignTemplates,
@@ -208,10 +210,15 @@ interface AddedMassZmaState {
   selectedMeasurementId?: string;
 }
 
+interface FreeAirZmaState {
+  selectedMeasurementId?: string;
+}
+
 interface ProjectState {
   acousticOptions: AcousticOptions;
   activeTab: ChartTab;
   addedMassZma: AddedMassZmaState;
+  freeAirZma: FreeAirZmaState;
   chartFrequencyMinHz: number;
   chartFrequencyMaxHz: number;
   chartStepTimeMinMs: number;
@@ -349,6 +356,7 @@ const DEFAULT_SEALED_ZMA: SealedZmaState = {
 const DEFAULT_ADDED_MASS_ZMA: AddedMassZmaState = {
   addedMassGrams: 10,
 };
+const DEFAULT_FREE_AIR_ZMA: FreeAirZmaState = {};
 
 const driverFields: Array<{
   key: keyof SpeakerDriver;
@@ -664,6 +672,18 @@ const UI_TEXT = {
         title: "T/S по добавленной массе",
         vasByZma: "Vas по ZMA",
         zma: "ZMA с грузом",
+      },
+      freeAir: {
+        conditions: "Условия: ZMA снят в свободном воздухе без ящика и груза",
+        fs: "Fs",
+        invalid: "Пик слишком слабый для оценки добротностей",
+        noZma: "Загрузи ZMA свободного воздуха",
+        qes: "Qes",
+        qms: "Qms",
+        qts: "Qts",
+        re: "Re",
+        title: "T/S по свободному воздуху",
+        zma: "ZMA",
       },
       splAlign: {
         aligned: "SPL выровнен по модели",
@@ -1114,6 +1134,18 @@ const UI_TEXT = {
         vasByZma: "Vas by ZMA",
         zma: "ZMA with mass",
       },
+      freeAir: {
+        conditions: "Conditions: ZMA taken in free air without a box or added mass",
+        fs: "Fs",
+        invalid: "The peak is too weak to estimate Q factors",
+        noZma: "Load a free-air ZMA",
+        qes: "Qes",
+        qms: "Qms",
+        qts: "Qts",
+        re: "Re",
+        title: "Free-air T/S",
+        zma: "ZMA",
+      },
       splAlign: {
         aligned: "SPL aligned to the model",
         auto: "Auto to model",
@@ -1371,6 +1403,7 @@ function App() {
   const [measurements, setMeasurements] = useState<MeasurementTrace[]>(() => initialProject.measurements);
   const [sealedZma, setSealedZma] = useState<SealedZmaState>(() => initialProject.sealedZma);
   const [addedMassZma, setAddedMassZma] = useState<AddedMassZmaState>(() => initialProject.addedMassZma);
+  const [freeAirZma, setFreeAirZma] = useState<FreeAirZmaState>(() => initialProject.freeAirZma);
   const [acousticOptions, setAcousticOptions] = useState<AcousticOptions>(() => initialProject.acousticOptions);
   const [status, setStatus] = useState(() =>
     initialProjectRef.current?.source === "share"
@@ -1404,6 +1437,7 @@ function App() {
         acousticOptions,
         activeTab,
         addedMassZma,
+        freeAirZma,
         chartFrequencyMinHz,
         chartFrequencyMaxHz,
         chartStepTimeMinMs,
@@ -1432,6 +1466,7 @@ function App() {
       acousticOptions,
       activeTab,
       addedMassZma,
+      freeAirZma,
       chartFrequencyMinHz,
       chartFrequencyMaxHz,
       chartStepTimeMinMs,
@@ -1825,6 +1860,18 @@ function App() {
   const addedMassTsEstimate = useMemo(
     () => estimateAddedMassTsFromZma(selectedDriver, addedMassZmaEstimate, addedMassZma.addedMassGrams),
     [addedMassZma.addedMassGrams, addedMassZmaEstimate, selectedDriver],
+  );
+  const selectedFreeAirMeasurement = useMemo(
+    () => zmaMeasurements.find((measurement) => measurement.id === freeAirZma.selectedMeasurementId) ?? zmaMeasurements[0],
+    [freeAirZma.selectedMeasurementId, zmaMeasurements],
+  );
+  const freeAirZmaEstimate = useMemo(
+    () => selectedFreeAirMeasurement ? estimateSealedBoxFromZma(selectedFreeAirMeasurement.points) : null,
+    [selectedFreeAirMeasurement],
+  );
+  const freeAirTsEstimate = useMemo(
+    () => estimateFreeAirTsFromZma(freeAirZmaEstimate),
+    [freeAirZmaEstimate],
   );
   const measurementSeries = useMemo(
     () => {
@@ -2224,6 +2271,7 @@ function App() {
     setPowerW(project.powerW);
     setSealedZma(project.sealedZma);
     setAddedMassZma(project.addedMassZma);
+    setFreeAirZma(project.freeAirZma);
     setSplInputMode(project.splInputMode);
     setReferenceByTab(project.referenceByTab);
     setAnalysisSnapshot(createAnalysisSnapshot(
@@ -2843,6 +2891,8 @@ function App() {
           driver={selectedDriver}
           driverMeasurements={currentDriverMeasurements}
           frdMeasurements={frdMeasurements}
+          freeAirTsEstimate={freeAirTsEstimate}
+          freeAirZma={freeAirZma}
           sealedBoxTsEstimate={sealedBoxTsEstimate}
           estimate={sealedZmaEstimate}
           sealedZma={sealedZma}
@@ -2850,6 +2900,7 @@ function App() {
           totalCount={measurements.length}
           zmaMeasurements={zmaMeasurements}
           onAddedMassZmaChange={(patch) => setAddedMassZma((current) => normalizeAddedMassZmaState({ ...current, ...patch }))}
+          onFreeAirZmaChange={(patch) => setFreeAirZma((current) => normalizeFreeAirZmaState({ ...current, ...patch }))}
           onAutoAlignSpl={autoAlignMeasurementSpl}
           onClear={() => setMeasurements([])}
           onClearCurrent={() => {
@@ -4168,6 +4219,8 @@ function MeasurementPanel({
   driverMeasurements,
   estimate,
   frdMeasurements,
+  freeAirTsEstimate,
+  freeAirZma,
   sealedBoxTsEstimate,
   sealedZma,
   text,
@@ -4177,6 +4230,7 @@ function MeasurementPanel({
   onAutoAlignSpl,
   onClear,
   onClearCurrent,
+  onFreeAirZmaChange,
   onMeasurementOffsetChange,
   onRemoveMeasurement,
   onSealedZmaChange,
@@ -4191,6 +4245,8 @@ function MeasurementPanel({
   driverMeasurements: MeasurementTrace[];
   estimate: SealedZmaEstimate | null;
   frdMeasurements: MeasurementTrace[];
+  freeAirTsEstimate: FreeAirTsEstimate | null;
+  freeAirZma: FreeAirZmaState;
   sealedBoxTsEstimate: SealedBoxTsEstimate | null;
   sealedZma: SealedZmaState;
   text: UiText;
@@ -4200,6 +4256,7 @@ function MeasurementPanel({
   onAutoAlignSpl: (id: string) => void;
   onClear: () => void;
   onClearCurrent: () => void;
+  onFreeAirZmaChange: (patch: Partial<FreeAirZmaState>) => void;
   onMeasurementOffsetChange: (id: string, offsetDb: number) => void;
   onRemoveMeasurement: (id: string) => void;
   onSealedZmaChange: (patch: Partial<SealedZmaState>) => void;
@@ -4256,6 +4313,57 @@ function MeasurementPanel({
           ))}
         </ul>
       ) : null}
+      <div className="sealed-zma-tool" data-testid="free-air-tool">
+        <div className="mini-panel-head">
+          <h3>{text.measurements.freeAir.title}</h3>
+        </div>
+        <p>{text.measurements.freeAir.conditions}</p>
+        {zmaMeasurements.length > 0 ? (
+          <>
+            <label className="field">
+              <span>{text.measurements.freeAir.zma}</span>
+              <select
+                value={freeAirZma.selectedMeasurementId ?? zmaMeasurements[0]?.id ?? ""}
+                onChange={(event) => onFreeAirZmaChange({ selectedMeasurementId: event.target.value })}
+              >
+                {zmaMeasurements.map((measurement) => (
+                  <option key={measurement.id} value={measurement.id}>
+                    {measurement.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {freeAirTsEstimate ? (
+              <div className="sealed-zma-readout">
+                <div>
+                  <span>{text.measurements.freeAir.fs}</span>
+                  <strong>{formatHz(freeAirTsEstimate.fsHz)}</strong>
+                </div>
+                <div>
+                  <span>{text.measurements.freeAir.re}</span>
+                  <strong>{fmt(freeAirTsEstimate.reOhm, 2)} Ω</strong>
+                </div>
+                <div>
+                  <span>{text.measurements.freeAir.qms}</span>
+                  <strong>{fmt(freeAirTsEstimate.qms, 3)}</strong>
+                </div>
+                <div>
+                  <span>{text.measurements.freeAir.qes}</span>
+                  <strong>{fmt(freeAirTsEstimate.qes, 3)}</strong>
+                </div>
+                <div>
+                  <span>{text.measurements.freeAir.qts}</span>
+                  <strong>{fmt(freeAirTsEstimate.qts, 3)}</strong>
+                </div>
+              </div>
+            ) : (
+              <p>{text.measurements.freeAir.invalid}</p>
+            )}
+          </>
+        ) : (
+          <p>{text.measurements.freeAir.noZma}</p>
+        )}
+      </div>
       <div className="sealed-zma-tool" data-testid="sealed-zma-tool">
         <div className="mini-panel-head">
           <h3>{text.measurements.sealedZma.title}</h3>
@@ -7085,6 +7193,7 @@ function defaultProjectState(drivers: SpeakerDriver[], selectedDriver: SpeakerDr
     acousticOptions: DEFAULT_ACOUSTIC_OPTIONS,
     activeTab: "response",
     addedMassZma: DEFAULT_ADDED_MASS_ZMA,
+    freeAirZma: DEFAULT_FREE_AIR_ZMA,
     chartFrequencyMinHz: DEFAULT_CHART_FREQUENCY_MIN_HZ,
     chartFrequencyMaxHz: DEFAULT_FREQUENCY_MAX_HZ,
     chartStepTimeMinMs: DEFAULT_CHART_STEP_TIME_MIN_MS,
@@ -7140,6 +7249,7 @@ function parseProjectFile(content: string): ProjectState | null {
       acousticOptions: normalizeAcousticOptions(parsed.acousticOptions),
       activeTab: isChartTab(parsed.activeTab) ? parsed.activeTab : "response",
       addedMassZma: normalizeAddedMassZmaState(parsed.addedMassZma),
+      freeAirZma: normalizeFreeAirZmaState(parsed.freeAirZma),
       chartFrequencyMinHz: normalizeChartFrequencyMin(parsed.chartFrequencyMinHz),
       chartFrequencyMaxHz: normalizeChartFrequencyMax(parsed.chartFrequencyMaxHz),
       chartStepTimeMinMs: normalizeChartStepTimeMin(parsed.chartStepTimeMinMs),
@@ -7245,6 +7355,15 @@ function normalizeAddedMassZmaState(value: unknown): AddedMassZmaState {
   }
   return {
     addedMassGrams: clampNumber(finiteOptional(value.addedMassGrams) ?? DEFAULT_ADDED_MASS_ZMA.addedMassGrams, 0.1, 1000),
+    selectedMeasurementId: typeof value.selectedMeasurementId === "string" ? value.selectedMeasurementId : undefined,
+  };
+}
+
+function normalizeFreeAirZmaState(value: unknown): FreeAirZmaState {
+  if (!isPlainRecord(value)) {
+    return DEFAULT_FREE_AIR_ZMA;
+  }
+  return {
     selectedMeasurementId: typeof value.selectedMeasurementId === "string" ? value.selectedMeasurementId : undefined,
   };
 }

@@ -4,6 +4,7 @@ import {
   alignSplOffsetDb,
   createDefaultDesigns,
   estimateAddedMassTsFromZma,
+  estimateFreeAirTsFromZma,
   estimateSealedBoxFromZma,
   estimateSealedBoxTsFromZma,
   PRESET_DRIVERS,
@@ -281,6 +282,43 @@ describe("acoustic reference scenarios", () => {
     expect(estimateAddedMassTsFromZma(driver, estimate, 10)).toBeNull();
     expect(estimateAddedMassTsFromZma({ ...driver, fsHz: 90 }, estimate, 0)).toBeNull();
     expect(estimateAddedMassTsFromZma(driver, null, 10)).toBeNull();
+  });
+
+  it("derives Fs, Re, and Q factors from a free-air ZMA estimate", () => {
+    const targetOhm = Math.sqrt(30 * 6);
+    const estimate = estimateSealedBoxFromZma([
+      { x: 10, y: 6 },
+      { x: 16, y: 7 },
+      { x: 20, y: targetOhm },
+      { x: 30, y: 30 },
+      { x: 45, y: targetOhm },
+      { x: 70, y: 8 },
+      { x: 140, y: 6.5 },
+      { x: 400, y: 6.4 },
+    ]);
+    const derived = estimateFreeAirTsFromZma(estimate);
+
+    // r0 = 5, dF = 25: Qms = 30*sqrt(5)/25, Qes = Qms/4, Qts = Qms/5
+    expect(derived).not.toBeNull();
+    expectNear(derived?.fsHz, 30, 0.001);
+    expectNear(derived?.reOhm, 6, 0.001);
+    expectNear(derived?.peakRatio, 5, 0.001);
+    expectNear(derived?.qms, 2.683, 0.01);
+    expectNear(derived?.qes, 0.671, 0.005);
+    expectNear(derived?.qts, 0.537, 0.005);
+  });
+
+  it("rejects free-air estimates without a usable impedance peak", () => {
+    const flat = estimateSealedBoxFromZma([
+      { x: 10, y: 6 },
+      { x: 20, y: 6.1 },
+      { x: 40, y: 6.2 },
+      { x: 80, y: 6.1 },
+      { x: 160, y: 6 },
+    ]);
+
+    expect(estimateFreeAirTsFromZma(flat)).toBeNull();
+    expect(estimateFreeAirTsFromZma(null)).toBeNull();
   });
 
   it("aligns measured SPL to the model with a median offset", () => {

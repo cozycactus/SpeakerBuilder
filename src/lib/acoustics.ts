@@ -131,6 +131,16 @@ export interface AddedMassTsEstimate {
   vasL?: number;
 }
 
+export interface FreeAirTsEstimate {
+  fsHz: number;
+  peakRatio: number;
+  qes: number;
+  qms: number;
+  qts: number;
+  reOhm: number;
+  zMaxOhm: number;
+}
+
 export type SplLimitReason = "xmax" | "passive" | "port" | "power";
 
 export interface SimulationResult {
@@ -1330,6 +1340,39 @@ export function estimateAddedMassTsFromZma(
     vasL: sdM2 !== undefined
       ? cms * RHO * SPEED_OF_SOUND * SPEED_OF_SOUND * sdM2 * sdM2 * 1000
       : undefined,
+  };
+}
+
+export function estimateFreeAirTsFromZma(estimate: SealedZmaEstimate | null): FreeAirTsEstimate | null {
+  if (
+    !estimate ||
+    estimate.f1Hz === undefined ||
+    estimate.f2Hz === undefined ||
+    estimate.f2Hz <= estimate.f1Hz ||
+    !Number.isFinite(estimate.fcHz) ||
+    estimate.fcHz <= 0
+  ) {
+    return null;
+  }
+
+  const peakRatio = estimate.zMaxOhm / estimate.baselineOhm;
+  if (!Number.isFinite(peakRatio) || peakRatio <= 1) {
+    return null;
+  }
+
+  const qms = (estimate.fcHz * Math.sqrt(peakRatio)) / (estimate.f2Hz - estimate.f1Hz);
+  if (!Number.isFinite(qms) || qms <= 0) {
+    return null;
+  }
+
+  return {
+    fsHz: estimate.fcHz,
+    peakRatio,
+    qes: qms / (peakRatio - 1),
+    qms,
+    qts: qms / peakRatio,
+    reOhm: estimate.baselineOhm,
+    zMaxOhm: estimate.zMaxOhm,
   };
 }
 
