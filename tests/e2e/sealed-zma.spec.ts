@@ -169,6 +169,22 @@ test("free-air T/S values can be applied to the driver", async ({ page }) => {
   await expect(input(page, "reOhm")).toHaveValue("5.8");
 });
 
+test("added-mass derivation chains Fs from the free-air measurement", async ({ page }) => {
+  await page.getByTestId("driver-select").selectOption({ label: "Usher 8945P" });
+  // the driver keeps its datasheet Fs of 34.012 Hz - the chain must override it
+  await importZma(page, "free-air.zma", FREE_AIR_ZMA_CONTENT);
+  await importZma(page, "added-mass.zma", ADDED_MASS_ZMA_CONTENT);
+
+  const tool = page.getByTestId("added-mass-tool");
+  await tool.locator("select").selectOption({ label: "added-mass.zma" });
+
+  await expect(tool).toContainText(/по свободному воздуху|free-air measurement/);
+  await expect(tool.locator(".sealed-zma-readout")).toBeVisible();
+
+  // Mms = 10 g only when Fs = 30 Hz comes from the free-air ZMA, not the driver
+  expect(Math.abs(await readoutNumber(tool, /^Mms (по|by) ZMA$/) - 10)).toBeLessThan(0.05);
+});
+
 test("added-mass ZMA import derives Mms, Cms, and Vas for the selected driver", async ({ page }) => {
   await page.getByTestId("driver-select").selectOption({ label: "Usher 8945P" });
   await expect(input(page, "fsHz")).toBeVisible();
