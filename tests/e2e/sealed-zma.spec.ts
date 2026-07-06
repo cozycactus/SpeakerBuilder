@@ -135,9 +135,14 @@ test("free-air ZMA import derives Fs, Re, and Q factors", async ({ page }) => {
   const tool = page.getByTestId("free-air-tool");
   await expect(tool.locator(".sealed-zma-readout")).toBeVisible();
 
+  // Re (DC) is prefilled from the driver parameters, not taken from the curve
+  const reInput = toolField(tool, /Re \(DC\)/);
+  await expect(reInput).toHaveValue("5.8");
+  await reInput.fill("6");
+
   // r0 = 5, dF = 25 Hz: Qms = 30*sqrt(5)/25, Qes = Qms/4, Qts = Qms/5
   await expect(readout(tool, /^Fs$/)).toHaveText("30.0 Hz");
-  await expect(readout(tool, /^Re$/)).toHaveText("6.00 Ω");
+  await expect(readout(tool, /^Re (по|by) ZMA$/)).toHaveText("6.00 Ω");
   expect(Math.abs(await readoutNumber(tool, /^Qms$/) - 2.683)).toBeLessThan(0.01);
   expect(Math.abs(await readoutNumber(tool, /^Qes$/) - 0.671)).toBeLessThan(0.005);
   expect(Math.abs(await readoutNumber(tool, /^Qts$/) - 0.537)).toBeLessThan(0.005);
@@ -149,6 +154,7 @@ test("free-air T/S values can be applied to the driver", async ({ page }) => {
 
   const tool = page.getByTestId("free-air-tool");
   await expect(tool.locator(".sealed-zma-readout")).toBeVisible();
+  await toolField(tool, /Re \(DC\)/).fill("6");
 
   await tool.getByRole("button", { name: /Применить|Apply/ }).click();
 
@@ -156,10 +162,11 @@ test("free-air T/S values can be applied to the driver", async ({ page }) => {
   await expect.poll(() => selectedDriverLabel(page)).toMatch(/копия|copy/i);
 
   await expect(input(page, "fsHz")).toHaveValue("30");
-  await expect(input(page, "reOhm")).toHaveValue("6");
   await expect(input(page, "qms")).toHaveValue("2.6833");
   await expect(input(page, "qes")).toHaveValue("0.6708");
   await expect(input(page, "qts")).toHaveValue("0.5367");
+  // Re is an input to the method, not a result - the driver keeps its own value
+  await expect(input(page, "reOhm")).toHaveValue("5.8");
 });
 
 test("added-mass ZMA import derives Mms, Cms, and Vas for the selected driver", async ({ page }) => {
