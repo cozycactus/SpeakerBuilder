@@ -19,6 +19,7 @@ const input = (page: Page, key: DriverFieldKey) => page.getByTestId(`driver-inpu
 const mode = (page: Page, key: DriverFieldKey, name: FieldMode) => page.getByTestId(`driver-mode-${key}-${name}`);
 const chain = (page: Page, key: DriverFieldKey) => page.getByTestId(`driver-chain-${key}`);
 
+const PROJECT_STORAGE_KEY = "speaker-builder-project-v1";
 const AIR_DENSITY = 1.204;
 const SPEED_OF_SOUND = 343;
 
@@ -86,9 +87,32 @@ async function numberValue(page: Page, key: DriverFieldKey): Promise<number> {
   return value;
 }
 
+async function waitForPersistedFormulaModes(page: Page) {
+  await page.waitForFunction((storageKey) => {
+    const raw = window.localStorage.getItem(storageKey);
+    if (!raw) {
+      return false;
+    }
+    const project = JSON.parse(raw) as {
+      fixedDriverFields?: Record<string, string[]>;
+      mechanicalDerivedField?: string;
+      motorDerivedField?: string;
+      qualityDerivedField?: string;
+      selectedDriverId?: string;
+    };
+    const fixedFields = project.selectedDriverId !== undefined
+      ? project.fixedDriverFields?.[project.selectedDriverId] ?? []
+      : [];
+    return project.mechanicalDerivedField === "cmsMmN" &&
+      project.qualityDerivedField === "qes" &&
+      fixedFields.includes("blTm");
+  }, PROJECT_STORAGE_KEY);
+}
+
 test.beforeEach(async ({ page }) => {
-  await page.addInitScript(() => window.localStorage.clear());
   await page.goto("/");
+  await page.evaluate(() => window.localStorage.clear());
+  await page.reload();
 });
 
 test("manual Mms change offers motor recalculations and cascades active Cms after deriving Fs", async ({ page }) => {
@@ -263,6 +287,30 @@ test("fixed formula fields suppress recalculation prompts until released", async
   await mode(page, "qes", "measured").click();
   await input(page, "reOhm").fill("6.5");
   await expect(chain(page, "qes")).toContainText("Re -> Qes");
+});
+
+test("formula modes persist after reload", async ({ page }) => {
+  await page.getByTestId("driver-select").selectOption({ label: "Usher 8945P" });
+  await expect(field(page, "cmsMmN")).toBeVisible();
+
+  await setMeasured(page, "cmsMmN");
+  await setMeasured(page, "qes");
+  await setMeasured(page, "blTm");
+
+  await mode(page, "cmsMmN", "derive").click();
+  await expect(mode(page, "cmsMmN", "derive")).toContainText(/расчет|derived/i);
+  await mode(page, "qes", "derive").click();
+  await expect(mode(page, "qes", "derive")).toContainText(/расчет|derived/i);
+  await mode(page, "blTm", "fixed").click();
+  await expect(mode(page, "blTm", "fixed")).toHaveClass(/active/);
+
+  await waitForPersistedFormulaModes(page);
+  await page.reload();
+  await expect(field(page, "cmsMmN")).toBeVisible();
+
+  await expect(mode(page, "cmsMmN", "derive")).toContainText(/расчет|derived/i);
+  await expect(mode(page, "qes", "derive")).toContainText(/расчет|derived/i);
+  await expect(mode(page, "blTm", "fixed")).toHaveClass(/active/);
 });
 
 test("manual Qms change offers Qts and Qes quality recalculations", async ({ page }) => {
