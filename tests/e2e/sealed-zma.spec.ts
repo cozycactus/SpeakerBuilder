@@ -1,6 +1,6 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
-type DriverFieldKey = "fsHz" | "qts" | "vasL";
+type DriverFieldKey = "fsHz" | "qts" | "qes" | "qms" | "reOhm" | "vasL";
 
 const input = (page: Page, key: DriverFieldKey) => page.getByTestId(`driver-input-${key}`);
 const mode = (page: Page, key: DriverFieldKey) => page.getByTestId(`driver-mode-${key}-measured`);
@@ -53,6 +53,14 @@ async function readoutNumber(tool: Locator, label: RegExp): Promise<number> {
 
 function toolField(tool: Locator, label: RegExp): Locator {
   return tool.locator("label.field", { hasText: label }).locator("input");
+}
+
+async function selectedDriverLabel(page: Page): Promise<string> {
+  return page.getByTestId("driver-select").evaluate((select) =>
+    select instanceof HTMLSelectElement
+      ? select.selectedOptions[0]?.textContent ?? ""
+      : "",
+  );
 }
 
 async function importZma(page: Page, name: string, content: string) {
@@ -133,6 +141,25 @@ test("free-air ZMA import derives Fs, Re, and Q factors", async ({ page }) => {
   expect(Math.abs(await readoutNumber(tool, /^Qms$/) - 2.683)).toBeLessThan(0.01);
   expect(Math.abs(await readoutNumber(tool, /^Qes$/) - 0.671)).toBeLessThan(0.005);
   expect(Math.abs(await readoutNumber(tool, /^Qts$/) - 0.537)).toBeLessThan(0.005);
+});
+
+test("free-air T/S values can be applied to the driver", async ({ page }) => {
+  await page.getByTestId("driver-select").selectOption({ label: "Usher 8945P" });
+  await importZma(page, "free-air.zma", FREE_AIR_ZMA_CONTENT);
+
+  const tool = page.getByTestId("free-air-tool");
+  await expect(tool.locator(".sealed-zma-readout")).toBeVisible();
+
+  await tool.getByRole("button", { name: /Применить|Apply/ }).click();
+
+  await expect(page.locator(".status-line")).toContainText(/применены|applied/i);
+  await expect.poll(() => selectedDriverLabel(page)).toMatch(/копия|copy/i);
+
+  await expect(input(page, "fsHz")).toHaveValue("30");
+  await expect(input(page, "reOhm")).toHaveValue("6");
+  await expect(input(page, "qms")).toHaveValue("2.6833");
+  await expect(input(page, "qes")).toHaveValue("0.6708");
+  await expect(input(page, "qts")).toHaveValue("0.5367");
 });
 
 test("added-mass ZMA import derives Mms, Cms, and Vas for the selected driver", async ({ page }) => {
