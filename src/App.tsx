@@ -58,6 +58,7 @@ import {
   SplInputMode,
   SpeakerDriver,
   SplLimitReason,
+  alignSplOffsetDb,
   createDefaultDesigns,
   createDesignFromTemplate,
   estimateAddedMassTsFromZma,
@@ -178,6 +179,7 @@ interface MeasurementTrace {
   id: string;
   kind: MeasurementTraceKind;
   name: string;
+  offsetDb: number;
   points: Point[];
   tab: ChartTab;
 }
@@ -660,6 +662,17 @@ const UI_TEXT = {
         vasByZma: "Vas по ZMA",
         zma: "ZMA с грузом",
       },
+      splAlign: {
+        aligned: "SPL выровнен по модели",
+        auto: "Авто по модели",
+        failed: "Не удалось выровнять - нет пересечения частот",
+        frd: "FRD",
+        hint: "Сдвиг применяется на вкладке SPL",
+        noFrd: "Загрузи FRD измерение",
+        offset: "Сдвиг",
+        reset: "Сброс",
+        title: "Выравнивание SPL",
+      },
     },
     corrections: {
       title: "Поправки графика",
@@ -1093,6 +1106,17 @@ const UI_TEXT = {
         title: "Added-mass T/S",
         vasByZma: "Vas by ZMA",
         zma: "ZMA with mass",
+      },
+      splAlign: {
+        aligned: "SPL aligned to the model",
+        auto: "Auto to model",
+        failed: "Alignment failed - no frequency overlap",
+        frd: "FRD",
+        hint: "The offset applies on the SPL tab",
+        noFrd: "Load an FRD measurement",
+        offset: "Offset",
+        reset: "Reset",
+        title: "SPL alignment",
       },
     },
     corrections: {
@@ -1766,6 +1790,10 @@ function App() {
     () => currentDriverMeasurements.filter((measurement) => measurement.kind === "zma"),
     [currentDriverMeasurements],
   );
+  const frdMeasurements = useMemo(
+    () => currentDriverMeasurements.filter((measurement) => measurement.kind === "frd"),
+    [currentDriverMeasurements],
+  );
   const selectedSealedZmaMeasurement = useMemo(
     () => zmaMeasurements.find((measurement) => measurement.id === sealedZma.selectedMeasurementId) ?? zmaMeasurements[0],
     [sealedZma.selectedMeasurementId, zmaMeasurements],
@@ -2111,6 +2139,7 @@ function App() {
         color: DESIGN_COLORS[(driverMeasurements.length + 6) % DESIGN_COLORS.length],
         driverId: selectedDriver.id,
         id: newId("measurement"),
+        offsetDb: 0,
         tab: measurementKindToDefaultTab(parsedTrace.kind),
       };
       setMeasurements((current) => [...current, trace]);
@@ -2122,6 +2151,32 @@ function App() {
     } catch (error) {
       setStatus(error instanceof Error ? error.message : text.importError);
     }
+  }
+
+  function updateMeasurementOffset(id: string, offsetDb: number) {
+    setMeasurements((current) => current.map((measurement) =>
+      measurement.id === id
+        ? { ...measurement, offsetDb: clampNumber(offsetDb, -60, 60) }
+        : measurement,
+    ));
+  }
+
+  function autoAlignMeasurementSpl(id: string) {
+    const measurement = measurements.find((item) => item.id === id);
+    if (!measurement || !focusedDesign) {
+      return;
+    }
+    const [modelResult] = applyAcousticOptionsToResults(
+      [simulateDesign(selectedDriver, focusedDesign, { powerW, splInputMode, outputs: ["spl"] })],
+      acousticOptions,
+    );
+    const offsetDb = alignSplOffsetDb(measurement.points, modelResult?.splDb ?? []);
+    if (offsetDb === null) {
+      setStatus(text.measurements.splAlign.failed);
+      return;
+    }
+    updateMeasurementOffset(id, Math.round(offsetDb * 10) / 10);
+    setStatus(text.measurements.splAlign.aligned);
   }
 
   function toggleCompareDriver(id: string) {
@@ -2774,6 +2829,7 @@ function App() {
           count={currentDriverMeasurements.length}
           dragHandle={dragHandle}
           driver={selectedDriver}
+          frdMeasurements={frdMeasurements}
           sealedBoxTsEstimate={sealedBoxTsEstimate}
           estimate={sealedZmaEstimate}
           sealedZma={sealedZma}
@@ -2781,10 +2837,12 @@ function App() {
           totalCount={measurements.length}
           zmaMeasurements={zmaMeasurements}
           onAddedMassZmaChange={(patch) => setAddedMassZma((current) => normalizeAddedMassZmaState({ ...current, ...patch }))}
+          onAutoAlignSpl={autoAlignMeasurementSpl}
           onClear={() => setMeasurements([])}
           onClearCurrent={() => {
             setMeasurements((current) => current.filter((measurement) => measurement.driverId !== selectedDriver.id));
           }}
+          onMeasurementOffsetChange={updateMeasurementOffset}
           onSealedZmaChange={(patch) => setSealedZma((current) => normalizeSealedZmaState({ ...current, ...patch }))}
           onDragOver={(event) => dragPanelOver("chartTools", event)}
           onDrop={(event) => dropChartPanel(panelId, event)}
@@ -4094,14 +4152,17 @@ function MeasurementPanel({
   dragHandle,
   driver,
   estimate,
+  frdMeasurements,
   sealedBoxTsEstimate,
   sealedZma,
   text,
   totalCount,
   zmaMeasurements,
   onAddedMassZmaChange,
+  onAutoAlignSpl,
   onClear,
   onClearCurrent,
+  onMeasurementOffsetChange,
   onSealedZmaChange,
   onDragOver,
   onDrop,
@@ -4112,18 +4173,24 @@ function MeasurementPanel({
   dragHandle?: ReactNode;
   driver: SpeakerDriver;
   estimate: SealedZmaEstimate | null;
+  frdMeasurements: MeasurementTrace[];
   sealedBoxTsEstimate: SealedBoxTsEstimate | null;
   sealedZma: SealedZmaState;
   text: UiText;
   totalCount: number;
   zmaMeasurements: MeasurementTrace[];
   onAddedMassZmaChange: (patch: Partial<AddedMassZmaState>) => void;
+  onAutoAlignSpl: (id: string) => void;
   onClear: () => void;
   onClearCurrent: () => void;
+  onMeasurementOffsetChange: (id: string, offsetDb: number) => void;
   onSealedZmaChange: (patch: Partial<SealedZmaState>) => void;
   onDragOver?: (event: ReactDragEvent<HTMLElement>) => void;
   onDrop?: (event: ReactDragEvent<HTMLElement>) => void;
 }) {
+  const [selectedFrdId, setSelectedFrdId] = useState<string | undefined>(undefined);
+  const selectedFrdMeasurement = frdMeasurements.find((measurement) => measurement.id === selectedFrdId) ??
+    frdMeasurements[0];
   const targetVolume = sealedTargetVolumeFromTs(driver, sealedZma.targetQtc);
   const qtcAdvice = estimate?.qtc
     ? estimate.qtc > sealedZma.targetQtc + 0.04
@@ -4303,6 +4370,59 @@ function MeasurementPanel({
           </>
         ) : (
           <p>{text.measurements.addedMass.noZma}</p>
+        )}
+      </div>
+      <div className="sealed-zma-tool" data-testid="spl-align-tool">
+        <div className="mini-panel-head">
+          <h3>{text.measurements.splAlign.title}</h3>
+        </div>
+        {selectedFrdMeasurement ? (
+          <>
+            <label className="field">
+              <span>{text.measurements.splAlign.frd}</span>
+              <select
+                value={selectedFrdMeasurement.id}
+                onChange={(event) => setSelectedFrdId(event.target.value)}
+              >
+                {frdMeasurements.map((measurement) => (
+                  <option key={measurement.id} value={measurement.id}>
+                    {measurement.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="mini-grid">
+              <NumberField
+                label={text.measurements.splAlign.offset}
+                unit="dB"
+                value={selectedFrdMeasurement.offsetDb}
+                min={-60}
+                max={60}
+                step="0.1"
+                onChange={(offsetDb) => onMeasurementOffsetChange(selectedFrdMeasurement.id, offsetDb)}
+              />
+            </div>
+            <div className="measurement-actions">
+              <button
+                type="button"
+                className="text-button"
+                onClick={() => onAutoAlignSpl(selectedFrdMeasurement.id)}
+              >
+                {text.measurements.splAlign.auto}
+              </button>
+              <button
+                type="button"
+                className="text-button"
+                disabled={selectedFrdMeasurement.offsetDb === 0}
+                onClick={() => onMeasurementOffsetChange(selectedFrdMeasurement.id, 0)}
+              >
+                {text.measurements.splAlign.reset}
+              </button>
+            </div>
+            <p>{text.measurements.splAlign.hint}</p>
+          </>
+        ) : (
+          <p>{text.measurements.splAlign.noFrd}</p>
         )}
       </div>
     </section>
@@ -6282,15 +6402,21 @@ function measurementVisibleOnTab(measurement: MeasurementTrace, tab: ChartTab): 
 }
 
 function measurementPointsForTab(measurement: MeasurementTrace, tab: ChartTab): Point[] {
-  if (measurement.kind !== "frd" || tab !== "response") {
-    return measurement.points;
+  if (measurement.kind === "frd" && tab === "response") {
+    return normalizeFrdResponsePoints(measurement.points);
   }
-  return normalizeFrdResponsePoints(measurement.points);
+  if (measurement.kind === "frd" && tab === "spl" && measurement.offsetDb !== 0) {
+    return measurement.points.map((point) => ({ ...point, y: point.y + measurement.offsetDb }));
+  }
+  return measurement.points;
 }
 
 function measurementSeriesName(measurement: MeasurementTrace, tab: ChartTab): string {
   if (measurement.kind === "frd" && tab === "response") {
     return `${measurement.name} · norm`;
+  }
+  if (measurement.kind === "frd" && tab === "spl" && measurement.offsetDb !== 0) {
+    return `${measurement.name} ${measurement.offsetDb > 0 ? "+" : ""}${fmt(measurement.offsetDb, 1)} dB`;
   }
   return measurement.name;
 }
@@ -7192,6 +7318,7 @@ function normalizeMeasurementTrace(value: unknown, fallbackDriverId: string, ind
     id: value.id,
     kind,
     name: value.name,
+    offsetDb: clampNumber(finiteOptional(value.offsetDb) ?? 0, -60, 60),
     points: value.points,
     tab: isChartTab(value.tab) ? value.tab : measurementKindToDefaultTab(kind),
   };

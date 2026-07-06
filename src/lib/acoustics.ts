@@ -1333,6 +1333,44 @@ export function estimateAddedMassTsFromZma(
   };
 }
 
+export function alignSplOffsetDb(measured: Point[], model: Point[]): number | null {
+  const modelPoints = model
+    .filter((point) => point.x > 0 && Number.isFinite(point.y))
+    .sort((left, right) => left.x - right.x);
+  const measuredPoints = measured
+    .filter((point) => point.x > 0 && Number.isFinite(point.y))
+    .sort((left, right) => left.x - right.x);
+  if (modelPoints.length < 2 || measuredPoints.length === 0) {
+    return null;
+  }
+
+  const overlapMinHz = Math.max(measuredPoints[0].x, modelPoints[0].x);
+  const overlapMaxHz = Math.min(
+    measuredPoints[measuredPoints.length - 1].x,
+    modelPoints[modelPoints.length - 1].x,
+  );
+  if (overlapMaxHz <= overlapMinHz) {
+    return null;
+  }
+
+  const collectDiffs = (minHz: number, maxHz: number): number[] =>
+    measuredPoints
+      .filter((point) => point.x >= minHz && point.x <= maxHz)
+      .map((point) => {
+        const modelDb = valueAt(modelPoints, point.x);
+        return modelDb === undefined ? undefined : modelDb - point.y;
+      })
+      .filter((diff): diff is number => diff !== undefined);
+
+  const preferredDiffs = collectDiffs(Math.max(overlapMinHz, 100), Math.min(overlapMaxHz, 500));
+  const diffs = preferredDiffs.length >= 5 ? preferredDiffs : collectDiffs(overlapMinHz, overlapMaxHz);
+  if (diffs.length === 0) {
+    return null;
+  }
+  diffs.sort((left, right) => left - right);
+  return diffs[Math.floor(diffs.length / 2)];
+}
+
 function zmaCrossingFrequency(
   points: Point[],
   targetOhm: number,

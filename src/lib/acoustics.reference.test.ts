@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   FREQUENCIES,
+  alignSplOffsetDb,
   createDefaultDesigns,
   estimateAddedMassTsFromZma,
   estimateSealedBoxFromZma,
@@ -280,6 +281,24 @@ describe("acoustic reference scenarios", () => {
     expect(estimateAddedMassTsFromZma(driver, estimate, 10)).toBeNull();
     expect(estimateAddedMassTsFromZma({ ...driver, fsHz: 90 }, estimate, 0)).toBeNull();
     expect(estimateAddedMassTsFromZma(driver, null, 10)).toBeNull();
+  });
+
+  it("aligns measured SPL to the model with a median offset", () => {
+    const model = [20, 50, 100, 200, 300, 400, 500, 800, 1000].map((x) => ({ x, y: 96 }));
+    const measured = [100, 150, 200, 250, 300, 350, 400, 600, 800].map((x) => ({ x, y: 70 }));
+
+    expectNear(alignSplOffsetDb(measured, model) ?? undefined, 26, 0.001);
+
+    const noisy = measured.map((point) => (point.x === 300 ? { ...point, y: 10 } : point));
+    expectNear(alignSplOffsetDb(noisy, model) ?? undefined, 26, 0.001);
+  });
+
+  it("rejects SPL alignment without frequency overlap", () => {
+    const model = [20, 100, 500, 1000].map((x) => ({ x, y: 96 }));
+
+    expect(alignSplOffsetDb([{ x: 2000, y: 80 }, { x: 3000, y: 81 }], model)).toBeNull();
+    expect(alignSplOffsetDb([], model)).toBeNull();
+    expect(alignSplOffsetDb([{ x: 200, y: 80 }], [])).toBeNull();
   });
 
   it("can simulate each datasheet-backed preset without invalid metrics", () => {
