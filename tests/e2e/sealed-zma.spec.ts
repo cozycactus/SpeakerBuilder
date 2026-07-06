@@ -16,26 +16,40 @@ const SEALED_ZMA_CONTENT = [
   "500 6.4",
 ].join("\n");
 
-function readout(page: Page, label: RegExp): Locator {
-  return page
+const ADDED_MASS_ZMA_CONTENT = [
+  "8 6.2",
+  "12 7",
+  "16 10",
+  "21.2132 28",
+  "30 9",
+  "48 6.6",
+  "120 6.3",
+  "400 6.5",
+].join("\n");
+
+function readout(tool: Locator, label: RegExp): Locator {
+  return tool
     .locator(".sealed-zma-readout > div")
-    .filter({ has: page.getByText(label) })
+    .filter({ has: tool.page().getByText(label) })
     .locator("strong");
 }
 
-async function readoutNumber(page: Page, label: RegExp): Promise<number> {
-  const value = Number.parseFloat(await readout(page, label).innerText());
+async function readoutNumber(tool: Locator, label: RegExp): Promise<number> {
+  const value = Number.parseFloat(await readout(tool, label).innerText());
   expect(Number.isFinite(value)).toBe(true);
   return value;
 }
 
-async function importSealedZma(page: Page) {
+function toolField(tool: Locator, label: RegExp): Locator {
+  return tool.locator("label.field", { hasText: label }).locator("input");
+}
+
+async function importZma(page: Page, name: string, content: string) {
   await page.locator('input[accept*=".zma"]').setInputFiles({
-    name: "sealed-box.zma",
+    name,
     mimeType: "text/plain",
-    buffer: Buffer.from(SEALED_ZMA_CONTENT),
+    buffer: Buffer.from(content),
   });
-  await expect(page.locator(".sealed-zma-readout")).toBeVisible();
 }
 
 test.beforeEach(async ({ page }) => {
@@ -55,15 +69,18 @@ test("sealed-box ZMA import derives Vas and Qts for the selected driver", async 
   await input(page, "qts").fill("0.4");
   await input(page, "vasL").fill("30");
 
-  await importSealedZma(page);
+  await importZma(page, "sealed-box.zma", SEALED_ZMA_CONTENT);
 
-  const volume = page.locator("label.field", { hasText: /Vb тест|Test Vb/ }).locator("input");
-  await expect(volume).toHaveValue("10");
+  const tool = page.getByTestId("sealed-zma-tool");
+  await expect(tool.locator(".sealed-zma-readout")).toBeVisible();
+  await expect(toolField(tool, /Vb тест|Test Vb/)).toHaveValue("10");
 
-  expect(await readoutNumber(page, /^Qtc$/)).toBeCloseTo(1.2, 1);
-  expect(Math.abs(await readoutNumber(page, /^Vas (по|by) ZMA$/) - 30)).toBeLessThan(0.5);
-  expect(Math.abs(await readoutNumber(page, /^Qts (по|by) ZMA$/) - 0.6)).toBeLessThan(0.03);
-  await expect(readout(page, /^T\/S Fc \/ Qtc$/)).toHaveText("60.0 Hz / 0.80");
+  expect(await readoutNumber(tool, /^Qtc$/)).toBeCloseTo(1.2, 1);
+  expect(Math.abs(await readoutNumber(tool, /^Vas (по|by) ZMA$/) - 30)).toBeLessThan(0.5);
+  expect(Math.abs(await readoutNumber(tool, /^Qts (по|by) ZMA$/) - 0.6)).toBeLessThan(0.03);
+  await expect(readout(tool, /^T\/S Fc \/ Qtc$/)).toHaveText("60.0 Hz / 0.80");
+
+  await expect(page.getByTestId("added-mass-tool")).toContainText(/должен быть ниже|must be below/);
 });
 
 test("changing the test volume rescales the ZMA-derived T/S estimate", async ({ page }) => {
@@ -77,15 +94,42 @@ test("changing the test volume rescales the ZMA-derived T/S estimate", async ({ 
   await input(page, "qts").fill("0.4");
   await input(page, "vasL").fill("30");
 
-  await importSealedZma(page);
+  await importZma(page, "sealed-box.zma", SEALED_ZMA_CONTENT);
 
-  const volume = page.locator("label.field", { hasText: /Vb тест|Test Vb/ }).locator("input");
+  const tool = page.getByTestId("sealed-zma-tool");
+  await expect(tool.locator(".sealed-zma-readout")).toBeVisible();
+  const volume = toolField(tool, /Vb тест|Test Vb/);
   await expect(volume).toHaveValue("10");
-  const qtsBefore = await readoutNumber(page, /^Qts (по|by) ZMA$/);
+  const qtsBefore = await readoutNumber(tool, /^Qts (по|by) ZMA$/);
 
   await volume.fill("20");
 
-  await expect(readout(page, /^T\/S Fc \/ Qtc$/)).toHaveText("47.4 Hz / 0.63");
-  expect(Math.abs(await readoutNumber(page, /^Vas (по|by) ZMA$/) - 60)).toBeLessThan(1);
-  expect(await readoutNumber(page, /^Qts (по|by) ZMA$/)).toBeCloseTo(qtsBefore, 5);
+  await expect(readout(tool, /^T\/S Fc \/ Qtc$/)).toHaveText("47.4 Hz / 0.63");
+  expect(Math.abs(await readoutNumber(tool, /^Vas (по|by) ZMA$/) - 60)).toBeLessThan(1);
+  expect(await readoutNumber(tool, /^Qts (по|by) ZMA$/)).toBeCloseTo(qtsBefore, 5);
+});
+
+test("added-mass ZMA import derives Mms, Cms, and Vas for the selected driver", async ({ page }) => {
+  await page.getByTestId("driver-select").selectOption({ label: "Usher 8945P" });
+  await expect(input(page, "fsHz")).toBeVisible();
+
+  await mode(page, "fsHz").click();
+  await input(page, "fsHz").fill("30");
+
+  await importZma(page, "added-mass.zma", ADDED_MASS_ZMA_CONTENT);
+
+  const tool = page.getByTestId("added-mass-tool");
+  await expect(tool.locator(".sealed-zma-readout")).toBeVisible();
+  const mass = toolField(tool, /Груз|Added mass/);
+  await expect(mass).toHaveValue("10");
+
+  await expect(readout(tool, /^Fm$/)).toHaveText("21.2 Hz");
+  expect(Math.abs(await readoutNumber(tool, /^Mms (по|by) ZMA$/) - 10)).toBeLessThan(0.01);
+  expect(Math.abs(await readoutNumber(tool, /^Cms (по|by) ZMA$/) - 2.8145)).toBeLessThan(0.002);
+  expect(Math.abs(await readoutNumber(tool, /^Vas (по|by) ZMA$/) - 73.7)).toBeLessThan(0.2);
+
+  await mass.fill("20");
+
+  expect(Math.abs(await readoutNumber(tool, /^Mms (по|by) ZMA$/) - 20)).toBeLessThan(0.01);
+  expect(Math.abs(await readoutNumber(tool, /^Vas (по|by) ZMA$/) - 36.9)).toBeLessThan(0.2);
 });
