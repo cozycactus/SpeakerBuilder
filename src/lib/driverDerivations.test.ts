@@ -9,6 +9,7 @@ import {
   deriveMotorField,
   deriveQualityField,
   driverFormulaPromptForChangedFields,
+  driverFormulaPromptSourceForChangedFields,
   driverFormulaValueDiffers,
   reconcileDriverDerivedFields,
 } from "./driverDerivations";
@@ -248,6 +249,11 @@ describe("driver derivation cascades", () => {
 
     expect(changedFields).toEqual(["qms", "qes"]);
     expect(driverFormulaPromptForChangedFields(changedFields, "blTm")).toBe("motor");
+    expect(driverFormulaPromptForChangedFields(changedFields, "qms")).toBeUndefined();
+    expect(driverFormulaPromptSourceForChangedFields(changedFields, "blTm")).toEqual({
+      changedKey: "qes",
+      formula: "motor",
+    });
     expect(promptedBl).toBeDefined();
     expect(driverFormulaValueDiffers(after.blTm, promptedBl as number)).toBe(true);
     expect(promptedQts).toBeDefined();

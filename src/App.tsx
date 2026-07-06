@@ -78,7 +78,7 @@ import {
   deriveMotorField,
   deriveQualityField,
   driverActiveFormulaForField,
-  driverFormulaPromptForChangedFields,
+  driverFormulaPromptSourceForChangedFields,
   driverFormulaValueDiffers,
   isDriverFormulaField,
   isMechanicalDerivedField,
@@ -494,6 +494,7 @@ const UI_TEXT = {
       derived: (value: string, unit: string) => `расчет: ${value}${unit ? ` ${unit}` : ""}`,
       fixed: "фикс",
       fixedTitle: (label: string) => `${label} зафиксирован как вход формулы и не будет мигать как кандидат на пересчет.`,
+      promptChain: (chain: string) => `цепь: ${chain}`,
       manual: "ручной ввод",
       measured: "замер",
       measuredTitle: (label: string) => `${label} используется как введенный или измеренный вход формулы.`,
@@ -904,6 +905,7 @@ const UI_TEXT = {
       derived: (value: string, unit: string) => `derived: ${value}${unit ? ` ${unit}` : ""}`,
       fixed: "fixed",
       fixedTitle: (label: string) => `${label} is pinned as a formula input and will not pulse as a recalculation candidate.`,
+      promptChain: (chain: string) => `chain: ${chain}`,
       manual: "manual input",
       measured: "measured",
       measuredTitle: (label: string) => `${label} is used as an entered or measured formula input.`,
@@ -2429,9 +2431,10 @@ function App() {
               motor: motorDerivedField,
               quality: qualityDerivedField,
             });
-            const promptFormula = driverFormulaPromptForChangedFields(lastDriverFormulaChangeFields, field.key, {
+            const promptSource = driverFormulaPromptSourceForChangedFields(lastDriverFormulaChangeFields, field.key, {
               motor: motorDerivedField,
             });
+            const promptFormula = promptSource?.formula;
             const isDerivedField = activeFormula !== undefined;
             const isFixedField = canChooseFieldMode &&
               !isDerivedField &&
@@ -2447,6 +2450,9 @@ function App() {
               activeFormula !== promptFormula &&
               promptedDerivedFieldValue !== undefined &&
               driverFormulaValueDiffers(fieldValue, promptedDerivedFieldValue);
+            const promptChainText = shouldPromptDerive && promptSource !== undefined
+              ? driverFormulaPromptChain(lastDriverFormulaChangeFields, promptSource.changedKey, field.key)
+              : undefined;
             let derivedFieldValue: number | undefined;
             if (activeFormula !== undefined && typeof fieldValue === "number") {
               derivedFieldValue = fieldValue;
@@ -2465,6 +2471,7 @@ function App() {
               ...issues.map((issue) => text.driverAnalysis.issues[issue]),
               isDerivedField ? text.driverDerivation.title(field.label) : "",
               isFixedField ? text.driverDerivation.fixedTitle(field.label) : "",
+              promptChainText !== undefined ? text.driverDerivation.promptChain(promptChainText) : "",
             ].filter(Boolean);
             return (
               <label
@@ -2486,45 +2493,54 @@ function App() {
                   onChange={(event) => updateDriverField(field.key, event.target.value)}
                 />
                 {canChooseFieldMode ? (
-                  <div className={`field-mode-row ${shouldPromptDerive ? "attention" : ""}`}>
-                    <button
-                      className={!isDerivedField && !isFixedField ? "active" : ""}
-                      title={text.driverDerivation.measuredTitle(field.label)}
-                      type="button"
-                      onClick={(event) => {
-                        event.preventDefault();
-                        setDriverFormulaFieldFixed(field.key, false);
-                      }}
-                    >
-                      {text.driverDerivation.measured}
-                    </button>
-                    <button
-                      className={!isDerivedField && isFixedField ? "active fixed" : ""}
-                      title={text.driverDerivation.fixedTitle(field.label)}
-                      type="button"
-                      onClick={(event) => {
-                        event.preventDefault();
-                        setDriverFormulaFieldFixed(field.key, true);
-                      }}
-                    >
-                      {text.driverDerivation.fixed}
-                    </button>
-                    {derivableField !== undefined ? (
+                  <>
+                    <div className={`field-mode-row ${shouldPromptDerive ? "attention" : ""}`}>
                       <button
-                        className={`${isDerivedField ? "active derived" : ""} ${shouldPromptDerive ? "attention" : ""}`}
-                        title={isDerivedField ? text.driverDerivation.title(field.label) : undefined}
+                        className={!isDerivedField && !isFixedField ? "active" : ""}
+                        title={text.driverDerivation.measuredTitle(field.label)}
                         type="button"
                         onClick={(event) => {
                           event.preventDefault();
-                          deriveDriverFormulaField(derivableField, promptFormula ?? defaultFormulaForField(derivableField));
+                          setDriverFormulaFieldFixed(field.key, false);
                         }}
                       >
-                        {isDerivedField && derivedFieldText
-                          ? text.driverDerivation.derived(derivedFieldText, field.unit)
-                          : text.driverDerivation.derive}
+                        {text.driverDerivation.measured}
                       </button>
+                      <button
+                        className={!isDerivedField && isFixedField ? "active fixed" : ""}
+                        title={text.driverDerivation.fixedTitle(field.label)}
+                        type="button"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          setDriverFormulaFieldFixed(field.key, true);
+                        }}
+                      >
+                        {text.driverDerivation.fixed}
+                      </button>
+                      {derivableField !== undefined ? (
+                        <button
+                          className={`${isDerivedField ? "active derived" : ""} ${shouldPromptDerive ? "attention" : ""}`}
+                          title={isDerivedField
+                            ? text.driverDerivation.title(field.label)
+                            : promptChainText !== undefined
+                              ? text.driverDerivation.promptChain(promptChainText)
+                              : undefined}
+                          type="button"
+                          onClick={(event) => {
+                            event.preventDefault();
+                            deriveDriverFormulaField(derivableField, promptFormula ?? defaultFormulaForField(derivableField));
+                          }}
+                        >
+                          {isDerivedField && derivedFieldText
+                            ? text.driverDerivation.derived(derivedFieldText, field.unit)
+                            : text.driverDerivation.derive}
+                        </button>
+                      ) : null}
+                    </div>
+                    {promptChainText !== undefined ? (
+                      <span className="field-derive-chain">{text.driverDerivation.promptChain(promptChainText)}</span>
                     ) : null}
-                  </div>
+                  </>
                 ) : null}
               </label>
             );
@@ -6398,6 +6414,21 @@ function driverFormulaChain({
     chain.push(text.driverRelations.graphs);
   }
   return chain;
+}
+
+function driverFormulaPromptChain(
+  changedFields: ReadonlyArray<keyof SpeakerDriver>,
+  sourceField: keyof SpeakerDriver,
+  candidateField: keyof SpeakerDriver,
+): string {
+  const sourceIndex = changedFields.indexOf(sourceField);
+  const chainFields = sourceIndex >= 0
+    ? changedFields.slice(0, sourceIndex + 1)
+    : [sourceField];
+  return [...chainFields, candidateField]
+    .filter((field, index, fields) => index === 0 || field !== fields[index - 1])
+    .map((field) => driverFieldByKey.get(field)?.label ?? String(field))
+    .join(" -> ");
 }
 
 function driverActiveFormulaLabels({

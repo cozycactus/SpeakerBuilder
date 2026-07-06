@@ -333,10 +333,23 @@ export function driverFormulaPromptForChangedFields(
     motor?: MotorDerivedField;
   } = {},
 ): DriverFormulaKind | undefined {
+  return driverFormulaPromptSourceForChangedFields(changedKeys, candidateKey, derivedFields)?.formula;
+}
+
+export function driverFormulaPromptSourceForChangedFields(
+  changedKeys: readonly (keyof SpeakerDriver)[],
+  candidateKey: keyof SpeakerDriver,
+  derivedFields: {
+    motor?: MotorDerivedField;
+  } = {},
+): { changedKey: keyof SpeakerDriver; formula: DriverFormulaKind } | undefined {
+  if (changedKeys.includes(candidateKey)) {
+    return undefined;
+  }
   for (const changedKey of changedKeys) {
     const prompt = driverFormulaPromptForField(changedKey, candidateKey, derivedFields);
     if (prompt !== undefined) {
-      return prompt;
+      return { changedKey, formula: prompt };
     }
   }
   return undefined;
