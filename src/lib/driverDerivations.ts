@@ -2,7 +2,7 @@ import type { SpeakerDriver } from "./acoustics";
 
 export const MECHANICAL_DERIVED_FIELDS = ["fsHz", "vasL", "sdCm2", "mmsG", "cmsMmN"] as const;
 export const QUALITY_DERIVED_FIELDS = ["qts", "qes", "qms"] as const;
-export const MOTOR_DERIVED_FIELDS = ["qes", "blTm"] as const;
+export const MOTOR_DERIVED_FIELDS = ["fsHz", "qes", "reOhm", "blTm"] as const;
 export const DRIVER_FORMULA_FIELDS = ["fsHz", "qts", "qes", "qms", "vasL", "sdCm2", "reOhm", "mmsG", "cmsMmN", "blTm"] as const;
 
 export type MechanicalDerivedField = (typeof MECHANICAL_DERIVED_FIELDS)[number];
@@ -27,6 +27,7 @@ const derivedFieldLimits = new Map<keyof SpeakerDriver, { min: number; max?: num
   ["qms", { min: 0.1, max: 100 }],
   ["vasL", { min: 0.01, max: 10000 }],
   ["sdCm2", { min: 0.1, max: 10000 }],
+  ["reOhm", { min: 0.01, max: 100 }],
   ["mmsG", { min: 0.01, max: 10000 }],
   ["cmsMmN", { min: 0.0001, max: 1000 }],
   ["blTm", { min: 0.01, max: 100 }],
@@ -131,24 +132,34 @@ export function deriveMotorField(driver: SpeakerDriver, target: MotorDerivedFiel
   const fsHz = positiveNumber(driver.fsHz);
   const mmsG = positiveNumber(driver.mmsG);
   const reOhm = positiveNumber(driver.reOhm);
+  const qes = positiveNumber(driver.qes);
+  const blTm = positiveNumber(driver.blTm);
+  const mmsKg = mmsG !== undefined ? mmsG / 1000 : undefined;
   if (target === "qes") {
-    const blTm = positiveNumber(driver.blTm);
-    if (fsHz === undefined || mmsG === undefined || reOhm === undefined || blTm === undefined) {
+    if (fsHz === undefined || mmsKg === undefined || reOhm === undefined || blTm === undefined) {
       return undefined;
     }
-    const qes = (Math.PI * 2 * fsHz * (mmsG / 1000) * reOhm) / (blTm * blTm);
-    return normalizeDerivedDriverValue(target, qes);
+    return normalizeDerivedDriverValue(target, (Math.PI * 2 * fsHz * mmsKg * reOhm) / (blTm * blTm));
   }
 
-  if (target !== "blTm") {
+  if (target === "blTm") {
+    if (fsHz === undefined || mmsKg === undefined || reOhm === undefined || qes === undefined) {
+      return undefined;
+    }
+    return normalizeDerivedDriverValue(target, Math.sqrt((Math.PI * 2 * fsHz * mmsKg * reOhm) / qes));
+  }
+
+  if (target === "reOhm") {
+    if (fsHz === undefined || mmsKg === undefined || qes === undefined || blTm === undefined) {
+      return undefined;
+    }
+    return normalizeDerivedDriverValue(target, (qes * blTm * blTm) / (Math.PI * 2 * fsHz * mmsKg));
+  }
+
+  if (mmsKg === undefined || reOhm === undefined || qes === undefined || blTm === undefined) {
     return undefined;
   }
-  const qes = positiveNumber(driver.qes);
-  if (fsHz === undefined || mmsG === undefined || reOhm === undefined || qes === undefined) {
-    return undefined;
-  }
-  const bl = Math.sqrt((Math.PI * 2 * fsHz * (mmsG / 1000) * reOhm) / qes);
-  return normalizeDerivedDriverValue(target, bl);
+  return normalizeDerivedDriverValue(target, (qes * blTm * blTm) / (Math.PI * 2 * mmsKg * reOhm));
 }
 
 export function deriveQualityField(driver: SpeakerDriver, target: QualityDerivedField): number | undefined {
@@ -303,14 +314,30 @@ export function driverFormulaPromptForField(
     motor?: MotorDerivedField;
   } = {},
 ): DriverFormulaKind | undefined {
+  return driverFormulaPromptsForField(changedKey, candidateKey, derivedFields)[0];
+}
+
+function driverFormulaPromptsForField(
+  changedKey: keyof SpeakerDriver,
+  candidateKey: keyof SpeakerDriver,
+  derivedFields: {
+    motor?: MotorDerivedField;
+  } = {},
+): DriverFormulaKind[] {
   if (candidateKey === changedKey) {
-    return undefined;
+    return [];
   }
+  const prompts: DriverFormulaKind[] = [];
+  const addPrompt = (prompt: DriverFormulaKind) => {
+    if (!prompts.includes(prompt)) {
+      prompts.push(prompt);
+    }
+  };
   if (isMechanicalDerivedField(candidateKey) && isMechanicalDerivedField(changedKey)) {
-    return "mechanical";
+    addPrompt("mechanical");
   }
   if (isQualityDerivedField(candidateKey) && isQualityDerivedField(changedKey)) {
-    return "quality";
+    addPrompt("quality");
   }
   if (
     isQualityDerivedField(candidateKey) &&
@@ -318,12 +345,12 @@ export function driverFormulaPromptForField(
     derivedFields.motor === "qes" &&
     motorFormulaFields.has(changedKey)
   ) {
-    return "quality";
+    addPrompt("quality");
   }
   if (isMotorDerivedField(candidateKey) && motorFormulaFields.has(changedKey)) {
-    return "motor";
+    addPrompt("motor");
   }
-  return undefined;
+  return prompts;
 }
 
 export function driverFormulaPromptForChangedFields(
@@ -348,17 +375,18 @@ export function driverFormulaPromptSourceForChangedFields(
   if (changedKeys.includes(candidateKey)) {
     return undefined;
   }
-  if (
-    derivedFields.mechanical !== undefined &&
-    changedKeys.includes(derivedFields.mechanical) &&
-    isMechanicalDerivedField(candidateKey)
-  ) {
-    return undefined;
-  }
   for (let index = changedKeys.length - 1; index >= 0; index -= 1) {
     const changedKey = changedKeys[index];
-    const prompt = driverFormulaPromptForField(changedKey, candidateKey, derivedFields);
-    if (prompt !== undefined) {
+    const prompts = driverFormulaPromptsForField(changedKey, candidateKey, derivedFields);
+    for (const prompt of prompts) {
+      if (
+        prompt === "mechanical" &&
+        derivedFields.mechanical !== undefined &&
+        changedKeys.includes(derivedFields.mechanical) &&
+        isMechanicalDerivedField(candidateKey)
+      ) {
+        continue;
+      }
       return { changedKey, formula: prompt };
     }
   }

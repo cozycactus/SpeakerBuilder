@@ -182,10 +182,22 @@ describe("driver derivation cascades", () => {
       changed: ["reOhm", "qes", "qts"],
     },
     {
+      key: "reOhm",
+      value: 7.2,
+      modes: { motor: "fsHz" },
+      changed: ["fsHz", "reOhm"],
+    },
+    {
       key: "mmsG",
       value: 24,
       modes: { mechanical: "cmsMmN", motor: "qes", quality: "qts" },
       changed: ["mmsG", "cmsMmN", "qes", "qts"],
+    },
+    {
+      key: "mmsG",
+      value: 24,
+      modes: { motor: "reOhm" },
+      changed: ["reOhm", "mmsG"],
     },
     {
       key: "cmsMmN",
@@ -260,6 +272,15 @@ describe("driver derivation cascades", () => {
     expect(driverFormulaValueDiffers(after.qts, promptedQts as number)).toBe(false);
   });
 
+  it("derives every motor formula target from the same Qes/BL/Fs/Mms/Re relationship", () => {
+    const driver = createDriver();
+
+    expect(deriveMotorField(driver, "qes")).toBe(driver.qes);
+    expect(deriveMotorField(driver, "blTm")).toBe(driver.blTm);
+    expect(deriveMotorField(driver, "reOhm")).toBe(driver.reOhm);
+    expect(deriveMotorField(driver, "fsHz")).toBe(driver.fsHz);
+  });
+
   it("uses a derived mechanical field as the prompt source and suppresses mechanical alternatives", () => {
     const before = createDriver();
     const after = cascade(before, "fsHz", 45, { mechanical: "mmsG" });
@@ -274,8 +295,30 @@ describe("driver derivation cascades", () => {
       changedKey: "mmsG",
       formula: "motor",
     });
+    expect(driverFormulaPromptSourceForChangedFields(changedFields, "reOhm")).toEqual({
+      changedKey: "mmsG",
+      formula: "motor",
+    });
     expect(driverFormulaPromptForChangedFields(changedFields, "vasL", { mechanical: "mmsG" })).toBeUndefined();
     expect(driverFormulaPromptForChangedFields(changedFields, "sdCm2", { mechanical: "mmsG" })).toBeUndefined();
     expect(driverFormulaPromptForChangedFields(changedFields, "cmsMmN", { mechanical: "mmsG" })).toBeUndefined();
+  });
+
+  it("can prompt Fs through the motor formula when another mechanical field is already derived", () => {
+    const before = createDriver();
+    const after = cascade(before, "mmsG", 24, { mechanical: "cmsMmN" });
+    const changedFields = changedDriverFormulaFields(before, after, "mmsG");
+
+    expect(changedFields).toEqual(["mmsG", "cmsMmN"]);
+    expect(driverFormulaPromptSourceForChangedFields(changedFields, "fsHz", { mechanical: "cmsMmN" })).toEqual({
+      changedKey: "mmsG",
+      formula: "motor",
+    });
+    expect(driverFormulaPromptSourceForChangedFields(changedFields, "reOhm", { mechanical: "cmsMmN" })).toEqual({
+      changedKey: "mmsG",
+      formula: "motor",
+    });
+    expect(driverFormulaPromptForChangedFields(changedFields, "vasL", { mechanical: "cmsMmN" })).toBeUndefined();
+    expect(driverFormulaPromptForChangedFields(changedFields, "sdCm2", { mechanical: "cmsMmN" })).toBeUndefined();
   });
 });

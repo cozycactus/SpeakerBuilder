@@ -506,8 +506,10 @@ const UI_TEXT = {
       chain: "Цепочка",
       formulas: {
         mechanical: "Fs/Mms/Cms/Vas/Sd",
-        motor: "Qes = 2π Fs Mms Re / BL²",
         motorBl: "BL = √(2π Fs Mms Re / Qes)",
+        motorFs: "Fs = Qes BL² / (2π Mms Re)",
+        motorQes: "Qes = 2π Fs Mms Re / BL²",
+        motorRe: "Re = Qes BL² / (2π Fs Mms)",
         quality: "1/Qts = 1/Qes + 1/Qms",
       },
       graphs: "графики",
@@ -917,8 +919,10 @@ const UI_TEXT = {
       chain: "Chain",
       formulas: {
         mechanical: "Fs/Mms/Cms/Vas/Sd",
-        motor: "Qes = 2π Fs Mms Re / BL²",
         motorBl: "BL = √(2π Fs Mms Re / Qes)",
+        motorFs: "Fs = Qes BL² / (2π Mms Re)",
+        motorQes: "Qes = 2π Fs Mms Re / BL²",
+        motorRe: "Re = Qes BL² / (2π Fs Mms)",
         quality: "1/Qts = 1/Qes + 1/Qms",
       },
       graphs: "charts",
@@ -1815,8 +1819,14 @@ function App() {
 
     if (formula === "mechanical" && isMechanicalDerivedField(field)) {
       setMechanicalDerivedField(field);
+      if (motorDerivedField === field) {
+        setMotorDerivedField(undefined);
+      }
     } else if (formula === "motor" && isMotorDerivedField(field)) {
       setMotorDerivedField(field);
+      if (mechanicalDerivedField === field) {
+        setMechanicalDerivedField(undefined);
+      }
       if (qualityDerivedField === field) {
         setQualityDerivedField(undefined);
       }
@@ -6452,10 +6462,23 @@ function driverActiveFormulaLabels({
   }
   if (motorDerivedField !== undefined) {
     labels.push(`${driverFieldByKey.get(motorDerivedField)?.label ?? motorDerivedField}: ${
-      motorDerivedField === "blTm" ? text.driverRelations.formulas.motorBl : text.driverRelations.formulas.motor
+      driverMotorFormulaLabel(motorDerivedField, text)
     }`);
   }
   return labels;
+}
+
+function driverMotorFormulaLabel(field: MotorDerivedField, text: UiText): string {
+  if (field === "blTm") {
+    return text.driverRelations.formulas.motorBl;
+  }
+  if (field === "fsHz") {
+    return text.driverRelations.formulas.motorFs;
+  }
+  if (field === "reOhm") {
+    return text.driverRelations.formulas.motorRe;
+  }
+  return text.driverRelations.formulas.motorQes;
 }
 
 function driverFormulaMismatches(driver: SpeakerDriver): Array<{ errorRatio: number; label: string }> {
