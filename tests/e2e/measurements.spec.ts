@@ -38,24 +38,37 @@ test("a single imported measurement can be removed", async ({ page }) => {
   await importFile(page, "box.zma", ZMA_CONTENT);
   await importFile(page, "measured.frd", FRD_CONTENT);
 
-  const list = page.getByTestId("measurement-list");
-  await expect(list.locator("li")).toHaveCount(2);
-  await expect(list).toContainText("box.zma");
-  await expect(list).toContainText("measured.frd");
+  const rows = page.getByTestId("measurement-list").locator("li");
+  await expect(rows).toHaveCount(2);
+  await expect(rows.nth(0).locator("input.measurement-name")).toHaveValue("box.zma");
+  await expect(rows.nth(1).locator("input.measurement-name")).toHaveValue("measured.frd");
 
-  await list
-    .locator("li", { hasText: "measured.frd" })
-    .getByRole("button", { name: /Удалить|Remove/ })
-    .click();
+  await rows.nth(1).getByRole("button", { name: /Удалить|Remove/ }).click();
 
-  await expect(list.locator("li")).toHaveCount(1);
-  await expect(list).toContainText("box.zma");
+  await expect(rows).toHaveCount(1);
+  await expect(rows.nth(0).locator("input.measurement-name")).toHaveValue("box.zma");
   await expect(page.getByTestId("spl-align-tool")).toContainText(/Загрузи FRD|Load an FRD/);
 
-  await list
-    .locator("li", { hasText: "box.zma" })
-    .getByRole("button", { name: /Удалить|Remove/ })
-    .click();
+  await rows.nth(0).getByRole("button", { name: /Удалить|Remove/ }).click();
 
   await expect(page.getByTestId("measurement-list")).toHaveCount(0);
+});
+
+test("a trace can be renamed and hidden from the chart", async ({ page }) => {
+  await page.getByTestId("driver-select").selectOption({ label: "Usher 8945P" });
+  await importFile(page, "measured.frd", FRD_CONTENT);
+
+  await expect(page.locator(".legend")).toContainText("measured.frd · norm");
+
+  const row = page.getByTestId("measurement-list").locator("li").first();
+  await row.locator("input.measurement-name").fill("mic-1");
+
+  await expect(page.locator(".legend")).toContainText("mic-1 · norm");
+  await expect(page.getByTestId("spl-align-tool").locator("option", { hasText: "mic-1" })).toHaveCount(1);
+
+  await row.getByRole("button", { name: /Скрыть|Hide/ }).click();
+  await expect(page.locator(".legend")).not.toContainText("mic-1");
+
+  await row.getByRole("button", { name: /Показать|Show/ }).click();
+  await expect(page.locator(".legend")).toContainText("mic-1 · norm");
 });
