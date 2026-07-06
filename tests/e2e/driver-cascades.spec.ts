@@ -340,6 +340,44 @@ test("project changes sync to another tab", async ({ page, context }) => {
   await peer.close();
 });
 
+test("project can be opened from a shared link", async ({ page, context }) => {
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: async (value: string) => {
+          (window as unknown as { __copiedProjectLink?: string }).__copiedProjectLink = value;
+        },
+      },
+    });
+  });
+
+  await page.getByTestId("driver-select").selectOption({ label: "Usher 8945P" });
+  await expect(field(page, "cmsMmN")).toBeVisible();
+  await setMeasured(page, "cmsMmN");
+  await mode(page, "cmsMmN", "derive").click();
+  await expect(mode(page, "cmsMmN", "derive")).toContainText(/расчет|derived/i);
+
+  await page.getByTestId("share-project-link").click();
+  await expect(page.locator(".status-line")).toContainText(/ссылка|link/i);
+
+  const shareUrl = await page.evaluate(() =>
+    (window as unknown as { __copiedProjectLink?: string }).__copiedProjectLink ?? "",
+  );
+  expect(shareUrl).toContain("#project=");
+
+  const shared = await context.newPage();
+  await shared.goto(shareUrl);
+
+  await expect(field(shared, "cmsMmN")).toBeVisible();
+  await expect.poll(() => selectedDriverLabel(shared)).toContain("Usher 8945P");
+  await expect(mode(shared, "cmsMmN", "derive")).toContainText(/расчет|derived/i);
+  await expect(shared.locator(".status-line")).toContainText(/ссылки|link/i);
+  await expect.poll(() => shared.evaluate(() => window.location.hash)).toBe("");
+
+  await shared.close();
+});
+
 test("manual Qms change offers Qts and Qes quality recalculations", async ({ page }) => {
   await page.getByTestId("driver-select").selectOption({ label: "Usher 8945P" });
   await expect(field(page, "qms")).toBeVisible();

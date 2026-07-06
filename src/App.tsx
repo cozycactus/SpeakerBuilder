@@ -16,6 +16,7 @@ import {
   Plus,
   RefreshCw,
   Search,
+  Share2,
   SlidersHorizontal,
   Speaker,
   Target,
@@ -229,6 +230,13 @@ type ProjectFile = Omit<ProjectState, "referenceByTab"> & {
   version: 1;
 };
 
+type ProjectLoadSource = "default" | "share" | "storage";
+
+interface ProjectLoadState {
+  project: ProjectState;
+  source: ProjectLoadSource;
+}
+
 type DriverIssue =
   | "invalidRequired"
   | "fieldOutOfRange"
@@ -277,6 +285,8 @@ interface PanelDragState {
 const DRIVER_STORAGE_KEY = "speaker-builder-drivers-v1";
 const LANGUAGE_STORAGE_KEY = "speaker-builder-language-v1";
 const PROJECT_STORAGE_KEY = "speaker-builder-project-v1";
+const PROJECT_SHARE_HASH_PARAM = "project";
+const PROJECT_SHARE_URL_MAX_LENGTH = 120_000;
 const LEFT_PANEL_STORAGE_KEY = "speaker-builder-left-panel-width-v1";
 const RIGHT_PANEL_STORAGE_KEY = "speaker-builder-right-panel-width-v1";
 const SIDEBAR_PANEL_ORDER_STORAGE_KEY = "speaker-builder-sidebar-panel-order-v1";
@@ -702,6 +712,7 @@ const UI_TEXT = {
       rePower: "Вт по Re",
       twoPointEightThreeVolt: "2.83 V",
     } satisfies Record<SplInputMode, string>,
+    shareProjectLink: "Скопировать ссылку на проект",
     model: "Модель",
     noActiveDesigns: "Нет активных конфигураций.",
     passiveRadiatorCount: "PR шт.",
@@ -729,6 +740,10 @@ const UI_TEXT = {
     },
     power: "Мощность",
     projectImported: "Проект загружен",
+    projectLinkCopied: "Ссылка на проект скопирована",
+    projectLinkCopyFailed: "Не удалось скопировать ссылку",
+    projectLinkLoaded: "Проект загружен из ссылки",
+    projectLinkTooLarge: "Ссылка слишком длинная: экспортируйте проект JSON",
     projectSynced: "Проект обновлен из другой вкладки",
     requiredFieldsMissing: "Файл не содержит обязательные поля Fs, Qts, Vas, Sd, Re.",
     recalculate: "Пересчитать",
@@ -1116,6 +1131,7 @@ const UI_TEXT = {
       rePower: "W by Re",
       twoPointEightThreeVolt: "2.83 V",
     } satisfies Record<SplInputMode, string>,
+    shareProjectLink: "Copy project link",
     model: "Model",
     noActiveDesigns: "No active configurations.",
     passiveRadiatorCount: "PR count",
@@ -1143,6 +1159,10 @@ const UI_TEXT = {
     },
     power: "Power",
     projectImported: "Project loaded",
+    projectLinkCopied: "Project link copied",
+    projectLinkCopyFailed: "Could not copy the link",
+    projectLinkLoaded: "Project loaded from link",
+    projectLinkTooLarge: "Link is too long: export project JSON instead",
     projectSynced: "Project updated from another tab",
     requiredFieldsMissing: "File must contain Fs, Qts, Vas, Sd, and Re.",
     recalculate: "Recalculate",
@@ -1224,11 +1244,11 @@ const UI_TEXT = {
 type UiText = (typeof UI_TEXT)[Language];
 
 function App() {
-  const initialProjectRef = useRef<ProjectState | null>(null);
+  const initialProjectRef = useRef<ProjectLoadState | null>(null);
   if (!initialProjectRef.current) {
     initialProjectRef.current = loadProjectState();
   }
-  const initialProject = initialProjectRef.current;
+  const initialProject = initialProjectRef.current.project;
   const [language, setLanguage] = useState<Language>(() => initialProject.language);
   const [drivers, setDrivers] = useState<SpeakerDriver[]>(() => initialProject.drivers);
   const [libraryFilters, setLibraryFilters] = useState<LibraryFilters>(() => initialProject.libraryFilters);
@@ -1275,7 +1295,11 @@ function App() {
   const [measurements, setMeasurements] = useState<MeasurementTrace[]>(() => initialProject.measurements);
   const [sealedZma, setSealedZma] = useState<SealedZmaState>(() => initialProject.sealedZma);
   const [acousticOptions, setAcousticOptions] = useState<AcousticOptions>(() => initialProject.acousticOptions);
-  const [status, setStatus] = useState("");
+  const [status, setStatus] = useState(() =>
+    initialProjectRef.current?.source === "share"
+      ? UI_TEXT[initialProject.language].projectLinkLoaded
+      : "",
+  );
   const [leftPanelWidth, setLeftPanelWidth] = useState(() =>
     loadPanelWidth(LEFT_PANEL_STORAGE_KEY, LEFT_PANEL_LIMITS),
   );
@@ -1297,6 +1321,63 @@ function App() {
   const simulationRequestIdRef = useRef({ analysis: 0, chart: 0 });
   const panelDragRef = useRef<PanelDragState | null>(null);
   const text = UI_TEXT[language];
+  const currentProjectFile = useMemo(
+    () =>
+      createProjectFile({
+        acousticOptions,
+        activeTab,
+        chartFrequencyMinHz,
+        chartFrequencyMaxHz,
+        chartStepTimeMinMs,
+        chartStepTimeMaxMs,
+        chartYScales,
+        compareDriverIds,
+        compareEnabled,
+        designs,
+        drivers,
+        focusedDesignId,
+        fixedDriverFields,
+        language,
+        libraryFilters,
+        mechanicalDerivedField,
+        motorDerivedField,
+        qualityDerivedField,
+        measurements,
+        optimizerGoal,
+        powerW,
+        referenceByTab,
+        selectedDriverId,
+        sealedZma,
+        splInputMode,
+      }),
+    [
+      acousticOptions,
+      activeTab,
+      chartFrequencyMinHz,
+      chartFrequencyMaxHz,
+      chartStepTimeMinMs,
+      chartStepTimeMaxMs,
+      chartYScales,
+      compareDriverIds,
+      compareEnabled,
+      designs,
+      drivers,
+      focusedDesignId,
+      fixedDriverFields,
+      language,
+      libraryFilters,
+      mechanicalDerivedField,
+      motorDerivedField,
+      qualityDerivedField,
+      measurements,
+      optimizerGoal,
+      powerW,
+      referenceByTab,
+      selectedDriverId,
+      sealedZma,
+      splInputMode,
+    ],
+  );
 
   useEffect(() => {
     const worker = new Worker(new URL("./lib/simulation.worker.ts", import.meta.url), {
@@ -1348,71 +1429,23 @@ function App() {
   }, [language, text.appTitle]);
 
   useEffect(() => {
+    if (initialProjectRef.current?.source === "share") {
+      clearProjectShareHash();
+    }
+  }, []);
+
+  useEffect(() => {
     localStorage.setItem(DRIVER_STORAGE_KEY, JSON.stringify(drivers));
   }, [drivers]);
 
   useEffect(() => {
-    const projectJson = JSON.stringify(
-      createProjectFile({
-        acousticOptions,
-        activeTab,
-        chartFrequencyMinHz,
-        chartFrequencyMaxHz,
-        chartStepTimeMinMs,
-        chartStepTimeMaxMs,
-        chartYScales,
-        compareDriverIds,
-        compareEnabled,
-        designs,
-        drivers,
-        focusedDesignId,
-        fixedDriverFields,
-        language,
-        libraryFilters,
-        mechanicalDerivedField,
-        motorDerivedField,
-        qualityDerivedField,
-        measurements,
-        optimizerGoal,
-        powerW,
-        referenceByTab,
-        selectedDriverId,
-        sealedZma,
-        splInputMode,
-      }),
-    );
+    const projectJson = JSON.stringify(currentProjectFile);
     if (projectJson === persistedProjectJsonRef.current) {
       return;
     }
     localStorage.setItem(PROJECT_STORAGE_KEY, projectJson);
     persistedProjectJsonRef.current = projectJson;
-  }, [
-    acousticOptions,
-    activeTab,
-    chartFrequencyMinHz,
-    chartFrequencyMaxHz,
-    chartStepTimeMinMs,
-    chartStepTimeMaxMs,
-    chartYScales,
-    compareDriverIds,
-    compareEnabled,
-    designs,
-    drivers,
-    focusedDesignId,
-    fixedDriverFields,
-    language,
-    libraryFilters,
-    mechanicalDerivedField,
-    motorDerivedField,
-    qualityDerivedField,
-    measurements,
-    optimizerGoal,
-    powerW,
-    referenceByTab,
-    selectedDriverId,
-    sealedZma,
-    splInputMode,
-  ]);
+  }, [currentProjectFile]);
 
   useEffect(() => {
     const handleProjectStorage = (event: StorageEvent) => {
@@ -2056,37 +2089,7 @@ function App() {
 
   function exportProject() {
     const blob = new Blob([
-      JSON.stringify(
-        createProjectFile({
-          acousticOptions,
-          activeTab,
-          chartFrequencyMinHz,
-          chartFrequencyMaxHz,
-          chartStepTimeMinMs,
-          chartStepTimeMaxMs,
-          chartYScales,
-          compareDriverIds,
-          compareEnabled,
-          designs,
-          drivers,
-          focusedDesignId,
-          fixedDriverFields,
-          language,
-          libraryFilters,
-          mechanicalDerivedField,
-          motorDerivedField,
-          qualityDerivedField,
-          measurements,
-          optimizerGoal,
-          powerW,
-          referenceByTab,
-          selectedDriverId,
-          sealedZma,
-          splInputMode,
-        }),
-        null,
-        2,
-      ),
+      JSON.stringify(currentProjectFile, null, 2),
     ], {
       type: "application/json",
     });
@@ -2096,6 +2099,21 @@ function App() {
     link.download = "speaker-builder-project.json";
     link.click();
     URL.revokeObjectURL(url);
+  }
+
+  async function copyProjectLink() {
+    const shareUrl = createProjectShareUrl(currentProjectFile);
+    if (shareUrl.length > PROJECT_SHARE_URL_MAX_LENGTH) {
+      setStatus(text.projectLinkTooLarge);
+      return;
+    }
+
+    try {
+      await copyTextToClipboard(shareUrl);
+      setStatus(text.projectLinkCopied);
+    } catch {
+      setStatus(text.projectLinkCopyFailed);
+    }
   }
 
   function exportReportHtml() {
@@ -2822,6 +2840,16 @@ function App() {
           </label>
           <button type="button" className="icon-button" onClick={exportProject} title={text.exportJson}>
             <Download size={18} />
+          </button>
+          <button
+            type="button"
+            className="icon-button"
+            data-testid="share-project-link"
+            onClick={copyProjectLink}
+            title={text.shareProjectLink}
+            aria-label={text.shareProjectLink}
+          >
+            <Share2 size={18} />
           </button>
           <button type="button" className="icon-button" onClick={exportReportHtml} title={text.exportReport}>
             <FileText size={18} />
@@ -6552,13 +6580,18 @@ function driverFormulaMismatches(driver: SpeakerDriver): Array<{ errorRatio: num
     : [];
 }
 
-function loadProjectState(): ProjectState {
+function loadProjectState(): ProjectLoadState {
+  const sharedProject = parseProjectShareHash(window.location.hash);
+  if (sharedProject) {
+    return { project: sharedProject, source: "share" };
+  }
+
   try {
     const raw = localStorage.getItem(PROJECT_STORAGE_KEY);
     if (raw) {
       const project = parseProjectFile(raw);
       if (project) {
-        return project;
+        return { project, source: "storage" };
       }
     }
   } catch {
@@ -6570,6 +6603,88 @@ function loadProjectState(): ProjectState {
   const designs = createDefaultDesigns(selectedDriver);
   const focusedDesignId = designs.find((design) => design.enabled)?.id ?? designs[0]?.id ?? "";
 
+  return {
+    project: defaultProjectState(drivers, selectedDriver, designs, focusedDesignId),
+    source: "default",
+  };
+}
+
+function createProjectShareUrl(project: ProjectFile): string {
+  const url = new URL(window.location.href);
+  url.hash = `${PROJECT_SHARE_HASH_PARAM}=${encodeBase64Url(JSON.stringify(project))}`;
+  return url.toString();
+}
+
+function parseProjectShareHash(hash: string): ProjectState | null {
+  const normalizedHash = hash.startsWith("#") ? hash.slice(1) : hash;
+  if (!normalizedHash) {
+    return null;
+  }
+
+  try {
+    const encodedProject = new URLSearchParams(normalizedHash).get(PROJECT_SHARE_HASH_PARAM);
+    return encodedProject ? parseProjectFile(decodeBase64Url(encodedProject)) : null;
+  } catch {
+    return null;
+  }
+}
+
+function clearProjectShareHash() {
+  if (!parseProjectShareHash(window.location.hash)) {
+    return;
+  }
+  window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
+}
+
+function encodeBase64Url(value: string): string {
+  const bytes = new TextEncoder().encode(value);
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.slice(index, index + chunkSize));
+  }
+  return btoa(binary)
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
+
+function decodeBase64Url(value: string): string {
+  const base64 = value
+    .replace(/-/g, "+")
+    .replace(/_/g, "/")
+    .padEnd(Math.ceil(value.length / 4) * 4, "=");
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return new TextDecoder().decode(bytes);
+}
+
+async function copyTextToClipboard(value: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+
+  const textArea = document.createElement("textarea");
+  textArea.value = value;
+  textArea.setAttribute("readonly", "");
+  textArea.style.position = "fixed";
+  textArea.style.left = "-9999px";
+  document.body.appendChild(textArea);
+  textArea.select();
+  try {
+    if (!document.execCommand("copy")) {
+      throw new Error("Copy command failed");
+    }
+  } finally {
+    textArea.remove();
+  }
+}
+
+function defaultProjectState(drivers: SpeakerDriver[], selectedDriver: SpeakerDriver, designs: BoxDesign[], focusedDesignId: string): ProjectState {
   return {
     acousticOptions: DEFAULT_ACOUSTIC_OPTIONS,
     activeTab: "response",
