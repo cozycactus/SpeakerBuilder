@@ -123,6 +123,14 @@ export interface SealedBoxTsEstimate {
   vasL: number;
 }
 
+export interface AddedMassTsEstimate {
+  cmsMmN: number;
+  fmHz: number;
+  massRatio: number;
+  mmsG: number;
+  vasL?: number;
+}
+
 export type SplLimitReason = "xmax" | "passive" | "port" | "power";
 
 export interface SimulationResult {
@@ -1284,6 +1292,44 @@ export function estimateSealedBoxTsFromZma(
     qtcFromTs: tsAlpha !== undefined ? driver.qts * Math.sqrt(1 + tsAlpha) : undefined,
     qts,
     vasL: alpha * boxVolumeLiters,
+  };
+}
+
+export function estimateAddedMassTsFromZma(
+  driver: SpeakerDriver,
+  estimate: SealedZmaEstimate | null,
+  addedMassGrams: number,
+): AddedMassTsEstimate | null {
+  if (
+    !estimate ||
+    !Number.isFinite(addedMassGrams) ||
+    addedMassGrams <= 0 ||
+    !Number.isFinite(driver.fsHz) ||
+    driver.fsHz <= 0 ||
+    !Number.isFinite(estimate.fcHz) ||
+    estimate.fcHz <= 0 ||
+    estimate.fcHz >= driver.fsHz
+  ) {
+    return null;
+  }
+
+  const massRatio = Math.pow(driver.fsHz / estimate.fcHz, 2) - 1;
+  if (!Number.isFinite(massRatio) || massRatio <= 0) {
+    return null;
+  }
+
+  const mmsKg = addedMassGrams / 1000 / massRatio;
+  const cms = 1 / (Math.pow(TWO_PI * driver.fsHz, 2) * mmsKg);
+  const sdM2 = driver.sdCm2 > 0 ? driver.sdCm2 / 10000 : undefined;
+
+  return {
+    cmsMmN: cms * 1000,
+    fmHz: estimate.fcHz,
+    massRatio,
+    mmsG: mmsKg * 1000,
+    vasL: sdM2 !== undefined
+      ? cms * RHO * SPEED_OF_SOUND * SPEED_OF_SOUND * sdM2 * sdM2 * 1000
+      : undefined,
   };
 }
 

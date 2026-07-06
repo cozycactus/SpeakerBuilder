@@ -45,6 +45,7 @@ import {
   DriverSourceNote,
   MAX_FREQUENCY_MAX_HZ,
   MIN_FREQUENCY_MAX_HZ,
+  AddedMassTsEstimate,
   MeasurementTraceKind,
   Point,
   PRESET_DRIVERS,
@@ -59,6 +60,7 @@ import {
   SplLimitReason,
   createDefaultDesigns,
   createDesignFromTemplate,
+  estimateAddedMassTsFromZma,
   estimateSealedBoxFromZma,
   estimateSealedBoxTsFromZma,
   getDesignTemplates,
@@ -199,9 +201,15 @@ interface SealedZmaState {
   targetQtc: number;
 }
 
+interface AddedMassZmaState {
+  addedMassGrams: number;
+  selectedMeasurementId?: string;
+}
+
 interface ProjectState {
   acousticOptions: AcousticOptions;
   activeTab: ChartTab;
+  addedMassZma: AddedMassZmaState;
   chartFrequencyMinHz: number;
   chartFrequencyMaxHz: number;
   chartStepTimeMinMs: number;
@@ -335,6 +343,9 @@ const DEFAULT_ACOUSTIC_OPTIONS: AcousticOptions = {
 const DEFAULT_SEALED_ZMA: SealedZmaState = {
   boxVolumeLiters: 10,
   targetQtc: 0.707,
+};
+const DEFAULT_ADDED_MASS_ZMA: AddedMassZmaState = {
+  addedMassGrams: 10,
 };
 
 const driverFields: Array<{
@@ -636,6 +647,18 @@ const UI_TEXT = {
         vasByZma: "Vas по ZMA",
         zma: "ZMA",
         zMax: "Zmax",
+      },
+      addedMass: {
+        cmsByZma: "Cms по ZMA",
+        fm: "Fm",
+        hint: "Fs и Sd берутся из параметров динамика",
+        invalid: "Пик выбранного ZMA должен быть ниже Fs динамика",
+        mass: "Груз",
+        mmsByZma: "Mms по ZMA",
+        noZma: "Загрузи ZMA с грузом на диффузоре",
+        title: "T/S по добавленной массе",
+        vasByZma: "Vas по ZMA",
+        zma: "ZMA с грузом",
       },
     },
     corrections: {
@@ -1059,6 +1082,18 @@ const UI_TEXT = {
         zma: "ZMA",
         zMax: "Zmax",
       },
+      addedMass: {
+        cmsByZma: "Cms by ZMA",
+        fm: "Fm",
+        hint: "Fs and Sd come from the driver parameters",
+        invalid: "The selected ZMA peak must be below the driver Fs",
+        mass: "Added mass",
+        mmsByZma: "Mms by ZMA",
+        noZma: "Load a free-air ZMA with mass on the cone",
+        title: "Added-mass T/S",
+        vasByZma: "Vas by ZMA",
+        zma: "ZMA with mass",
+      },
     },
     corrections: {
       title: "Chart corrections",
@@ -1303,6 +1338,7 @@ function App() {
   const [lastDriverFormulaChangeFields, setLastDriverFormulaChangeFields] = useState<ReadonlyArray<keyof SpeakerDriver>>([]);
   const [measurements, setMeasurements] = useState<MeasurementTrace[]>(() => initialProject.measurements);
   const [sealedZma, setSealedZma] = useState<SealedZmaState>(() => initialProject.sealedZma);
+  const [addedMassZma, setAddedMassZma] = useState<AddedMassZmaState>(() => initialProject.addedMassZma);
   const [acousticOptions, setAcousticOptions] = useState<AcousticOptions>(() => initialProject.acousticOptions);
   const [status, setStatus] = useState(() =>
     initialProjectRef.current?.source === "share"
@@ -1335,6 +1371,7 @@ function App() {
       createProjectFile({
         acousticOptions,
         activeTab,
+        addedMassZma,
         chartFrequencyMinHz,
         chartFrequencyMaxHz,
         chartStepTimeMinMs,
@@ -1362,6 +1399,7 @@ function App() {
     [
       acousticOptions,
       activeTab,
+      addedMassZma,
       chartFrequencyMinHz,
       chartFrequencyMaxHz,
       chartStepTimeMinMs,
@@ -1740,6 +1778,18 @@ function App() {
     () => estimateSealedBoxTsFromZma(selectedDriver, sealedZmaEstimate, sealedZma.boxVolumeLiters),
     [sealedZma.boxVolumeLiters, sealedZmaEstimate, selectedDriver],
   );
+  const selectedAddedMassMeasurement = useMemo(
+    () => zmaMeasurements.find((measurement) => measurement.id === addedMassZma.selectedMeasurementId) ?? zmaMeasurements[0],
+    [addedMassZma.selectedMeasurementId, zmaMeasurements],
+  );
+  const addedMassZmaEstimate = useMemo(
+    () => selectedAddedMassMeasurement ? estimateSealedBoxFromZma(selectedAddedMassMeasurement.points) : null,
+    [selectedAddedMassMeasurement],
+  );
+  const addedMassTsEstimate = useMemo(
+    () => estimateAddedMassTsFromZma(selectedDriver, addedMassZmaEstimate, addedMassZma.addedMassGrams),
+    [addedMassZma.addedMassGrams, addedMassZmaEstimate, selectedDriver],
+  );
   const measurementSeries = useMemo(
     () => {
       const importedSeries = currentDriverMeasurements
@@ -2106,6 +2156,7 @@ function App() {
     setOptimizerGoal(project.optimizerGoal);
     setPowerW(project.powerW);
     setSealedZma(project.sealedZma);
+    setAddedMassZma(project.addedMassZma);
     setSplInputMode(project.splInputMode);
     setReferenceByTab(project.referenceByTab);
     setAnalysisSnapshot(createAnalysisSnapshot(
@@ -2718,6 +2769,8 @@ function App() {
       return (
         <MeasurementPanel
           key={panelId}
+          addedMassTsEstimate={addedMassTsEstimate}
+          addedMassZma={addedMassZma}
           count={currentDriverMeasurements.length}
           dragHandle={dragHandle}
           driver={selectedDriver}
@@ -2727,6 +2780,7 @@ function App() {
           text={text}
           totalCount={measurements.length}
           zmaMeasurements={zmaMeasurements}
+          onAddedMassZmaChange={(patch) => setAddedMassZma((current) => normalizeAddedMassZmaState({ ...current, ...patch }))}
           onClear={() => setMeasurements([])}
           onClearCurrent={() => {
             setMeasurements((current) => current.filter((measurement) => measurement.driverId !== selectedDriver.id));
@@ -4034,6 +4088,8 @@ function AcousticCorrectionsPanel({
 }
 
 function MeasurementPanel({
+  addedMassTsEstimate,
+  addedMassZma,
   count,
   dragHandle,
   driver,
@@ -4043,12 +4099,15 @@ function MeasurementPanel({
   text,
   totalCount,
   zmaMeasurements,
+  onAddedMassZmaChange,
   onClear,
   onClearCurrent,
   onSealedZmaChange,
   onDragOver,
   onDrop,
 }: {
+  addedMassTsEstimate: AddedMassTsEstimate | null;
+  addedMassZma: AddedMassZmaState;
   count: number;
   dragHandle?: ReactNode;
   driver: SpeakerDriver;
@@ -4058,6 +4117,7 @@ function MeasurementPanel({
   text: UiText;
   totalCount: number;
   zmaMeasurements: MeasurementTrace[];
+  onAddedMassZmaChange: (patch: Partial<AddedMassZmaState>) => void;
   onClear: () => void;
   onClearCurrent: () => void;
   onSealedZmaChange: (patch: Partial<SealedZmaState>) => void;
@@ -4091,7 +4151,7 @@ function MeasurementPanel({
           {text.measurements.clear}
         </button>
       </div>
-      <div className="sealed-zma-tool">
+      <div className="sealed-zma-tool" data-testid="sealed-zma-tool">
         <div className="mini-panel-head">
           <h3>{text.measurements.sealedZma.title}</h3>
           {estimate ? <span>{text.measurements.sealedZma.confidence[estimate.confidence]}</span> : null}
@@ -4183,6 +4243,66 @@ function MeasurementPanel({
           </>
         ) : (
           <p>{text.measurements.sealedZma.noZma}</p>
+        )}
+      </div>
+      <div className="sealed-zma-tool" data-testid="added-mass-tool">
+        <div className="mini-panel-head">
+          <h3>{text.measurements.addedMass.title}</h3>
+        </div>
+        {zmaMeasurements.length > 0 ? (
+          <>
+            <label className="field">
+              <span>{text.measurements.addedMass.zma}</span>
+              <select
+                value={addedMassZma.selectedMeasurementId ?? zmaMeasurements[0]?.id ?? ""}
+                onChange={(event) => onAddedMassZmaChange({ selectedMeasurementId: event.target.value })}
+              >
+                {zmaMeasurements.map((measurement) => (
+                  <option key={measurement.id} value={measurement.id}>
+                    {measurement.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="mini-grid">
+              <NumberField
+                label={text.measurements.addedMass.mass}
+                unit="g"
+                value={addedMassZma.addedMassGrams}
+                min={0.1}
+                max={1000}
+                step="0.1"
+                onChange={(addedMassGrams) => onAddedMassZmaChange({ addedMassGrams })}
+              />
+            </div>
+            {addedMassTsEstimate ? (
+              <div className="sealed-zma-readout">
+                <div>
+                  <span>{text.measurements.addedMass.fm}</span>
+                  <strong>{formatHz(addedMassTsEstimate.fmHz)}</strong>
+                </div>
+                <div>
+                  <span>{text.measurements.addedMass.mmsByZma}</span>
+                  <strong>{fmt(addedMassTsEstimate.mmsG, 2)} g</strong>
+                </div>
+                <div>
+                  <span>{text.measurements.addedMass.cmsByZma}</span>
+                  <strong>{fmt(addedMassTsEstimate.cmsMmN, 3)} mm/N</strong>
+                </div>
+                {addedMassTsEstimate.vasL !== undefined ? (
+                  <div>
+                    <span>{text.measurements.addedMass.vasByZma}</span>
+                    <strong>{fmt(addedMassTsEstimate.vasL, 1)} L</strong>
+                  </div>
+                ) : null}
+              </div>
+            ) : (
+              <p>{text.measurements.addedMass.invalid}</p>
+            )}
+            <p>{text.measurements.addedMass.hint}</p>
+          </>
+        ) : (
+          <p>{text.measurements.addedMass.noZma}</p>
         )}
       </div>
     </section>
@@ -6797,6 +6917,7 @@ function defaultProjectState(drivers: SpeakerDriver[], selectedDriver: SpeakerDr
   return {
     acousticOptions: DEFAULT_ACOUSTIC_OPTIONS,
     activeTab: "response",
+    addedMassZma: DEFAULT_ADDED_MASS_ZMA,
     chartFrequencyMinHz: DEFAULT_CHART_FREQUENCY_MIN_HZ,
     chartFrequencyMaxHz: DEFAULT_FREQUENCY_MAX_HZ,
     chartStepTimeMinMs: DEFAULT_CHART_STEP_TIME_MIN_MS,
@@ -6851,6 +6972,7 @@ function parseProjectFile(content: string): ProjectState | null {
     return {
       acousticOptions: normalizeAcousticOptions(parsed.acousticOptions),
       activeTab: isChartTab(parsed.activeTab) ? parsed.activeTab : "response",
+      addedMassZma: normalizeAddedMassZmaState(parsed.addedMassZma),
       chartFrequencyMinHz: normalizeChartFrequencyMin(parsed.chartFrequencyMinHz),
       chartFrequencyMaxHz: normalizeChartFrequencyMax(parsed.chartFrequencyMaxHz),
       chartStepTimeMinMs: normalizeChartStepTimeMin(parsed.chartStepTimeMinMs),
@@ -6947,6 +7069,16 @@ function normalizeSealedZmaState(value: unknown): SealedZmaState {
     boxVolumeLiters: clampNumber(finiteOptional(value.boxVolumeLiters) ?? DEFAULT_SEALED_ZMA.boxVolumeLiters, 0.1, 10000),
     selectedMeasurementId: typeof value.selectedMeasurementId === "string" ? value.selectedMeasurementId : undefined,
     targetQtc: clampNumber(finiteOptional(value.targetQtc) ?? DEFAULT_SEALED_ZMA.targetQtc, 0.3, 2),
+  };
+}
+
+function normalizeAddedMassZmaState(value: unknown): AddedMassZmaState {
+  if (!isPlainRecord(value)) {
+    return DEFAULT_ADDED_MASS_ZMA;
+  }
+  return {
+    addedMassGrams: clampNumber(finiteOptional(value.addedMassGrams) ?? DEFAULT_ADDED_MASS_ZMA.addedMassGrams, 0.1, 1000),
+    selectedMeasurementId: typeof value.selectedMeasurementId === "string" ? value.selectedMeasurementId : undefined,
   };
 }
 

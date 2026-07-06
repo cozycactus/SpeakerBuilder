@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   FREQUENCIES,
   createDefaultDesigns,
+  estimateAddedMassTsFromZma,
   estimateSealedBoxFromZma,
   estimateSealedBoxTsFromZma,
   PRESET_DRIVERS,
@@ -234,6 +235,51 @@ describe("acoustic reference scenarios", () => {
     expectNear(derived?.qts, 0.6, 0.03);
     expectNear(derived?.fcFromTsHz, 60, 0.1);
     expectNear(derived?.qtcFromTs, 0.8, 0.01);
+  });
+
+  it("derives Mms, Cms, and Vas from an added-mass ZMA estimate", () => {
+    const fmHz = 30 / Math.SQRT2;
+    const estimate = estimateSealedBoxFromZma([
+      { x: 8, y: 6.2 },
+      { x: 12, y: 7 },
+      { x: 16, y: 10 },
+      { x: fmHz, y: 28 },
+      { x: 30, y: 9 },
+      { x: 48, y: 6.6 },
+      { x: 120, y: 6.3 },
+      { x: 400, y: 6.5 },
+    ]);
+    const driver = {
+      ...presetById("usher-8945p"),
+      fsHz: 30,
+      sdCm2: 136,
+    };
+    const derived = estimateAddedMassTsFromZma(driver, estimate, 10);
+
+    expect(derived).not.toBeNull();
+    expectNear(derived?.fmHz, fmHz, 0.001);
+    expectNear(derived?.massRatio, 1, 0.001);
+    expectNear(derived?.mmsG, 10, 0.01);
+    expectNear(derived?.cmsMmN, 2.814, 0.01);
+    expectNear(derived?.vasL, 73.7, 0.1);
+  });
+
+  it("rejects added-mass estimates when the loaded resonance is not below Fs", () => {
+    const estimate = estimateSealedBoxFromZma([
+      { x: 20, y: 6 },
+      { x: 32, y: 7 },
+      { x: 60, y: 30 },
+      { x: 140, y: 8 },
+      { x: 260, y: 6.5 },
+    ]);
+    const driver = {
+      ...presetById("usher-8945p"),
+      fsHz: 30,
+    };
+
+    expect(estimateAddedMassTsFromZma(driver, estimate, 10)).toBeNull();
+    expect(estimateAddedMassTsFromZma({ ...driver, fsHz: 90 }, estimate, 0)).toBeNull();
+    expect(estimateAddedMassTsFromZma(driver, null, 10)).toBeNull();
   });
 
   it("can simulate each datasheet-backed preset without invalid metrics", () => {
