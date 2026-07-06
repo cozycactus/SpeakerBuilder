@@ -128,6 +128,29 @@ test("changing the test volume rescales the ZMA-derived T/S estimate", async ({ 
   expect(await readoutNumber(tool, /^Qts (по|by) ZMA$/)).toBeCloseTo(qtsBefore, 5);
 });
 
+test("response tab shows the ZMA estimate next to the target Qtc curve", async ({ page }) => {
+  await page.getByTestId("driver-select").selectOption({ label: "Usher 8945P" });
+  await expect(input(page, "fsHz")).toBeVisible();
+
+  await mode(page, "fsHz").click();
+  await mode(page, "qts").click();
+  await input(page, "fsHz").fill("30");
+  await input(page, "qts").fill("0.4");
+
+  await importZma(page, "sealed-box.zma", SEALED_ZMA_CONTENT);
+
+  await page.locator(".tabs").getByRole("button", { name: /АЧХ|Response/ }).click();
+  await expect(page.locator(".legend")).toContainText(/Оценка ЗЯ по ZMA|ZMA closed estimate/);
+  await expect(page.locator(".legend")).toContainText(/Цель ЗЯ|Sealed target/);
+
+  // hiding the source trace hides both derived curves
+  await page.getByTestId("measurement-list").locator("li").first()
+    .getByRole("button", { name: /Скрыть|Hide/ }).click();
+
+  await expect(page.locator(".legend")).not.toContainText(/Оценка ЗЯ|closed estimate/);
+  await expect(page.locator(".legend")).not.toContainText(/Цель ЗЯ|Sealed target/);
+});
+
 test("free-air ZMA import derives Fs, Re, and Q factors", async ({ page }) => {
   await page.getByTestId("driver-select").selectOption({ label: "Usher 8945P" });
   await importZma(page, "free-air.zma", FREE_AIR_ZMA_CONTENT);
