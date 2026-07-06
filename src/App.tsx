@@ -22,7 +22,7 @@ import {
   Trash2,
   Upload,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   CSSProperties,
   ChangeEvent,
@@ -32,7 +32,6 @@ import type {
   PointerEvent as ReactPointerEvent,
   ReactNode,
   Ref,
-  WheelEvent as ReactWheelEvent,
 } from "react";
 import {
   APERIODIC_MATERIALS,
@@ -4286,6 +4285,7 @@ function LineChart({
   const innerWidth = width - margin.left - margin.right;
   const innerHeight = height - margin.top - margin.bottom;
   const chartBoxRef = useRef<HTMLDivElement>(null);
+  const svgElementRef = useRef<SVGSVGElement | null>(null);
   const panDragRef = useRef<{
     axis: "x" | "y";
     pointerId: number;
@@ -4299,6 +4299,16 @@ function LineChart({
     xValue: number;
   } | null>(null);
   const [isPanning, setIsPanning] = useState(false);
+  const setSvgElementRef = useCallback((element: SVGSVGElement | null) => {
+    svgElementRef.current = element;
+    if (typeof svgRef === "function") {
+      svgRef(element);
+      return;
+    }
+    if (svgRef) {
+      (svgRef as { current: SVGSVGElement | null }).current = element;
+    }
+  }, [svgRef]);
 
   useEffect(() => {
     const chartBox = chartBoxRef.current;
@@ -4398,13 +4408,15 @@ function LineChart({
     const [nextMin, nextMax] = constrainedScaledDomain(scaledMin, scaledMax);
     onXDomainChange([scaledToDomain(nextMin), scaledToDomain(nextMax)]);
   };
-  const pointerPosition = (event: ReactPointerEvent<SVGSVGElement> | ReactWheelEvent<SVGSVGElement> | ReactMouseEvent<SVGSVGElement>) => {
-    const rect = event.currentTarget.getBoundingClientRect();
+  const pointerPositionFromSvg = (element: SVGSVGElement, clientX: number, clientY: number) => {
+    const rect = element.getBoundingClientRect();
     return {
-      svgX: ((event.clientX - rect.left) / rect.width) * width,
-      svgY: ((event.clientY - rect.top) / rect.height) * height,
+      svgX: ((clientX - rect.left) / Math.max(rect.width, 1)) * width,
+      svgY: ((clientY - rect.top) / Math.max(rect.height, 1)) * height,
     };
   };
+  const pointerPosition = (event: ReactPointerEvent<SVGSVGElement> | ReactMouseEvent<SVGSVGElement>) =>
+    pointerPositionFromSvg(event.currentTarget, event.clientX, event.clientY);
   const pointerInPlot = (svgX: number, svgY: number) =>
     svgX >= margin.left &&
     svgX <= width - margin.right &&
@@ -4522,13 +4534,19 @@ function LineChart({
     }
   }
 
-  function handleWheel(event: ReactWheelEvent<SVGSVGElement>) {
-    const { svgX, svgY } = pointerPosition(event);
+  function handleChartWheel(
+    currentTarget: SVGSVGElement,
+    clientX: number,
+    clientY: number,
+    deltaY: number,
+    preventDefault: () => void,
+  ) {
+    const { svgX, svgY } = pointerPositionFromSvg(currentTarget, clientX, clientY);
     if (onYDomainChange && pointerInYAxis(svgX, svgY)) {
-      event.preventDefault();
+      preventDefault();
       const anchorRatio = 1 - (svgY - margin.top) / innerHeight;
       const anchor = yDomain[0] + anchorRatio * (yDomain[1] - yDomain[0]);
-      const zoomFactor = Math.exp(clampNumber(event.deltaY, -240, 240) * 0.002);
+      const zoomFactor = Math.exp(clampNumber(deltaY, -240, 240) * 0.002);
       emitYDomain(
         anchor - (anchor - yDomain[0]) * zoomFactor,
         anchor + (yDomain[1] - anchor) * zoomFactor,
@@ -4543,16 +4561,32 @@ function LineChart({
       return;
     }
 
-    event.preventDefault();
+    preventDefault();
     const currentMin = domainToScaled(xDomain[0]);
     const currentMax = domainToScaled(xDomain[1]);
     const anchor = domainToScaled(unscaleX(svgX));
-    const zoomFactor = Math.exp(clampNumber(event.deltaY, -240, 240) * 0.002);
+    const zoomFactor = Math.exp(clampNumber(deltaY, -240, 240) * 0.002);
     emitScaledXDomain(
       anchor - (anchor - currentMin) * zoomFactor,
       anchor + (currentMax - anchor) * zoomFactor,
     );
   }
+
+  useEffect(() => {
+    const svgElement = svgElementRef.current;
+    if (!svgElement) {
+      return undefined;
+    }
+
+    const handleNativeWheel = (event: WheelEvent) => {
+      handleChartWheel(svgElement, event.clientX, event.clientY, event.deltaY, () => event.preventDefault());
+    };
+
+    svgElement.addEventListener("wheel", handleNativeWheel, { passive: false });
+    return () => {
+      svgElement.removeEventListener("wheel", handleNativeWheel);
+    };
+  });
 
   function handleDoubleClick(event: ReactMouseEvent<SVGSVGElement>) {
     const { svgX, svgY } = pointerPosition(event);
@@ -4601,7 +4635,7 @@ function LineChart({
   return (
     <div className={`chart-box ${onXDomainChange || onYDomainChange ? "interactive" : ""} ${isPanning ? "panning" : ""}`} ref={chartBoxRef}>
       <svg
-        ref={svgRef}
+        ref={setSvgElementRef}
         viewBox={`0 0 ${width} ${height}`}
         role="img"
         aria-label={title}
@@ -4615,7 +4649,6 @@ function LineChart({
         }}
         onPointerMove={handlePointerMove}
         onPointerUp={stopPanning}
-        onWheel={handleWheel}
       >
         <rect className="plot-bg" x={margin.left} y={margin.top} width={innerWidth} height={innerHeight} />
         {xTicks.map((tick) => (
@@ -5272,7 +5305,7 @@ function formatMaxSplShort(metrics: SimulationResult["metrics"], text: UiText): 
 
 function serializeSvg(svg: SVGSVGElement): string {
   const clone = svg.cloneNode(true) as SVGSVGElement;
-  clone.querySelectorAll(".plot-hitbox, .chart-cursor").forEach((node) => node.remove());
+  clone.querySelectorAll(".plot-hitbox, .y-axis-hitbox, .chart-cursor").forEach((node) => node.remove());
   clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
   clone.setAttribute("width", "960");
   clone.setAttribute("height", "390");
