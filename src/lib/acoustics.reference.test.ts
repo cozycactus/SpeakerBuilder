@@ -284,9 +284,9 @@ describe("acoustic reference scenarios", () => {
     expect(estimateAddedMassTsFromZma(driver, null, 10)).toBeNull();
   });
 
-  it("derives Fs, Re, and Q factors from a free-air ZMA estimate", () => {
+  it("derives Fs, Re, and Q factors from a free-air ZMA", () => {
     const targetOhm = Math.sqrt(30 * 6);
-    const estimate = estimateSealedBoxFromZma([
+    const points = [
       { x: 10, y: 6 },
       { x: 16, y: 7 },
       { x: 20, y: targetOhm },
@@ -295,30 +295,63 @@ describe("acoustic reference scenarios", () => {
       { x: 70, y: 8 },
       { x: 140, y: 6.5 },
       { x: 400, y: 6.4 },
-    ]);
-    const derived = estimateFreeAirTsFromZma(estimate);
+    ];
+    const derived = estimateFreeAirTsFromZma(points);
 
     // r0 = 5, dF = 25: Qms = 30*sqrt(5)/25, Qes = Qms/4, Qts = Qms/5
     expect(derived).not.toBeNull();
     expectNear(derived?.fsHz, 30, 0.001);
+    expectNear(derived?.baselineReOhm, 6, 0.001);
     expectNear(derived?.reOhm, 6, 0.001);
     expectNear(derived?.peakRatio, 5, 0.001);
     expectNear(derived?.qms, 2.683, 0.01);
     expectNear(derived?.qes, 0.671, 0.005);
     expectNear(derived?.qts, 0.537, 0.005);
+
+    const withExplicitRe = estimateFreeAirTsFromZma(points, 6);
+    expectNear(withExplicitRe?.qts, derived?.qts ?? 0, 0.0001);
+  });
+
+  it("uses the entered DC resistance instead of the curve baseline", () => {
+    const points = [
+      { x: 10, y: 6 },
+      { x: 16, y: 7 },
+      { x: 20, y: Math.sqrt(30 * 6) },
+      { x: 30, y: 30 },
+      { x: 45, y: Math.sqrt(30 * 6) },
+      { x: 70, y: 8 },
+      { x: 140, y: 6.5 },
+      { x: 400, y: 6.4 },
+    ];
+    const derived = estimateFreeAirTsFromZma(points, 5);
+
+    expect(derived).not.toBeNull();
+    expectNear(derived?.reOhm, 5, 0.001);
+    expectNear(derived?.baselineReOhm, 6, 0.001);
+    expectNear(derived?.peakRatio, 6, 0.001);
+    // a lower true Re widens the half-power band and lowers every Q
+    expect(derived?.qts ?? 1).toBeLessThan(0.537);
+    expect(derived?.qms ?? 1).toBeLessThan(2.683);
   });
 
   it("rejects free-air estimates without a usable impedance peak", () => {
-    const flat = estimateSealedBoxFromZma([
+    const flat = [
       { x: 10, y: 6 },
       { x: 20, y: 6.1 },
       { x: 40, y: 6.2 },
       { x: 80, y: 6.1 },
       { x: 160, y: 6 },
-    ]);
+    ];
 
     expect(estimateFreeAirTsFromZma(flat)).toBeNull();
-    expect(estimateFreeAirTsFromZma(null)).toBeNull();
+    expect(estimateFreeAirTsFromZma([])).toBeNull();
+    expect(estimateFreeAirTsFromZma([
+      { x: 10, y: 6 },
+      { x: 20, y: 7 },
+      { x: 30, y: 30 },
+      { x: 45, y: 7 },
+      { x: 70, y: 6 },
+    ], 28)).toBeNull();
   });
 
   it("aligns measured SPL to the model with a median offset", () => {

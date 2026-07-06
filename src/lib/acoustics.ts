@@ -132,6 +132,7 @@ export interface AddedMassTsEstimate {
 }
 
 export interface FreeAirTsEstimate {
+  baselineReOhm: number;
   fsHz: number;
   peakRatio: number;
   qes: number;
@@ -1221,7 +1222,14 @@ export function parseMeasurementTraceFile(name: string, content: string): Parsed
   };
 }
 
-export function estimateSealedBoxFromZma(points: Point[]): SealedZmaEstimate | null {
+interface ZmaPeakAnalysis {
+  baselineOhm: number;
+  peak: Point;
+  peakIndex: number;
+  validPoints: Point[];
+}
+
+function analyzeZmaPeak(points: Point[]): ZmaPeakAnalysis | null {
   const validPoints = points
     .filter((point) => point.x >= 5 && point.x <= 1000 && point.y > 0 && Number.isFinite(point.x) && Number.isFinite(point.y))
     .sort((left, right) => left.x - right.x);
@@ -1241,6 +1249,15 @@ export function estimateSealedBoxFromZma(points: Point[]): SealedZmaEstimate | n
     0.01,
     baselineCandidates[Math.floor(baselineCandidates.length * 0.1)] ?? allValues[Math.floor(allValues.length * 0.1)] ?? allValues[0],
   );
+  return { baselineOhm, peak, peakIndex: validPoints.indexOf(peak), validPoints };
+}
+
+export function estimateSealedBoxFromZma(points: Point[]): SealedZmaEstimate | null {
+  const analysis = analyzeZmaPeak(points);
+  if (!analysis) {
+    return null;
+  }
+  const { baselineOhm, peak, validPoints } = analysis;
   const peakRatio = peak.y / baselineOhm;
   const targetOhm = peakRatio > 1.2 ? Math.sqrt(peak.y * baselineOhm) : undefined;
   const f1Hz = targetOhm ? zmaCrossingFrequency(validPoints, targetOhm, 0, validPoints.indexOf(peak), "rising") : undefined;
@@ -1343,36 +1360,41 @@ export function estimateAddedMassTsFromZma(
   };
 }
 
-export function estimateFreeAirTsFromZma(estimate: SealedZmaEstimate | null): FreeAirTsEstimate | null {
-  if (
-    !estimate ||
-    estimate.f1Hz === undefined ||
-    estimate.f2Hz === undefined ||
-    estimate.f2Hz <= estimate.f1Hz ||
-    !Number.isFinite(estimate.fcHz) ||
-    estimate.fcHz <= 0
-  ) {
+export function estimateFreeAirTsFromZma(points: Point[], reOhm?: number): FreeAirTsEstimate | null {
+  const analysis = analyzeZmaPeak(points);
+  if (!analysis) {
     return null;
   }
 
-  const peakRatio = estimate.zMaxOhm / estimate.baselineOhm;
-  if (!Number.isFinite(peakRatio) || peakRatio <= 1) {
+  const usedReOhm = reOhm !== undefined && Number.isFinite(reOhm) && reOhm > 0
+    ? reOhm
+    : analysis.baselineOhm;
+  const peakRatio = analysis.peak.y / usedReOhm;
+  if (!Number.isFinite(peakRatio) || peakRatio <= 1.2) {
     return null;
   }
 
-  const qms = (estimate.fcHz * Math.sqrt(peakRatio)) / (estimate.f2Hz - estimate.f1Hz);
+  const targetOhm = Math.sqrt(analysis.peak.y * usedReOhm);
+  const f1Hz = zmaCrossingFrequency(analysis.validPoints, targetOhm, 0, analysis.peakIndex, "rising");
+  const f2Hz = zmaCrossingFrequency(analysis.validPoints, targetOhm, analysis.peakIndex, analysis.validPoints.length - 1, "falling");
+  if (f1Hz === undefined || f2Hz === undefined || f2Hz <= f1Hz) {
+    return null;
+  }
+
+  const qms = (analysis.peak.x * Math.sqrt(peakRatio)) / (f2Hz - f1Hz);
   if (!Number.isFinite(qms) || qms <= 0) {
     return null;
   }
 
   return {
-    fsHz: estimate.fcHz,
+    baselineReOhm: analysis.baselineOhm,
+    fsHz: analysis.peak.x,
     peakRatio,
     qes: qms / (peakRatio - 1),
     qms,
     qts: qms / peakRatio,
-    reOhm: estimate.baselineOhm,
-    zMaxOhm: estimate.zMaxOhm,
+    reOhm: usedReOhm,
+    zMaxOhm: analysis.peak.y,
   };
 }
 

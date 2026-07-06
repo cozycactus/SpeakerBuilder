@@ -214,6 +214,7 @@ interface AddedMassZmaState {
 }
 
 interface FreeAirZmaState {
+  reOhm?: number;
   selectedMeasurementId?: string;
 }
 
@@ -689,7 +690,9 @@ const UI_TEXT = {
         qes: "Qes",
         qms: "Qms",
         qts: "Qts",
-        re: "Re",
+        reByZma: "Re по ZMA",
+        reDc: "Re (DC)",
+        reHint: "Re лучше измерить омметром - оценка по кривой завышена",
         title: "T/S по свободному воздуху",
         zma: "ZMA",
       },
@@ -1155,7 +1158,9 @@ const UI_TEXT = {
         qes: "Qes",
         qms: "Qms",
         qts: "Qts",
-        re: "Re",
+        reByZma: "Re by ZMA",
+        reDc: "Re (DC)",
+        reHint: "Measure Re with an ohmmeter - the curve estimate reads high",
         title: "Free-air T/S",
         zma: "ZMA",
       },
@@ -1878,13 +1883,13 @@ function App() {
     () => zmaMeasurements.find((measurement) => measurement.id === freeAirZma.selectedMeasurementId) ?? zmaMeasurements[0],
     [freeAirZma.selectedMeasurementId, zmaMeasurements],
   );
-  const freeAirZmaEstimate = useMemo(
-    () => selectedFreeAirMeasurement ? estimateSealedBoxFromZma(selectedFreeAirMeasurement.points) : null,
-    [selectedFreeAirMeasurement],
-  );
+  const freeAirReOhm = freeAirZma.reOhm ??
+    (Number.isFinite(selectedDriver.reOhm) && selectedDriver.reOhm > 0 ? selectedDriver.reOhm : undefined);
   const freeAirTsEstimate = useMemo(
-    () => estimateFreeAirTsFromZma(freeAirZmaEstimate),
-    [freeAirZmaEstimate],
+    () => selectedFreeAirMeasurement
+      ? estimateFreeAirTsFromZma(selectedFreeAirMeasurement.points, freeAirReOhm)
+      : null,
+    [freeAirReOhm, selectedFreeAirMeasurement],
   );
   const measurementSeries = useMemo(
     () => {
@@ -4434,6 +4439,17 @@ function MeasurementPanel({
                 ))}
               </select>
             </label>
+            <div className="mini-grid">
+              <NumberField
+                label={text.measurements.freeAir.reDc}
+                unit="Ω"
+                value={freeAirZma.reOhm ?? driver.reOhm}
+                min={0.1}
+                max={100}
+                step="0.01"
+                onChange={(reOhm) => onFreeAirZmaChange({ reOhm })}
+              />
+            </div>
             {freeAirTsEstimate ? (
               <div className="sealed-zma-readout">
                 <div>
@@ -4441,8 +4457,8 @@ function MeasurementPanel({
                   <strong>{formatHz(freeAirTsEstimate.fsHz)}</strong>
                 </div>
                 <div>
-                  <span>{text.measurements.freeAir.re}</span>
-                  <strong>{fmt(freeAirTsEstimate.reOhm, 2)} Ω</strong>
+                  <span>{text.measurements.freeAir.reByZma}</span>
+                  <strong>{fmt(freeAirTsEstimate.baselineReOhm, 2)} Ω</strong>
                 </div>
                 <div>
                   <span>{text.measurements.freeAir.qms}</span>
@@ -4469,12 +4485,12 @@ function MeasurementPanel({
                   qes: freeAirTsEstimate.qes,
                   qms: freeAirTsEstimate.qms,
                   qts: freeAirTsEstimate.qts,
-                  reOhm: freeAirTsEstimate.reOhm,
                 })}
               >
                 {text.measurements.applyToDriver}
               </button>
             ) : null}
+            <p>{text.measurements.freeAir.reHint}</p>
           </>
         ) : (
           <p>{text.measurements.freeAir.noZma}</p>
@@ -7504,7 +7520,9 @@ function normalizeFreeAirZmaState(value: unknown): FreeAirZmaState {
   if (!isPlainRecord(value)) {
     return DEFAULT_FREE_AIR_ZMA;
   }
+  const reOhm = finiteOptional(value.reOhm);
   return {
+    reOhm: reOhm !== undefined ? clampNumber(reOhm, 0.1, 100) : undefined,
     selectedMeasurementId: typeof value.selectedMeasurementId === "string" ? value.selectedMeasurementId : undefined,
   };
 }
