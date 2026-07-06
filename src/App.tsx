@@ -73,6 +73,7 @@ import {
   parseDriversFromFile,
   parseMeasurementTraceFile,
   resolveDriveInput,
+  sealedResponseFromFcQtc,
   simulateDesign,
 } from "./lib/acoustics";
 import {
@@ -361,6 +362,7 @@ const DEFAULT_ADDED_MASS_ZMA: AddedMassZmaState = {
   addedMassGrams: 10,
 };
 const DEFAULT_FREE_AIR_ZMA: FreeAirZmaState = {};
+const SEALED_TARGET_COLOR = "#9333ea";
 
 const driverFields: Array<{
   key: keyof SpeakerDriver;
@@ -662,8 +664,9 @@ const UI_TEXT = {
         noZma: "Загрузи ZMA закрытого ящика",
         qtc: "Qtc",
         qtsByZma: "Qts по ZMA",
-        responseHint: "На АЧХ появится пунктирная НЧ-оценка",
+        responseHint: "На АЧХ: пунктиром НЧ-оценка по ZMA и цель Qtc",
         targetQtc: "Цель Qtc",
+        targetSeries: "Цель ЗЯ (Qtc)",
         title: "Закрытый ящик по ZMA",
         tsPredicted: "T/S Fc / Qtc",
         tsTargetVolume: "Vb по T/S для цели",
@@ -1132,8 +1135,9 @@ const UI_TEXT = {
         noZma: "Load a sealed-box ZMA",
         qtc: "Qtc",
         qtsByZma: "Qts by ZMA",
-        responseHint: "A dashed LF estimate appears on Response",
+        responseHint: "Dashed ZMA estimate and target Qtc curves appear on Response",
         targetQtc: "Target Qtc",
+        targetSeries: "Sealed target (Qtc)",
         title: "Sealed box from ZMA",
         tsPredicted: "T/S Fc / Qtc",
         tsTargetVolume: "T/S Vb for target",
@@ -1925,10 +1929,15 @@ function App() {
           name: measurementSeriesName(measurement, activeTab),
           points: measurementPointsForTab(measurement, activeTab),
         }));
-      if (activeTab !== "response" || !sealedZmaEstimate?.responseDb.length || !selectedSealedZmaMeasurement) {
+      if (
+        activeTab !== "response" ||
+        !sealedZmaEstimate?.responseDb.length ||
+        !selectedSealedZmaMeasurement ||
+        selectedSealedZmaMeasurement.hidden
+      ) {
         return importedSeries;
       }
-      return [
+      const series = [
         ...importedSeries,
         {
           color: selectedSealedZmaMeasurement.color,
@@ -1937,8 +1946,28 @@ function App() {
           points: sealedZmaEstimate.responseDb,
         },
       ];
+      const { fsHz, qts } = sealedDerivationDriver;
+      if (
+        Number.isFinite(sealedZma.targetQtc) &&
+        Number.isFinite(qts) &&
+        qts > 0 &&
+        fsHz > 0 &&
+        sealedZma.targetQtc > qts
+      ) {
+        series.push({
+          color: SEALED_TARGET_COLOR,
+          measurement: true,
+          name: text.measurements.sealedZma.targetSeries,
+          points: sealedResponseFromFcQtc(
+            fsHz * (sealedZma.targetQtc / qts),
+            sealedZma.targetQtc,
+            selectedSealedZmaMeasurement.points,
+          ),
+        });
+      }
+      return series;
     },
-    [activeTab, currentDriverMeasurements, sealedZmaEstimate, selectedSealedZmaMeasurement, text],
+    [activeTab, currentDriverMeasurements, sealedDerivationDriver, sealedZma.targetQtc, sealedZmaEstimate, selectedSealedZmaMeasurement, text],
   );
 
   useEffect(() => {

@@ -7,6 +7,7 @@ import {
   estimateFreeAirTsFromZma,
   estimateSealedBoxFromZma,
   estimateSealedBoxTsFromZma,
+  sealedResponseFromFcQtc,
   PRESET_DRIVERS,
   parseMeasurementTraceFile,
   resolveDriveInput,
@@ -352,6 +353,15 @@ describe("acoustic reference scenarios", () => {
       { x: 45, y: 7 },
       { x: 70, y: 6 },
     ], 28)).toBeNull();
+  });
+
+  it("builds a second-order sealed response from Fc and Qtc", () => {
+    const points = sealedResponseFromFcQtc(60, Math.SQRT1_2, [{ x: 10, y: 6 }, { x: 400, y: 6 }]);
+
+    // -3 dB at Fc for Qtc = 0.707, flat far above Fc
+    expectNear(valueAt(points, 60), -3.01, 0.05);
+    expectNear(valueAt(points, 480), 0, 0.1);
+    expect(valueAt(points, 15)).toBeLessThan(-20);
   });
 
   it("aligns measured SPL to the model with a median offset", () => {

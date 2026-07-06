@@ -1474,7 +1474,7 @@ function interpolateLogFrequency(left: Point, right: Point, targetY: number): nu
   return Math.pow(10, leftLog + (rightLog - leftLog) * ratio);
 }
 
-function sealedResponseFromFcQtc(fcHz: number, qtc: number, sourcePoints: Point[]): Point[] {
+export function sealedResponseFromFcQtc(fcHz: number, qtc: number, sourcePoints: Point[]): Point[] {
   const minFrequency = clamp(Math.min(...sourcePoints.map((point) => point.x), 10), 5, 40);
   const maxFrequency = clamp(Math.max(500, fcHz * 8), 120, DEFAULT_FREQUENCY_MAX_HZ);
   return logspace(minFrequency, maxFrequency, 160).map((frequency) => {
