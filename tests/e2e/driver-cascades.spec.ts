@@ -28,6 +28,10 @@ function expectedQts(qes: number, qms: number): number {
   return Math.round(((qes * qms) / (qes + qms)) * 10000) / 10000;
 }
 
+function expectedQes(qts: number, qms: number): number {
+  return Math.round((1 / (1 / qts - 1 / qms)) * 10000) / 10000;
+}
+
 function expectedBlTm(fsHz: number, mmsG: number, reOhm: number, qes: number): number {
   const mmsKg = mmsG / 1000;
   const bl = Math.sqrt((Math.PI * 2 * fsHz * mmsKg * reOhm) / qes);
@@ -127,6 +131,111 @@ test("manual Qms change cascades active Qes and offers BL recalculation", async 
   await expect(chain(page, "qts")).toHaveCount(0);
   expect(await numberValue(page, "qes")).not.toBe(qesBefore);
 
+  await mode(page, "blTm", "derive").click();
+
+  const fs = await numberValue(page, "fsHz");
+  const mms = await numberValue(page, "mmsG");
+  const re = await numberValue(page, "reOhm");
+  const qes = await numberValue(page, "qes");
+  const bl = await numberValue(page, "blTm");
+
+  expect(bl).toBeCloseTo(expectedBlTm(fs, mms, re, qes), 4);
+  expect(bl).not.toBe(blBefore);
+});
+
+test("manual Qts change offers Qes and Qms quality recalculations", async ({ page }) => {
+  await page.getByTestId("driver-select").selectOption({ label: "Usher 8945P" });
+  await expect(field(page, "qts")).toBeVisible();
+
+  await setMeasured(page, "qts");
+  await setMeasured(page, "qes");
+  await setMeasured(page, "qms");
+
+  const qesBefore = await numberValue(page, "qes");
+  await input(page, "qts").fill("0.36");
+
+  await expect(chain(page, "qes")).toContainText("Qts -> Qes");
+  await expect(chain(page, "qms")).toContainText("Qts -> Qms");
+
+  await mode(page, "qes", "derive").click();
+
+  const qts = await numberValue(page, "qts");
+  const qes = await numberValue(page, "qes");
+  const qms = await numberValue(page, "qms");
+
+  expect(qes).toBeCloseTo(expectedQes(qts, qms), 4);
+  expect(qes).not.toBe(qesBefore);
+});
+
+test("manual Qts change cascades active Qes and offers BL recalculation", async ({ page }) => {
+  await page.getByTestId("driver-select").selectOption({ label: "Usher 8945P" });
+  await expect(field(page, "qts")).toBeVisible();
+
+  await setMeasured(page, "qts");
+  await setMeasured(page, "qes");
+  await setMeasured(page, "qms");
+  await setMeasured(page, "blTm");
+
+  await mode(page, "qes", "derive").click();
+  await expect(mode(page, "qes", "derive")).toContainText(/расчет|derived/i);
+  const qesBefore = await numberValue(page, "qes");
+  const blBefore = await numberValue(page, "blTm");
+
+  await input(page, "qts").fill("0.36");
+
+  await expect(chain(page, "blTm")).toContainText("Qts -> Qes -> BL");
+  await expect(chain(page, "qms")).toContainText("Qts -> Qes -> Qms");
+  expect(await numberValue(page, "qes")).not.toBe(qesBefore);
+
+  await mode(page, "blTm", "derive").click();
+
+  const fs = await numberValue(page, "fsHz");
+  const mms = await numberValue(page, "mmsG");
+  const re = await numberValue(page, "reOhm");
+  const qes = await numberValue(page, "qes");
+  const bl = await numberValue(page, "blTm");
+
+  expect(bl).toBeCloseTo(expectedBlTm(fs, mms, re, qes), 4);
+  expect(bl).not.toBe(blBefore);
+});
+
+test("manual Qes change offers quality and motor recalculations", async ({ page }) => {
+  await page.getByTestId("driver-select").selectOption({ label: "Usher 8945P" });
+  await expect(field(page, "qes")).toBeVisible();
+
+  await setMeasured(page, "qts");
+  await setMeasured(page, "qes");
+  await setMeasured(page, "qms");
+  await setMeasured(page, "blTm");
+
+  const qtsBefore = await numberValue(page, "qts");
+  await input(page, "qes").fill("0.488");
+
+  await expect(chain(page, "qts")).toContainText("Qes -> Qts");
+  await expect(chain(page, "qms")).toContainText("Qes -> Qms");
+  await expect(chain(page, "blTm")).toContainText("Qes -> BL");
+
+  await mode(page, "qts", "derive").click();
+
+  const qts = await numberValue(page, "qts");
+  const qes = await numberValue(page, "qes");
+  const qms = await numberValue(page, "qms");
+
+  expect(qts).toBeCloseTo(expectedQts(qes, qms), 4);
+  expect(qts).not.toBe(qtsBefore);
+});
+
+test("manual Qes change can derive BL from the motor formula", async ({ page }) => {
+  await page.getByTestId("driver-select").selectOption({ label: "Usher 8945P" });
+  await expect(field(page, "qes")).toBeVisible();
+
+  await setMeasured(page, "qes");
+  await setMeasured(page, "blTm");
+
+  const blBefore = await numberValue(page, "blTm");
+  await input(page, "qes").fill("0.488");
+
+  await expect(chain(page, "blTm")).toContainText("Qes -> BL");
   await mode(page, "blTm", "derive").click();
 
   const fs = await numberValue(page, "fsHz");
