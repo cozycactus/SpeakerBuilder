@@ -6,12 +6,14 @@ import {
   type MotorDerivedField,
   type QualityDerivedField,
   changedDriverFormulaFields,
+  deriveMechanicalField,
   deriveMotorField,
   deriveQualityField,
   driverFormulaPromptForChangedFields,
   driverFormulaPromptSourceForChangedFields,
   driverFormulaValueDiffers,
   reconcileDriverDerivedFields,
+  reconcileMotorDerivedField,
 } from "./driverDerivations";
 
 type NumericDriverField =
@@ -320,5 +322,16 @@ describe("driver derivation cascades", () => {
     });
     expect(driverFormulaPromptForChangedFields(changedFields, "vasL", { mechanical: "cmsMmN" })).toBeUndefined();
     expect(driverFormulaPromptForChangedFields(changedFields, "sdCm2", { mechanical: "cmsMmN" })).toBeUndefined();
+  });
+
+  it("reconciles an active mechanical target after selecting Fs from the motor formula", () => {
+    const before = createDriver();
+    const withManualMms = cascade(before, "mmsG", 24, { mechanical: "cmsMmN" });
+    const withMotorFs = reconcileMotorDerivedField(withManualMms, "fsHz");
+    const after = reconcileDriverDerivedFields(withMotorFs, "fsHz", "cmsMmN", "fsHz");
+
+    expect(after.fsHz).toBe(deriveMotorField(withManualMms, "fsHz"));
+    expect(after.cmsMmN).toBe(deriveMechanicalField(after, "cmsMmN", "fsHz"));
+    expect(after.cmsMmN).not.toBe(withManualMms.cmsMmN);
   });
 });

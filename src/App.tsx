@@ -1805,39 +1805,45 @@ function App() {
     field: MechanicalDerivedField | MotorDerivedField | QualityDerivedField,
     formula: DriverFormulaKind,
   ) {
-    const derivedDriver = formula === "mechanical" && isMechanicalDerivedField(field)
+    const primaryDerivedDriver = formula === "mechanical" && isMechanicalDerivedField(field)
       ? reconcileMechanicalDerivedField(selectedDriver, field)
       : formula === "motor" && isMotorDerivedField(field)
         ? reconcileMotorDerivedField(selectedDriver, field)
         : formula === "quality" && isQualityDerivedField(field)
           ? reconcileQualityDerivedField(selectedDriver, field)
           : selectedDriver;
-    if (derivedDriver === selectedDriver) {
+    if (primaryDerivedDriver === selectedDriver) {
       setStatus(text.driverDerivation.unavailable(driverFieldByKey.get(field)?.label ?? field));
       return;
     }
 
+    let nextMechanicalDerivedField = mechanicalDerivedField;
+    let nextMotorDerivedField = motorDerivedField;
+    let nextQualityDerivedField = qualityDerivedField;
+
     if (formula === "mechanical" && isMechanicalDerivedField(field)) {
-      setMechanicalDerivedField(field);
-      if (motorDerivedField === field) {
-        setMotorDerivedField(undefined);
-      }
+      nextMechanicalDerivedField = field;
+      nextMotorDerivedField = motorDerivedField === field ? undefined : motorDerivedField;
     } else if (formula === "motor" && isMotorDerivedField(field)) {
-      setMotorDerivedField(field);
-      if (mechanicalDerivedField === field) {
-        setMechanicalDerivedField(undefined);
-      }
-      if (qualityDerivedField === field) {
-        setQualityDerivedField(undefined);
-      }
+      nextMotorDerivedField = field;
+      nextMechanicalDerivedField = mechanicalDerivedField === field ? undefined : mechanicalDerivedField;
+      nextQualityDerivedField = qualityDerivedField === field ? undefined : qualityDerivedField;
     } else if (formula === "quality" && isQualityDerivedField(field)) {
-      setQualityDerivedField(field);
-      if (motorDerivedField === field) {
-        setMotorDerivedField(undefined);
-      }
+      nextQualityDerivedField = field;
+      nextMotorDerivedField = motorDerivedField === field ? undefined : motorDerivedField;
     } else {
       return;
     }
+    const derivedDriver = reconcileDriverDerivedFields(
+      primaryDerivedDriver,
+      field,
+      nextMechanicalDerivedField,
+      nextMotorDerivedField,
+      nextQualityDerivedField,
+    );
+    setMechanicalDerivedField(nextMechanicalDerivedField);
+    setMotorDerivedField(nextMotorDerivedField);
+    setQualityDerivedField(nextQualityDerivedField);
     if (isDriverFormulaField(field)) {
       setFixedDriverFields((current) => {
         const currentFields = current[selectedDriver.id] ?? [];
