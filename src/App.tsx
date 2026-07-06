@@ -70,6 +70,7 @@ import {
   MECHANICAL_DERIVED_FIELDS,
   MOTOR_DERIVED_FIELDS,
   QUALITY_DERIVED_FIELDS,
+  changedDriverFormulaFields,
   defaultDerivedFieldValue,
   defaultFormulaForField,
   deriveDriverFormulaValue,
@@ -77,7 +78,8 @@ import {
   deriveMotorField,
   deriveQualityField,
   driverActiveFormulaForField,
-  driverFormulaPromptForField,
+  driverFormulaPromptForChangedFields,
+  driverFormulaValueDiffers,
   isDriverFormulaField,
   isMechanicalDerivedField,
   isMotorDerivedField,
@@ -1261,6 +1263,7 @@ function App() {
     () => initialProject.qualityDerivedField,
   );
   const [lastManualDriverField, setLastManualDriverField] = useState<keyof SpeakerDriver | undefined>();
+  const [lastDriverFormulaChangeFields, setLastDriverFormulaChangeFields] = useState<ReadonlyArray<keyof SpeakerDriver>>([]);
   const [measurements, setMeasurements] = useState<MeasurementTrace[]>(() => initialProject.measurements);
   const [sealedZma, setSealedZma] = useState<SealedZmaState>(() => initialProject.sealedZma);
   const [acousticOptions, setAcousticOptions] = useState<AcousticOptions>(() => initialProject.acousticOptions);
@@ -1755,6 +1758,7 @@ function App() {
       clearDerivedFormulaField(key);
     }
     setLastManualDriverField(undefined);
+    setLastDriverFormulaChangeFields([]);
     setFixedDriverFields((current) => {
       const currentFields = current[selectedDriver.id] ?? [];
       const nextFields = fixed
@@ -1780,7 +1784,12 @@ function App() {
 
     clearDerivedFormulaField(key);
     if (key !== "name" && key !== "id" && key !== "source") {
-      setLastManualDriverField(key);
+      const changedFields = changedDriverFormulaFields(selectedDriver, editedDriver, key);
+      setLastManualDriverField(changedFields.length > 0 ? key : undefined);
+      setLastDriverFormulaChangeFields(changedFields);
+    } else {
+      setLastManualDriverField(undefined);
+      setLastDriverFormulaChangeFields([]);
     }
 
     commitSelectedDriver(editedDriver, key);
@@ -1826,6 +1835,7 @@ function App() {
       });
     }
     setLastManualDriverField(undefined);
+    setLastDriverFormulaChangeFields([]);
     commitSelectedDriver(derivedDriver, field);
   }
 
@@ -1843,6 +1853,7 @@ function App() {
     setMotorDerivedField(undefined);
     setQualityDerivedField(undefined);
     setLastManualDriverField(undefined);
+    setLastDriverFormulaChangeFields([]);
     setFixedDriverFields((current) => {
       const { [selectedDriver.id]: _removed, ...rest } = current;
       return rest;
@@ -1853,6 +1864,7 @@ function App() {
   function selectDriverWithDefaults(driver: SpeakerDriver) {
     const nextDesigns = createDefaultDesigns(driver);
     setLastManualDriverField(undefined);
+    setLastDriverFormulaChangeFields([]);
     setSelectedDriverId(driver.id);
     setDesigns(nextDesigns);
     setFocusedDesignId(nextDesigns.find((design) => design.enabled)?.id ?? nextDesigns[0]?.id ?? "");
@@ -1966,6 +1978,8 @@ function App() {
     setMechanicalDerivedField(project.mechanicalDerivedField);
     setMotorDerivedField(project.motorDerivedField);
     setQualityDerivedField(project.qualityDerivedField);
+    setLastManualDriverField(undefined);
+    setLastDriverFormulaChangeFields([]);
     setSelectedDriverId(project.selectedDriverId);
     setDesigns(project.designs);
     setFocusedDesignId(project.focusedDesignId);
@@ -2415,9 +2429,9 @@ function App() {
               motor: motorDerivedField,
               quality: qualityDerivedField,
             });
-            const promptFormula = lastManualDriverField !== undefined
-              ? driverFormulaPromptForField(lastManualDriverField, field.key, { motor: motorDerivedField })
-              : undefined;
+            const promptFormula = driverFormulaPromptForChangedFields(lastDriverFormulaChangeFields, field.key, {
+              motor: motorDerivedField,
+            });
             const isDerivedField = activeFormula !== undefined;
             const isFixedField = canChooseFieldMode &&
               !isDerivedField &&
@@ -2425,13 +2439,14 @@ function App() {
             const promptedDerivedFieldValue = promptFormula !== undefined
               ? deriveDriverFormulaValue(selectedDriver, field.key, promptFormula)
               : undefined;
+            const fieldValue = selectedDriver[field.key];
             const shouldPromptDerive = derivableField !== undefined &&
               !isDerivedField &&
               !isFixedField &&
               promptFormula !== undefined &&
               activeFormula !== promptFormula &&
-              promptedDerivedFieldValue !== undefined;
-            const fieldValue = selectedDriver[field.key];
+              promptedDerivedFieldValue !== undefined &&
+              driverFormulaValueDiffers(fieldValue, promptedDerivedFieldValue);
             let derivedFieldValue: number | undefined;
             if (activeFormula !== undefined && typeof fieldValue === "number") {
               derivedFieldValue = fieldValue;

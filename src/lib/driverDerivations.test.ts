@@ -5,8 +5,11 @@ import {
   type MechanicalDerivedField,
   type MotorDerivedField,
   type QualityDerivedField,
+  changedDriverFormulaFields,
   deriveMotorField,
   deriveQualityField,
+  driverFormulaPromptForChangedFields,
+  driverFormulaValueDiffers,
   reconcileDriverDerivedFields,
 } from "./driverDerivations";
 
@@ -234,5 +237,20 @@ describe("driver derivation cascades", () => {
 
     expect(after.qes).toBe(0.61);
     expectChangedFields(before, after, ["qes", "qts"]);
+  });
+
+  it("prompts from fields that changed through the cascade, not only from the manual field", () => {
+    const before = createDriver();
+    const after = cascade(before, "qms", 3, { quality: "qes" });
+    const changedFields = changedDriverFormulaFields(before, after, "qms");
+    const promptedBl = deriveMotorField(after, "blTm");
+    const promptedQts = deriveQualityField(after, "qts");
+
+    expect(changedFields).toEqual(["qms", "qes"]);
+    expect(driverFormulaPromptForChangedFields(changedFields, "blTm")).toBe("motor");
+    expect(promptedBl).toBeDefined();
+    expect(driverFormulaValueDiffers(after.blTm, promptedBl as number)).toBe(true);
+    expect(promptedQts).toBeDefined();
+    expect(driverFormulaValueDiffers(after.qts, promptedQts as number)).toBe(false);
   });
 });

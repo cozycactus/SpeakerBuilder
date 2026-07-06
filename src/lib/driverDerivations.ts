@@ -326,6 +326,41 @@ export function driverFormulaPromptForField(
   return undefined;
 }
 
+export function driverFormulaPromptForChangedFields(
+  changedKeys: readonly (keyof SpeakerDriver)[],
+  candidateKey: keyof SpeakerDriver,
+  derivedFields: {
+    motor?: MotorDerivedField;
+  } = {},
+): DriverFormulaKind | undefined {
+  for (const changedKey of changedKeys) {
+    const prompt = driverFormulaPromptForField(changedKey, candidateKey, derivedFields);
+    if (prompt !== undefined) {
+      return prompt;
+    }
+  }
+  return undefined;
+}
+
+export function changedDriverFormulaFields(
+  before: SpeakerDriver,
+  after: SpeakerDriver,
+  changedKey: keyof SpeakerDriver,
+): Array<keyof SpeakerDriver> {
+  const changedFields = DRIVER_FORMULA_FIELDS.filter((field) => before[field] !== after[field]);
+  if (isDriverFormulaField(changedKey) && before[changedKey] !== after[changedKey]) {
+    return [changedKey, ...changedFields.filter((field) => field !== changedKey)];
+  }
+  return changedFields;
+}
+
+export function driverFormulaValueDiffers(currentValue: unknown, derivedValue: number): boolean {
+  if (typeof currentValue !== "number" || !Number.isFinite(currentValue)) {
+    return true;
+  }
+  return Math.abs(currentValue - derivedValue) > Math.max(1e-6, Math.abs(currentValue) * 1e-6);
+}
+
 export function defaultFormulaForField(
   field: MechanicalDerivedField | MotorDerivedField | QualityDerivedField,
 ): DriverFormulaKind {
