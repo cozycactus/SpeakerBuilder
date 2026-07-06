@@ -65,6 +65,36 @@ import {
   resolveDriveInput,
   simulateDesign,
 } from "./lib/acoustics";
+import {
+  DRIVER_FORMULA_FIELDS,
+  MECHANICAL_DERIVED_FIELDS,
+  MOTOR_DERIVED_FIELDS,
+  QUALITY_DERIVED_FIELDS,
+  defaultDerivedFieldValue,
+  defaultFormulaForField,
+  deriveDriverFormulaValue,
+  deriveMechanicalField,
+  deriveMotorField,
+  deriveQualityField,
+  driverActiveFormulaForField,
+  driverFormulaPromptForField,
+  isDriverFormulaField,
+  isMechanicalDerivedField,
+  isMotorDerivedField,
+  isQualityDerivedField,
+  positiveNumber,
+  reconcileDriverDerivedFields,
+  reconcileMechanicalDerivedField,
+  reconcileMotorDerivedField,
+  reconcileQualityDerivedField,
+} from "./lib/driverDerivations";
+import type {
+  DriverFormulaField,
+  DriverFormulaKind,
+  MechanicalDerivedField,
+  MotorDerivedField,
+  QualityDerivedField,
+} from "./lib/driverDerivations";
 
 type ChartTab = "response" | "spl" | "excursion" | "groupDelay" | "impulse" | "step" | "phase" | "impedance" | "port";
 type Language = "ru" | "en";
@@ -73,15 +103,6 @@ type ResizeTarget = "left" | "right";
 type SidebarPanelId = "drivers" | "model";
 type ChartToolPanelId = "inputs" | "corrections" | "measurements" | "compare";
 type PanelArea = "sidebar" | "chartTools";
-const MECHANICAL_DERIVED_FIELDS = ["fsHz", "vasL", "sdCm2", "mmsG", "cmsMmN"] as const;
-const QUALITY_DERIVED_FIELDS = ["qts", "qes", "qms"] as const;
-const MOTOR_DERIVED_FIELDS = ["qes", "blTm"] as const;
-const DRIVER_FORMULA_FIELDS = ["fsHz", "qts", "qes", "qms", "vasL", "sdCm2", "reOhm", "mmsG", "cmsMmN", "blTm"] as const;
-type MechanicalDerivedField = (typeof MECHANICAL_DERIVED_FIELDS)[number];
-type QualityDerivedField = (typeof QUALITY_DERIVED_FIELDS)[number];
-type MotorDerivedField = (typeof MOTOR_DERIVED_FIELDS)[number];
-type DriverFormulaField = (typeof DRIVER_FORMULA_FIELDS)[number];
-type DriverFormulaKind = "mechanical" | "motor" | "quality";
 type FixedDriverFieldsByDriver = Record<string, DriverFormulaField[]>;
 type AnalysisSnapshot = {
   driver: SpeakerDriver;
@@ -296,13 +317,6 @@ const DEFAULT_ACOUSTIC_OPTIONS: AcousticOptions = {
   roomGainDb: 0,
   roomGainStartHz: 80,
 };
-const DRIVER_DERIVATION_AIR_DENSITY = 1.204;
-const DRIVER_DERIVATION_SPEED_OF_SOUND = 343;
-const mechanicalDerivedFieldSet = new Set<keyof SpeakerDriver>(MECHANICAL_DERIVED_FIELDS);
-const motorDerivedFieldSet = new Set<keyof SpeakerDriver>(MOTOR_DERIVED_FIELDS);
-const qualityDerivedFieldSet = new Set<keyof SpeakerDriver>(QUALITY_DERIVED_FIELDS);
-const driverFormulaFieldSet = new Set<keyof SpeakerDriver>(DRIVER_FORMULA_FIELDS);
-const motorFormulaFields = new Set<keyof SpeakerDriver>(["fsHz", "mmsG", "reOhm", "qes", "blTm"]);
 const DEFAULT_SEALED_ZMA: SealedZmaState = {
   boxVolumeLiters: 10,
   targetQtc: 0.707,
@@ -6332,203 +6346,6 @@ function analyzeDriver(driver: SpeakerDriver): DriverProfile {
   };
 }
 
-function deriveMechanicalField(
-  driver: SpeakerDriver,
-  target: MechanicalDerivedField,
-  changedKey?: keyof SpeakerDriver,
-): number | undefined {
-  const fsHz = positiveNumber(driver.fsHz);
-  const vasL = positiveNumber(driver.vasL);
-  const sdCm2 = positiveNumber(driver.sdCm2);
-  const mmsG = positiveNumber(driver.mmsG);
-  const cmsMmN = positiveNumber(driver.cmsMmN);
-
-  if (target === "mmsG") {
-    if (fsHz === undefined) {
-      return undefined;
-    }
-    const cms = complianceForDriver(driver, changedKey);
-    if (cms === undefined) {
-      return undefined;
-    }
-    const omegaS = Math.PI * 2 * fsHz;
-    return normalizeDerivedDriverValue(target, 1000 / (omegaS * omegaS * cms));
-  }
-
-  if (target === "fsHz") {
-    if (mmsG === undefined) {
-      return undefined;
-    }
-    const cms = complianceForDriver(driver, changedKey);
-    if (cms === undefined) {
-      return undefined;
-    }
-    const fs = 1 / (Math.PI * 2 * Math.sqrt((mmsG / 1000) * cms));
-    return normalizeDerivedDriverValue(target, fs);
-  }
-
-  if (target === "vasL") {
-    if (sdCm2 === undefined) {
-      return undefined;
-    }
-    const cms = complianceForDriver(driver, changedKey, "resonanceFirst");
-    if (cms === undefined) {
-      return undefined;
-    }
-    const sdM2 = sdCm2 / 10000;
-    const vasLValue = cms *
-      DRIVER_DERIVATION_AIR_DENSITY *
-      DRIVER_DERIVATION_SPEED_OF_SOUND *
-      DRIVER_DERIVATION_SPEED_OF_SOUND *
-      sdM2 *
-      sdM2 *
-      1000;
-    return normalizeDerivedDriverValue(target, vasLValue);
-  }
-
-  if (target === "sdCm2") {
-    if (vasL === undefined) {
-      return undefined;
-    }
-    const cms = complianceForDriver(driver, changedKey, "resonanceFirst");
-    if (cms === undefined) {
-      return undefined;
-    }
-    const vasM3 = vasL / 1000;
-    const denominator = cms *
-      DRIVER_DERIVATION_AIR_DENSITY *
-      DRIVER_DERIVATION_SPEED_OF_SOUND *
-      DRIVER_DERIVATION_SPEED_OF_SOUND;
-    const sdM2 = denominator > 0 ? Math.sqrt(vasM3 / denominator) : Number.NaN;
-    return normalizeDerivedDriverValue(target, sdM2 * 10000);
-  }
-
-  if (changedKey === "fsHz" || changedKey === "mmsG") {
-    const resonanceCms = complianceFromFsMms(fsHz, mmsG);
-    if (resonanceCms !== undefined) {
-      return normalizeDerivedDriverValue(target, resonanceCms * 1000);
-    }
-  }
-  const acousticCms = vasL !== undefined && sdCm2 !== undefined
-    ? complianceFromVasSd(vasL, sdCm2)
-    : undefined;
-  if (acousticCms !== undefined) {
-    return normalizeDerivedDriverValue(target, acousticCms * 1000);
-  }
-  const resonanceCms = cmsMmN !== undefined
-    ? cmsMmN / 1000
-    : complianceFromFsMms(fsHz, mmsG);
-  return resonanceCms !== undefined ? normalizeDerivedDriverValue(target, resonanceCms * 1000) : undefined;
-}
-
-function deriveMotorField(driver: SpeakerDriver, target: MotorDerivedField): number | undefined {
-  const fsHz = positiveNumber(driver.fsHz);
-  const mmsG = positiveNumber(driver.mmsG);
-  const reOhm = positiveNumber(driver.reOhm);
-  if (target === "qes") {
-    const blTm = positiveNumber(driver.blTm);
-    if (fsHz === undefined || mmsG === undefined || reOhm === undefined || blTm === undefined) {
-      return undefined;
-    }
-    const qes = (Math.PI * 2 * fsHz * (mmsG / 1000) * reOhm) / (blTm * blTm);
-    return normalizeDerivedDriverValue(target, qes);
-  }
-
-  if (target !== "blTm") {
-    return undefined;
-  }
-  const qes = positiveNumber(driver.qes);
-  if (fsHz === undefined || mmsG === undefined || reOhm === undefined || qes === undefined) {
-    return undefined;
-  }
-  const bl = Math.sqrt((Math.PI * 2 * fsHz * (mmsG / 1000) * reOhm) / qes);
-  return normalizeDerivedDriverValue(target, bl);
-}
-
-function deriveQualityField(driver: SpeakerDriver, target: QualityDerivedField): number | undefined {
-  if (target === "qts") {
-    const qes = positiveNumber(driver.qes);
-    const qms = positiveNumber(driver.qms);
-    if (qes === undefined || qms === undefined) {
-      return undefined;
-    }
-    return normalizeDerivedDriverValue(target, (qes * qms) / (qes + qms));
-  }
-
-  if (target === "qes") {
-    const qts = positiveNumber(driver.qts);
-    const qms = positiveNumber(driver.qms);
-    if (qts === undefined || qms === undefined || qms <= qts) {
-      return undefined;
-    }
-    return normalizeDerivedDriverValue(target, 1 / (1 / qts - 1 / qms));
-  }
-
-  const qts = positiveNumber(driver.qts);
-  const qes = positiveNumber(driver.qes);
-  if (qts === undefined || qes === undefined || qes <= qts) {
-    return undefined;
-  }
-  return normalizeDerivedDriverValue(target, 1 / (1 / qts - 1 / qes));
-}
-
-function reconcileMechanicalDerivedField(
-  driver: SpeakerDriver,
-  target?: MechanicalDerivedField,
-  changedKey?: keyof SpeakerDriver,
-): SpeakerDriver {
-  if (target === undefined) {
-    return driver;
-  }
-  if (changedKey !== undefined && (changedKey === target || !isMechanicalDerivedField(changedKey))) {
-    return driver;
-  }
-
-  const derivedValue = deriveMechanicalField(driver, target, changedKey);
-  if (derivedValue === undefined) {
-    return driver;
-  }
-  return { ...driver, [target]: derivedValue };
-}
-
-function reconcileMotorDerivedField(
-  driver: SpeakerDriver,
-  target?: MotorDerivedField,
-  changedKey?: keyof SpeakerDriver,
-): SpeakerDriver {
-  if (target === undefined) {
-    return driver;
-  }
-  if (changedKey !== undefined && (changedKey === target || !motorFormulaFields.has(changedKey))) {
-    return driver;
-  }
-
-  const derivedValue = deriveMotorField(driver, target);
-  if (derivedValue === undefined) {
-    return driver;
-  }
-  return { ...driver, [target]: derivedValue };
-}
-
-function reconcileQualityDerivedField(
-  driver: SpeakerDriver,
-  target?: QualityDerivedField,
-  changedKey?: keyof SpeakerDriver,
-): SpeakerDriver {
-  if (target === undefined) {
-    return driver;
-  }
-  if (changedKey !== undefined && (changedKey === target || !isQualityDerivedField(changedKey))) {
-    return driver;
-  }
-
-  const derivedValue = deriveQualityField(driver, target);
-  if (derivedValue === undefined) {
-    return driver;
-  }
-  return { ...driver, [target]: derivedValue };
-}
-
 function driverFormulaChain({
   lastManualField,
   mechanicalDerivedField,
@@ -6614,65 +6431,6 @@ function driverFormulaMismatches(driver: SpeakerDriver): Array<{ errorRatio: num
   return mismatches.length > 0
     ? mismatches
     : [];
-}
-
-function complianceForDriver(
-  driver: SpeakerDriver,
-  changedKey?: keyof SpeakerDriver,
-  priority: "explicitFirst" | "resonanceFirst" = "explicitFirst",
-): number | undefined {
-  const fsHz = positiveNumber(driver.fsHz);
-  const mmsG = positiveNumber(driver.mmsG);
-  const cmsMmN = positiveNumber(driver.cmsMmN);
-  const vasL = positiveNumber(driver.vasL);
-  const sdCm2 = positiveNumber(driver.sdCm2);
-  const explicitCms = cmsMmN !== undefined ? cmsMmN / 1000 : undefined;
-  const resonanceCms = complianceFromFsMms(fsHz, mmsG);
-  const acousticCms = vasL !== undefined && sdCm2 !== undefined ? complianceFromVasSd(vasL, sdCm2) : undefined;
-
-  if (changedKey === "fsHz" || changedKey === "mmsG") {
-    return resonanceCms ?? explicitCms ?? acousticCms;
-  }
-  if (changedKey === "vasL" || changedKey === "sdCm2") {
-    return acousticCms ?? explicitCms ?? resonanceCms;
-  }
-  if (priority === "resonanceFirst") {
-    return resonanceCms ?? explicitCms ?? acousticCms;
-  }
-  return explicitCms ?? acousticCms ?? resonanceCms;
-}
-
-function complianceFromVasSd(vasL: number, sdCm2: number): number | undefined {
-  const vasM3 = vasL / 1000;
-  const sdM2 = sdCm2 / 10000;
-  const cms = vasM3 /
-    (DRIVER_DERIVATION_AIR_DENSITY * DRIVER_DERIVATION_SPEED_OF_SOUND * DRIVER_DERIVATION_SPEED_OF_SOUND * sdM2 * sdM2);
-  return Number.isFinite(cms) && cms > 0 ? cms : undefined;
-}
-
-function complianceFromFsMms(fsHz?: number, mmsG?: number): number | undefined {
-  if (fsHz === undefined || mmsG === undefined || fsHz <= 0 || mmsG <= 0) {
-    return undefined;
-  }
-  const omegaS = Math.PI * 2 * fsHz;
-  const cms = 1 / (omegaS * omegaS * (mmsG / 1000));
-  return Number.isFinite(cms) && cms > 0 ? cms : undefined;
-}
-
-function normalizeDerivedDriverValue(
-  key: MechanicalDerivedField | MotorDerivedField | QualityDerivedField,
-  value: number,
-): number | undefined {
-  if (!Number.isFinite(value) || value <= 0) {
-    return undefined;
-  }
-  const limits = driverFieldLimits.get(key);
-  const clamped = limits ? clampNumber(value, limits.min, limits.max ?? Number.POSITIVE_INFINITY) : value;
-  return roundTo(clamped, 4);
-}
-
-function positiveNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
 function loadProjectState(): ProjectState {
@@ -7022,77 +6780,6 @@ function applyDriverFieldValue(
   );
 }
 
-function reconcileDriverDerivedFields(
-  driver: SpeakerDriver,
-  changedKey: keyof SpeakerDriver,
-  mechanicalDerivedField?: MechanicalDerivedField,
-  motorDerivedField?: MotorDerivedField,
-  qualityDerivedField?: QualityDerivedField,
-): SpeakerDriver {
-  const mechanicalDriver = reconcileMechanicalDerivedField(driver, mechanicalDerivedField, changedKey);
-  const downstreamChangedKey = mechanicalDriver === driver ? changedKey : undefined;
-
-  if (motorDerivedField === "qes") {
-    const motorDriver = reconcileMotorDerivedField(mechanicalDriver, motorDerivedField, downstreamChangedKey);
-    const qualityChangedKey = motorDriver === mechanicalDriver ? downstreamChangedKey : "qes";
-    return reconcileQualityDerivedField(motorDriver, qualityDerivedField, qualityChangedKey);
-  }
-
-  const qualityDriver = reconcileQualityDerivedField(mechanicalDriver, qualityDerivedField, downstreamChangedKey);
-  const motorChangedKey = qualityDriver === mechanicalDriver
-    ? downstreamChangedKey
-    : qualityDerivedField === "qes"
-      ? "qes"
-      : downstreamChangedKey;
-  return reconcileMotorDerivedField(qualityDriver, motorDerivedField, motorChangedKey);
-}
-
-function reconcileDriverQualityFields(driver: SpeakerDriver, changedKey: keyof SpeakerDriver): SpeakerDriver {
-  if (changedKey === "qts") {
-    const qts = driver.qts;
-    if (!Number.isFinite(qts) || qts <= 0) {
-      return driver;
-    }
-
-    if (driver.qms !== undefined && driver.qms > qts) {
-      const qes = qesFromQtsQms(qts, driver.qms);
-      return qes ? { ...driver, qes: roundTo(qes, 4) } : driver;
-    }
-    if (driver.qes !== undefined && driver.qes > qts) {
-      const qms = qmsFromQtsQes(qts, driver.qes);
-      return qms ? { ...driver, qms: roundTo(qms, 4) } : driver;
-    }
-
-    const qes = qts * 1.2;
-    const qms = qmsFromQtsQes(qts, qes);
-    return qms ? { ...driver, qes: roundTo(qes, 4), qms: roundTo(qms, 4) } : driver;
-  }
-
-  if (changedKey === "qes" || changedKey === "qms") {
-    if (driver.qes === undefined || driver.qms === undefined || driver.qes <= 0 || driver.qms <= 0) {
-      return driver;
-    }
-    const qts = (driver.qes * driver.qms) / (driver.qes + driver.qms);
-    const limits = driverFieldLimits.get("qts");
-    const normalizedQts = limits
-      ? clampNumber(qts, limits.min, limits.max ?? Number.POSITIVE_INFINITY)
-      : qts;
-    return { ...driver, qts: roundTo(normalizedQts, 4) };
-  }
-
-  return driver;
-}
-
-function qesFromQtsQms(qts: number, qms: number): number | undefined {
-  const denominator = 1 / qts - 1 / qms;
-  return denominator > 0 ? 1 / denominator : undefined;
-}
-
-function qmsFromQtsQes(qts: number, qes: number): number | undefined {
-  const denominator = 1 / qts - 1 / qes;
-  return denominator > 0 ? 1 / denominator : undefined;
-}
-
 function isProtectedPresetDriver(driver: SpeakerDriver): boolean {
   return Boolean(driver.source?.verified && PRESET_DRIVERS.some((preset) => preset.id === driver.id));
 }
@@ -7324,114 +7011,6 @@ function isSeries(value: unknown): value is Series {
 
 function isChartTab(value: unknown): value is ChartTab {
   return typeof value === "string" && chartTabs.includes(value as ChartTab);
-}
-
-function isMechanicalDerivedField(value: unknown): value is MechanicalDerivedField {
-  return typeof value === "string" && mechanicalDerivedFieldSet.has(value as keyof SpeakerDriver);
-}
-
-function isMotorDerivedField(value: unknown): value is MotorDerivedField {
-  return typeof value === "string" && motorDerivedFieldSet.has(value as keyof SpeakerDriver);
-}
-
-function isQualityDerivedField(value: unknown): value is QualityDerivedField {
-  return typeof value === "string" && qualityDerivedFieldSet.has(value as keyof SpeakerDriver);
-}
-
-function isDriverFormulaField(value: unknown): value is DriverFormulaField {
-  return typeof value === "string" && driverFormulaFieldSet.has(value as keyof SpeakerDriver);
-}
-
-function driverActiveFormulaForField(
-  key: keyof SpeakerDriver,
-  derivedFields: {
-    mechanical?: MechanicalDerivedField;
-    motor?: MotorDerivedField;
-    quality?: QualityDerivedField;
-  },
-): DriverFormulaKind | undefined {
-  if (isMechanicalDerivedField(key) && derivedFields.mechanical === key) {
-    return "mechanical";
-  }
-  if (isMotorDerivedField(key) && derivedFields.motor === key) {
-    return "motor";
-  }
-  if (isQualityDerivedField(key) && derivedFields.quality === key) {
-    return "quality";
-  }
-  return undefined;
-}
-
-function driverFormulaPromptForField(
-  changedKey: keyof SpeakerDriver,
-  candidateKey: keyof SpeakerDriver,
-  derivedFields: {
-    motor?: MotorDerivedField;
-  } = {},
-): DriverFormulaKind | undefined {
-  if (candidateKey === changedKey) {
-    return undefined;
-  }
-  if (isMechanicalDerivedField(candidateKey) && isMechanicalDerivedField(changedKey)) {
-    return "mechanical";
-  }
-  if (isQualityDerivedField(candidateKey) && isQualityDerivedField(changedKey)) {
-    return "quality";
-  }
-  if (
-    isQualityDerivedField(candidateKey) &&
-    candidateKey !== "qes" &&
-    derivedFields.motor === "qes" &&
-    motorFormulaFields.has(changedKey)
-  ) {
-    return "quality";
-  }
-  if (isMotorDerivedField(candidateKey) && motorFormulaFields.has(changedKey)) {
-    return "motor";
-  }
-  return undefined;
-}
-
-function defaultFormulaForField(
-  field: MechanicalDerivedField | MotorDerivedField | QualityDerivedField,
-): DriverFormulaKind {
-  if (isMechanicalDerivedField(field)) {
-    return "mechanical";
-  }
-  if (isQualityDerivedField(field)) {
-    return "quality";
-  }
-  return "motor";
-}
-
-function defaultDerivedFieldValue(driver: SpeakerDriver, key: keyof SpeakerDriver): number | undefined {
-  if (isMechanicalDerivedField(key)) {
-    return deriveMechanicalField(driver, key);
-  }
-  if (isQualityDerivedField(key)) {
-    return deriveQualityField(driver, key);
-  }
-  if (isMotorDerivedField(key)) {
-    return deriveMotorField(driver, key);
-  }
-  return undefined;
-}
-
-function deriveDriverFormulaValue(
-  driver: SpeakerDriver,
-  key: keyof SpeakerDriver,
-  formula: DriverFormulaKind,
-): number | undefined {
-  if (formula === "mechanical" && isMechanicalDerivedField(key)) {
-    return deriveMechanicalField(driver, key);
-  }
-  if (formula === "quality" && isQualityDerivedField(key)) {
-    return deriveQualityField(driver, key);
-  }
-  if (formula === "motor" && isMotorDerivedField(key)) {
-    return deriveMotorField(driver, key);
-  }
-  return undefined;
 }
 
 function isOptimizerGoal(value: unknown): value is OptimizerGoal {
