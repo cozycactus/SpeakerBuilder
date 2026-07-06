@@ -27,6 +27,17 @@ const ADDED_MASS_ZMA_CONTENT = [
   "400 6.5",
 ].join("\n");
 
+const FREE_AIR_ZMA_CONTENT = [
+  "10 6",
+  "16 7",
+  "20 13.4164",
+  "30 30",
+  "45 13.4164",
+  "70 8",
+  "140 6.5",
+  "400 6.4",
+].join("\n");
+
 function readout(tool: Locator, label: RegExp): Locator {
   return tool
     .locator(".sealed-zma-readout > div")
@@ -107,6 +118,21 @@ test("changing the test volume rescales the ZMA-derived T/S estimate", async ({ 
   await expect(readout(tool, /^T\/S Fc \/ Qtc$/)).toHaveText("47.4 Hz / 0.63");
   expect(Math.abs(await readoutNumber(tool, /^Vas (по|by) ZMA$/) - 60)).toBeLessThan(1);
   expect(await readoutNumber(tool, /^Qts (по|by) ZMA$/)).toBeCloseTo(qtsBefore, 5);
+});
+
+test("free-air ZMA import derives Fs, Re, and Q factors", async ({ page }) => {
+  await page.getByTestId("driver-select").selectOption({ label: "Usher 8945P" });
+  await importZma(page, "free-air.zma", FREE_AIR_ZMA_CONTENT);
+
+  const tool = page.getByTestId("free-air-tool");
+  await expect(tool.locator(".sealed-zma-readout")).toBeVisible();
+
+  // r0 = 5, dF = 25 Hz: Qms = 30*sqrt(5)/25, Qes = Qms/4, Qts = Qms/5
+  await expect(readout(tool, /^Fs$/)).toHaveText("30.0 Hz");
+  await expect(readout(tool, /^Re$/)).toHaveText("6.00 Ω");
+  expect(Math.abs(await readoutNumber(tool, /^Qms$/) - 2.683)).toBeLessThan(0.01);
+  expect(Math.abs(await readoutNumber(tool, /^Qes$/) - 0.671)).toBeLessThan(0.005);
+  expect(Math.abs(await readoutNumber(tool, /^Qts$/) - 0.537)).toBeLessThan(0.005);
 });
 
 test("added-mass ZMA import derives Mms, Cms, and Vas for the selected driver", async ({ page }) => {
