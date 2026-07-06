@@ -43,6 +43,8 @@ export interface BoxDesign {
   vbLiters: number;
   fbHz?: number;
   ql?: number;
+  bandpassRearLiters?: number;
+  bandpassFrontLiters?: number;
   aperiodicMode?: AperiodicMode;
   aperiodicMaterial?: AperiodicMaterial;
   aperiodicThicknessMm?: number;
@@ -519,10 +521,12 @@ export function createDefaultDesigns(driver: SpeakerDriver): BoxDesign[] {
       name: "Bandpass 4th order",
       kind: "bandpass",
       enabled: false,
-      vbLiters: Math.max(sealedBw * 0.75, driver.vasL * 0.18),
-      fbHz: driver.fsHz * 1.15,
-      ql: 0.74,
-      portDiameterCm: 7,
+      vbLiters: Math.max(sealedBw * 1.1, driver.vasL * 0.3) + Math.max(sealedBw * 1.7, driver.vasL * 0.45),
+      bandpassRearLiters: Math.max(sealedBw * 1.1, driver.vasL * 0.3),
+      bandpassFrontLiters: Math.max(sealedBw * 1.7, driver.vasL * 0.45),
+      fbHz: driver.fsHz * 1.55,
+      ql: 7,
+      portDiameterCm: 8,
       portCount: 1,
       portShape: "round",
       color: DESIGN_COLORS[9],
@@ -621,7 +625,7 @@ export function simulateDesign(
   const refMagnitude = getReferenceMagnitude(raw.map((item) => ({
     frequency: item.frequency,
     magnitude: cabs(item.response.acoustic),
-  })));
+  })), design.kind);
 
   const responseDb = needsResponse
     ? raw.map((item) => ({
@@ -663,7 +667,7 @@ export function simulateDesign(
   const portMach = needsPort
     ? raw.map((item) => {
         const velocity =
-          design.kind === "vented" && portArea > 0
+          (design.kind === "vented" || design.kind === "bandpass") && portArea > 0
             ? (cabs(item.response.portVolumeVelocity) * voltageRms) / portArea
             : 0;
         return { x: item.frequency, y: velocity / SPEED_OF_SOUND };
@@ -736,7 +740,7 @@ export function simulateDesign(
       ? sealedQtc(driver, design.vbLiters)
       : undefined;
     fcHz = qtc ? driver.fsHz * Math.sqrt(1 + driver.vasL / design.vbLiters) : undefined;
-    portLengthCm = design.kind === "vented" ? portLength(design) : undefined;
+    portLengthCm = design.kind === "vented" || design.kind === "bandpass" ? portLength(design) : undefined;
     portResonanceHz = portLengthCm !== undefined && portLengthCm > 0
       ? roundTo(SPEED_OF_SOUND / (2 * (portLengthCm / 100)), 0)
       : undefined;
@@ -761,7 +765,7 @@ export function simulateDesign(
       impedancePeakOhm = impedanceSummary.peakOhm;
     }
     if (design.kind === "bandpass") {
-      notes.push("Bandpass model is approximate");
+      notes.push("Bandpass models low-frequency band only");
     }
     if (driver.peW && driveInput.electricalPowerW > driver.peW) {
       notes.push(`Power exceeds Pe: ${roundTo(driveInput.electricalPowerW, 1)} W`);
@@ -778,16 +782,16 @@ export function simulateDesign(
     if (splLimits.usable?.reason === "power") {
       notes.push(`Max SPL limited by Pe at ${roundTo(splLimits.usable.frequency, 1)} Hz`);
     }
-    if (design.kind === "vented" && maxPort.y > PORT_LIMIT_MACH) {
+    if ((design.kind === "vented" || design.kind === "bandpass") && maxPort.y > PORT_LIMIT_MACH) {
       notes.push(`High vent air speed: Mach ${roundTo(maxPort.y, 2)}`);
     }
-    if (design.kind === "vented" && maxPort.y > 0.1 && maxPort.y <= PORT_LIMIT_MACH) {
+    if ((design.kind === "vented" || design.kind === "bandpass") && maxPort.y > 0.1 && maxPort.y <= PORT_LIMIT_MACH) {
       notes.push(`Port air speed near noise limit: Mach ${roundTo(maxPort.y, 2)}`);
     }
-    if (design.kind === "vented" && portLengthCm !== undefined && portLengthCm <= 1) {
+    if ((design.kind === "vented" || design.kind === "bandpass") && portLengthCm !== undefined && portLengthCm <= 1) {
       notes.push("Vent is too short for this diameter/tuning");
     }
-    if (design.kind === "vented") {
+    if (design.kind === "vented" || design.kind === "bandpass") {
       const pistonDiameterCm = Math.sqrt((Math.max(1, driver.sdCm2) * 4) / Math.PI);
       const portAreaM2 = getPortAreaM2(design);
       const equivalentPortDiameterCm = portAreaM2 > 0 ? Math.sqrt((portAreaM2 * 4) / Math.PI) * 100 : 0;
@@ -850,7 +854,7 @@ export function simulateDesign(
       maxPassiveRadiatorExcursionMm: needsMetrics && design.kind === "passive" ? maxPassiveRadiatorExcursion.y : undefined,
       maxPassiveRadiatorExcursionHz: needsMetrics && design.kind === "passive" ? maxPassiveRadiatorExcursion.x : undefined,
       passiveRadiatorTuningHz,
-      maxPortMach: needsMetrics && design.kind === "vented" ? maxPort.y : undefined,
+      maxPortMach: needsMetrics && (design.kind === "vented" || design.kind === "bandpass") ? maxPort.y : undefined,
       portLengthCm,
       portResonanceHz,
       minImpedanceOhm: minImpedance.y,
@@ -972,6 +976,28 @@ function createOptimizerDesigns(driver: SpeakerDriver): BoxDesign[] {
         passiveRadiatorXmaxMm: defaultPassiveRadiatorXmaxMm(driver),
         passiveRadiatorCount: passiveCount,
       });
+    }
+  }
+
+  const sealedBw = sealedForQtc(driver, 0.707);
+  for (const rearFactor of [0.9, 1.3, 1.8]) {
+    for (const frontFactor of [1.3, 1.9, 2.6]) {
+      for (const fbRatio of [1.35, 1.65]) {
+        const rear = Math.max(sealedBw * rearFactor, driver.vasL * 0.25 * rearFactor);
+        const front = Math.max(sealedBw * frontFactor, driver.vasL * 0.3 * frontFactor);
+        addDesign({
+          id: `opt-bandpass-${rearFactor}-${frontFactor}-${fbRatio}`,
+          name: "Optimized bandpass",
+          kind: "bandpass",
+          vbLiters: rear + front,
+          bandpassRearLiters: rear,
+          bandpassFrontLiters: front,
+          fbHz: driver.fsHz * fbRatio,
+          ql: 7,
+          portDiameterCm: clamp(roundTo(pistonDiameterCm * 0.34, 1), 4, 16),
+          portCount: 1,
+        });
+      }
     }
   }
 
@@ -1250,22 +1276,6 @@ function responseAtFrequency(
   design: BoxDesign,
   frequency: number,
 ): ResponseAtFrequency {
-  if (design.kind === "bandpass") {
-    const rear = responseAtFrequency(driver, { ...design, kind: "sealed" }, frequency);
-    const fb = Math.max(8, design.fbHz ?? driver.fsHz * 1.2);
-    const q = clamp(design.ql ?? 0.74, 0.35, 1.5);
-    const x = frequency / fb;
-    const lowPass = cdiv(
-      c(1, 0),
-      c(1 - x * x, x / q),
-    );
-    return {
-      ...rear,
-      acoustic: cmul(rear.acoustic, lowPass),
-      portVolumeVelocity: c(0, 0),
-    };
-  }
-
   const omega = TWO_PI * frequency;
   const s = c(0, omega);
   const ze = cadd(c(driver.reOhm, 0), cmul(s, c(driver.leH, 0)));
@@ -1280,6 +1290,19 @@ function responseAtFrequency(
   const coneVelocity = cdiv(cdiv(c(driver.bl, 0), ze), denominator);
   const inputImpedance = cadd(ze, cdiv(c(driver.bl * driver.bl, 0), zMechanical));
   const frontVolumeVelocity = cmul(c(driver.sdM2, 0), coneVelocity);
+
+  if (design.kind === "bandpass") {
+    // 4th-order (single-reflex) bandpass: the cone fires into the ported front
+    // chamber and does not radiate directly; only the port radiates outward.
+    const chamberPressure = cmul(frontVolumeVelocity, load.zAcoustic);
+    const portVolumeVelocity = load.zPort ? cdiv(chamberPressure, load.zPort) : c(0, 0);
+    return {
+      acoustic: pressureProxy(portVolumeVelocity, frequency),
+      coneVelocity,
+      portVolumeVelocity,
+      inputImpedance,
+    };
+  }
 
   if (design.kind === "vented" || design.kind === "passive") {
     const boxInflow = cmul(c(-1, 0), frontVolumeVelocity);
@@ -1315,6 +1338,29 @@ function enclosureLoad(
   const s = c(0, omega);
   const vbM3 = Math.max(0.001, design.vbLiters / 1000);
   const cab = vbM3 / (RHO * SPEED_OF_SOUND * SPEED_OF_SOUND);
+
+  if (design.kind === "bandpass") {
+    // Single-reflex (4th-order) bandpass: sealed rear chamber loads the cone
+    // rear, ported front chamber loads and radiates from the cone front.
+    const rearM3 = Math.max(0.001, bandpassRearLiters(design) / 1000);
+    const frontM3 = Math.max(0.001, bandpassFrontLiters(design) / 1000);
+    const cabRear = rearM3 / (RHO * SPEED_OF_SOUND * SPEED_OF_SOUND);
+    const cabFront = frontM3 / (RHO * SPEED_OF_SOUND * SPEED_OF_SOUND);
+    const fb = Math.max(5, design.fbHz ?? driver.fsHz);
+    const ql = clamp(bandpassQl(design), 2, 40);
+    const map = 1 / (Math.pow(TWO_PI * fb, 2) * cabFront);
+    const rap = (TWO_PI * fb * map) / ql;
+    const zPort = cadd(c(rap, 0), cmul(s, c(map, 0)));
+    const yFront = cadd(cmul(s, c(cabFront, 0)), cdiv(c(1, 0), zPort));
+    const zFront = cdiv(c(1, 0), yFront);
+    const zRear = cdiv(c(1, 0), cmul(s, c(cabRear, 0)));
+    const zAcousticTotal = cadd(zRear, zFront);
+    return {
+      zload: cmul(c(driver.sdM2 * driver.sdM2, 0), zAcousticTotal),
+      zAcoustic: zFront,
+      zPort,
+    };
+  }
 
   if (design.kind === "vented") {
     const fb = Math.max(5, design.fbHz ?? driver.fsHz);
@@ -1449,7 +1495,17 @@ function createStepResponse(
   return step.map((point) => ({ x: point.x, y: point.y / maxAbs }));
 }
 
-function getReferenceMagnitude(points: { frequency: number; magnitude: number }[]): number {
+function getReferenceMagnitude(
+  points: { frequency: number; magnitude: number }[],
+  kind?: BoxKind,
+): number {
+  if (kind === "bandpass") {
+    // A bandpass has no flat mid-band region; its passband sits lower and is
+    // already rolling off by ~150 Hz. Reference to the actual passband peak so
+    // the relative-response chart reads 0 dB at the top of the band.
+    const peak = Math.max(1e-12, ...points.map((point) => point.magnitude));
+    return peak;
+  }
   const passband = points
     .filter((point) => point.frequency >= 120 && point.frequency <= 260)
     .map((point) => point.magnitude)
@@ -1556,7 +1612,7 @@ function calculateSplLimits({
         return excursion > 0.0001 ? powerW * Math.pow(driver.xmaxMm! / excursion, 2) : undefined;
       })
     : undefined;
-  const port = design.kind === "vented"
+  const port = design.kind === "vented" || design.kind === "bandpass"
     ? minimumSplLimit(indexes, splDb, powerW, "port", (index) => {
         const mach = portMach[index]?.y ?? 0;
         return mach > 0.00001 ? powerW * Math.pow(PORT_LIMIT_MACH / mach, 2) : undefined;
@@ -1809,23 +1865,41 @@ function portLength(design: BoxDesign): number | undefined {
   const fb = design.fbHz;
   const geometry = getPortGeometry(design);
   const count = Math.max(1, design.portCount ?? 1);
-  if (!fb || !geometry || design.vbLiters <= 0) {
+  const tunedLiters = design.kind === "bandpass" ? bandpassFrontLiters(design) : design.vbLiters;
+  if (!fb || !geometry || tunedLiters <= 0) {
     return undefined;
   }
   const totalArea = geometry.singleAreaM2 * count;
-  const vbM3 = design.vbLiters / 1000;
+  const vbM3 = tunedLiters / 1000;
   const effectiveLength = totalArea / (vbM3 * Math.pow((TWO_PI * fb) / SPEED_OF_SOUND, 2));
   const physicalLength = effectiveLength - 1.46 * geometry.equivalentRadiusM;
   return roundTo(Math.max(0, physicalLength * 100), 1);
 }
 
 function getPortAreaM2(design: BoxDesign): number {
-  if (design.kind !== "vented") {
+  if (design.kind !== "vented" && design.kind !== "bandpass") {
     return 0;
   }
   const geometry = getPortGeometry(design);
   const count = Math.max(1, design.portCount ?? 1);
   return geometry ? geometry.singleAreaM2 * count : 0;
+}
+
+function bandpassRearLiters(design: BoxDesign): number {
+  const value = design.bandpassRearLiters ?? design.vbLiters;
+  return value > 0 ? value : Math.max(0.1, design.vbLiters);
+}
+
+function bandpassFrontLiters(design: BoxDesign): number {
+  const value = design.bandpassFrontLiters ?? design.vbLiters * 0.6;
+  return value > 0 ? value : Math.max(0.1, design.vbLiters * 0.6);
+}
+
+function bandpassQl(design: BoxDesign): number {
+  const ql = design.ql ?? 7;
+  // Legacy projects stored the old low-pass Q here (~0.74). Treat any
+  // sub-physical value as the modern leakage-loss default.
+  return ql >= 2 ? ql : 7;
 }
 
 function getPortGeometry(design: BoxDesign): { equivalentRadiusM: number; singleAreaM2: number } | null {

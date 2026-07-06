@@ -336,13 +336,32 @@ describe("acoustic reference scenarios", () => {
     expect(lowXmax.metrics.maxUsableSplReason).toBe("passive");
   });
 
-  it("marks approximate bandpass modeling in analysis notes", () => {
+  it("models a 4th-order bandpass with a real ported front chamber", () => {
     const driver = presetById("usher-8945p");
     const bandpass = createDefaultDesigns(driver).find((item) => item.name === "Bandpass 4th order");
     expect(bandpass).toBeDefined();
+    expect(bandpass!.bandpassRearLiters).toBeGreaterThan(0);
+    expect(bandpass!.bandpassFrontLiters).toBeGreaterThan(0);
 
-    expect(simulateDesign(driver, bandpass!, { powerW: 1 }).metrics.notes)
-      .toContain("Bandpass model is approximate");
+    const result = simulateDesign(driver, bandpass!, { powerW: 10 });
+
+    // Band-limited note reflects the new (accurate but low-band) model.
+    expect(result.metrics.notes).toContain("Bandpass models low-frequency band only");
+
+    // The port actually radiates, so port air-speed is tracked like a vented box.
+    expect(result.portMach.length).toBe(FREQUENCIES.length);
+    expect(result.portMach.some((point) => point.y > 0)).toBe(true);
+    expect(result.metrics.maxPortMach).toBeGreaterThan(0);
+    expect(result.metrics.portLengthCm).toBeGreaterThan(0);
+
+    // Bandpass rolls off on BOTH sides of the passband (unlike a high-pass box):
+    // response near the low and high edges of the band is well below the peak.
+    const peakDb = result.metrics.peakDb;
+    const lowEdgeDb = nearestY(result.responseDb, 20);
+    const highEdgeDb = nearestY(result.responseDb, result.metrics.peakHz * 2.2);
+    expect(peakDb - lowEdgeDb).toBeGreaterThan(3);
+    expect(peakDb - highEdgeDb).toBeGreaterThan(3);
+    expect(result.metrics.peakHz).toBeGreaterThan(20);
   });
 
   it("keeps the 6.5 inch sealed Butterworth alignment stable", () => {

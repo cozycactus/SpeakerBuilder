@@ -629,6 +629,8 @@ const UI_TEXT = {
     passiveRadiatorSd: "Sd PR",
     passiveRadiatorTuning: "Fb PR",
     passiveRadiatorXmax: "Xmax PR",
+    bandpassRear: "Задняя Vb",
+    bandpassFront: "Передняя Vf",
     portDiameter: "Порт Ø",
     portHeight: "Высота",
     portShape: "Порт",
@@ -686,7 +688,7 @@ const UI_TEXT = {
       maxSplLimitedByPassive: (frequency: string) => `SPL ограничен ходом пассивного радиатора на ${frequency} Гц`,
       maxSplLimitedByPort: (frequency: string) => `SPL ограничен портом на ${frequency} Гц`,
       maxSplLimitedByXmax: (frequency: string) => `SPL ограничен Xmax на ${frequency} Гц`,
-      bandpassApproximate: "Бандпасс пока считается приближенно: задняя закрытая камера + ФНЧ, без полной модели камер",
+      bandpassApproximate: "Бандпасс: 4-й порядок (закрытая задняя + портированная передняя камера); достоверен только в полосе НЧ",
       multiplePortsLong: "Несколько портов сильно увеличивают требуемую длину",
       passiveXmaxExceeded: (frequency: string) => `Превышен Xmax пассивного радиатора на ${frequency} Гц`,
       powerExceeded: (power: string) => `Заданная мощность выше Pe: ${power} W`,
@@ -1009,6 +1011,8 @@ const UI_TEXT = {
     passiveRadiatorSd: "PR Sd",
     passiveRadiatorTuning: "PR Fb",
     passiveRadiatorXmax: "PR Xmax",
+    bandpassRear: "Rear Vb",
+    bandpassFront: "Front Vf",
     portDiameter: "Port Ø",
     portHeight: "Height",
     portShape: "Port",
@@ -1066,7 +1070,7 @@ const UI_TEXT = {
       maxSplLimitedByPassive: (frequency: string) => `Max SPL limited by passive radiator excursion at ${frequency} Hz`,
       maxSplLimitedByPort: (frequency: string) => `Max SPL limited by port at ${frequency} Hz`,
       maxSplLimitedByXmax: (frequency: string) => `Max SPL limited by Xmax at ${frequency} Hz`,
-      bandpassApproximate: "Bandpass is approximate: rear sealed + low-pass, not a full chamber model",
+      bandpassApproximate: "Bandpass: 4th-order (sealed rear + ported front chamber); valid in the low-frequency band only",
       multiplePortsLong: "Multiple ports make the tuning tube long",
       passiveXmaxExceeded: (frequency: string) => `Passive radiator Xmax exceeded at ${frequency} Hz`,
       powerExceeded: (power: string) => `Power exceeds Pe: ${power} W`,
@@ -2791,7 +2795,34 @@ function DesignEditor({
             ))}
           </select>
         </label>
-        <NumberField label={text.table.vb} unit="L" value={design.vbLiters} min={0.1} step="0.1" onChange={(vbLiters) => onChange({ vbLiters })} />
+        {design.kind === "bandpass" ? (
+          <>
+            <NumberField
+              label={text.bandpassRear}
+              unit="L"
+              value={design.bandpassRearLiters ?? design.vbLiters}
+              min={0.1}
+              step="0.1"
+              onChange={(rear) => {
+                const front = design.bandpassFrontLiters ?? design.vbLiters * 0.6;
+                onChange({ bandpassRearLiters: rear, vbLiters: rear + front });
+              }}
+            />
+            <NumberField
+              label={text.bandpassFront}
+              unit="L"
+              value={design.bandpassFrontLiters ?? design.vbLiters * 0.6}
+              min={0.1}
+              step="0.1"
+              onChange={(front) => {
+                const rear = design.bandpassRearLiters ?? design.vbLiters;
+                onChange({ bandpassFrontLiters: front, vbLiters: rear + front });
+              }}
+            />
+          </>
+        ) : (
+          <NumberField label={text.table.vb} unit="L" value={design.vbLiters} min={0.1} step="0.1" onChange={(vbLiters) => onChange({ vbLiters })} />
+        )}
         {hasTuning ? (
           <NumberField label="Fb" unit="Hz" value={design.fbHz ?? 30} min={1} step="0.1" onChange={(fbHz) => onChange({ fbHz })} />
         ) : null}
@@ -3045,14 +3076,19 @@ function designKindPatch(kind: BoxKind, design: BoxDesign, driver: SpeakerDriver
     };
   }
   if (kind === "vented" || kind === "bandpass") {
-    return {
+    const base: Partial<BoxDesign> = {
       kind,
       fbHz: design.fbHz ?? Math.max(15, driver.fsHz),
-      ql: design.ql ?? (kind === "bandpass" ? 0.74 : 7),
+      ql: design.ql && design.ql >= 2 ? design.ql : (kind === "bandpass" ? 7 : 7),
       portShape: design.portShape ?? "round",
       portDiameterCm: design.portDiameterCm ?? 7,
       portCount: design.portCount ?? 1,
     };
+    if (kind === "bandpass") {
+      base.bandpassRearLiters = design.bandpassRearLiters ?? Math.max(1, design.vbLiters);
+      base.bandpassFrontLiters = design.bandpassFrontLiters ?? Math.max(1, design.vbLiters * 0.6);
+    }
+    return base;
   }
   if (kind === "passive") {
     const vbLiters = design.vbLiters || Math.max(1, driver.vasL * 0.8);
@@ -5161,7 +5197,7 @@ function translateNote(note: string, text: UiText): string {
   if (note === "Multiple ports make the tuning tube long") {
     return text.notes.multiplePortsLong;
   }
-  if (note === "Bandpass model is approximate") {
+  if (note === "Bandpass models low-frequency band only") {
     return text.notes.bandpassApproximate;
   }
 
@@ -6216,6 +6252,12 @@ function normalizeDesign(design: BoxDesign): BoxDesign {
     vbLiters: Math.max(0.1, design.vbLiters || 0.1),
     fbHz: design.fbHz !== undefined ? Math.max(1, design.fbHz) : undefined,
     ql: design.ql !== undefined ? Math.max(0.1, design.ql) : undefined,
+    bandpassRearLiters: design.bandpassRearLiters !== undefined
+      ? clampNumber(design.bandpassRearLiters, 0.1, 100000)
+      : undefined,
+    bandpassFrontLiters: design.bandpassFrontLiters !== undefined
+      ? clampNumber(design.bandpassFrontLiters, 0.1, 100000)
+      : undefined,
     aperiodicMode: design.aperiodicMode === "flow" || design.aperiodicMode === "ql" ? design.aperiodicMode : undefined,
     aperiodicMaterial: APERIODIC_MATERIAL_KEYS.includes(design.aperiodicMaterial as AperiodicMaterial)
       ? design.aperiodicMaterial
