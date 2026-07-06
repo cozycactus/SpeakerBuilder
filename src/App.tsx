@@ -66,13 +66,23 @@ import {
   simulateDesign,
 } from "./lib/acoustics";
 
-type ChartTab = "response" | "spl" | "excursion" | "groupDelay" | "step" | "phase" | "impedance" | "port";
+type ChartTab = "response" | "spl" | "excursion" | "groupDelay" | "impulse" | "step" | "phase" | "impedance" | "port";
 type Language = "ru" | "en";
 type ScaleMode = "linear" | "log";
 type ResizeTarget = "left" | "right";
 type SidebarPanelId = "drivers" | "model";
 type ChartToolPanelId = "inputs" | "corrections" | "measurements" | "compare";
 type PanelArea = "sidebar" | "chartTools";
+const MECHANICAL_DERIVED_FIELDS = ["fsHz", "vasL", "sdCm2", "mmsG", "cmsMmN"] as const;
+const QUALITY_DERIVED_FIELDS = ["qts", "qes", "qms"] as const;
+const MOTOR_DERIVED_FIELDS = ["qes", "blTm"] as const;
+const DRIVER_FORMULA_FIELDS = ["fsHz", "qts", "qes", "qms", "vasL", "sdCm2", "reOhm", "mmsG", "cmsMmN", "blTm"] as const;
+type MechanicalDerivedField = (typeof MECHANICAL_DERIVED_FIELDS)[number];
+type QualityDerivedField = (typeof QUALITY_DERIVED_FIELDS)[number];
+type MotorDerivedField = (typeof MOTOR_DERIVED_FIELDS)[number];
+type DriverFormulaField = (typeof DRIVER_FORMULA_FIELDS)[number];
+type DriverFormulaKind = "mechanical" | "motor" | "quality";
+type FixedDriverFieldsByDriver = Record<string, DriverFormulaField[]>;
 type AnalysisSnapshot = {
   driver: SpeakerDriver;
   designs: BoxDesign[];
@@ -168,14 +178,20 @@ interface ProjectState {
   activeTab: ChartTab;
   chartFrequencyMinHz: number;
   chartFrequencyMaxHz: number;
+  chartStepTimeMinMs: number;
+  chartStepTimeMaxMs: number;
   chartYScales: Record<ChartTab, ChartYScaleState>;
   compareDriverIds: string[];
   compareEnabled: boolean;
   designs: BoxDesign[];
   drivers: SpeakerDriver[];
   focusedDesignId: string;
+  fixedDriverFields: FixedDriverFieldsByDriver;
   language: Language;
   libraryFilters: LibraryFilters;
+  mechanicalDerivedField?: MechanicalDerivedField;
+  motorDerivedField?: MotorDerivedField;
+  qualityDerivedField?: QualityDerivedField;
   measurements: MeasurementTrace[];
   optimizerGoal: OptimizerGoal;
   powerW: number;
@@ -248,6 +264,11 @@ const RESIZE_KEY_STEP = 16;
 const CHART_FREQUENCY_MIN_LIMIT_HZ = 10;
 const CHART_FREQUENCY_MIN_MAX_HZ = MAX_FREQUENCY_MAX_HZ / 2;
 const DEFAULT_CHART_FREQUENCY_MIN_HZ = 10;
+const CHART_STEP_TIME_MIN_LIMIT_MS = 0;
+const CHART_STEP_TIME_MAX_LIMIT_MS = 250;
+const CHART_STEP_TIME_MIN_MAX_MS = CHART_STEP_TIME_MAX_LIMIT_MS - 1;
+const DEFAULT_CHART_STEP_TIME_MIN_MS = 0;
+const DEFAULT_CHART_STEP_TIME_MAX_MS = CHART_STEP_TIME_MAX_LIMIT_MS;
 const DEFAULT_CHART_Y_MIN = -36;
 const DEFAULT_CHART_Y_MAX = 9;
 const CHART_Y_LIMIT = 240;
@@ -257,6 +278,12 @@ const CHART_RANGE_PRESETS = [
   { label: "20-3k", minHz: 20, maxHz: 3000 },
   { label: "20-20k", minHz: 20, maxHz: 20000 },
 ];
+type ChartRangePreset = { label: string; min: number; max: number };
+const CHART_STEP_TIME_PRESETS = [
+  { label: "0-50 ms", min: 0, max: 50 },
+  { label: "0-100 ms", min: 0, max: 100 },
+  { label: "0-250 ms", min: 0, max: 250 },
+] satisfies ChartRangePreset[];
 const DEFAULT_SIDEBAR_PANEL_ORDER: SidebarPanelId[] = ["drivers", "model"];
 const DEFAULT_CHART_PANEL_ORDER: ChartToolPanelId[] = ["inputs", "corrections", "measurements", "compare"];
 const DEFAULT_LIBRARY_FILTERS: LibraryFilters = {
@@ -269,6 +296,13 @@ const DEFAULT_ACOUSTIC_OPTIONS: AcousticOptions = {
   roomGainDb: 0,
   roomGainStartHz: 80,
 };
+const DRIVER_DERIVATION_AIR_DENSITY = 1.204;
+const DRIVER_DERIVATION_SPEED_OF_SOUND = 343;
+const mechanicalDerivedFieldSet = new Set<keyof SpeakerDriver>(MECHANICAL_DERIVED_FIELDS);
+const motorDerivedFieldSet = new Set<keyof SpeakerDriver>(MOTOR_DERIVED_FIELDS);
+const qualityDerivedFieldSet = new Set<keyof SpeakerDriver>(QUALITY_DERIVED_FIELDS);
+const driverFormulaFieldSet = new Set<keyof SpeakerDriver>(DRIVER_FORMULA_FIELDS);
+const motorFormulaFields = new Set<keyof SpeakerDriver>(["fsHz", "mmsG", "reOhm", "qes", "blTm"]);
 const DEFAULT_SEALED_ZMA: SealedZmaState = {
   boxVolumeLiters: 10,
   targetQtc: 0.707,
@@ -294,18 +328,20 @@ const driverFields: Array<{
   { key: "peW", label: "Pe", unit: "W", step: "1", min: 0.1, max: 100000 },
   { key: "sensitivityDb", label: "Sens.", unit: "dB", step: "0.1", min: 40, max: 130 },
   { key: "mmsG", label: "Mms", unit: "g", step: "0.1", min: 0.01, max: 10000 },
+  { key: "cmsMmN", label: "Cms", unit: "mm/N", step: "0.01", min: 0.0001, max: 1000 },
   { key: "blTm", label: "BL", unit: "Tm", step: "0.1", min: 0.01, max: 100 },
 ];
 const driverFieldByKey = new Map(driverFields.map((field) => [field.key, field]));
 const driverFieldLimits = new Map(driverFields.map((field) => [field.key, { min: field.min, max: field.max }]));
 const requiredDriverNumberFields = new Set<keyof SpeakerDriver>(["fsHz", "qts", "vasL", "sdCm2", "reOhm"]);
 
-const chartTabs: ChartTab[] = ["response", "spl", "excursion", "groupDelay", "step", "phase", "impedance", "port"];
+const chartTabs: ChartTab[] = ["response", "spl", "excursion", "groupDelay", "impulse", "step", "phase", "impedance", "port"];
 const DEFAULT_CHART_Y_RANGES = {
   response: [DEFAULT_CHART_Y_MIN, DEFAULT_CHART_Y_MAX],
   spl: [60, 110],
   excursion: [0, 10],
   groupDelay: [0, 15],
+  impulse: [-1.1, 1.1],
   step: [-1.1, 1.1],
   phase: [-360, 90],
   impedance: [0, 40],
@@ -343,6 +379,7 @@ const UI_TEXT = {
       spl: "SPL",
       excursion: "Ход",
       groupDelay: "Групповая задержка",
+      impulse: "Импульс",
       step: "Переходная",
       phase: "Фаза",
       impedance: "Импеданс",
@@ -353,6 +390,7 @@ const UI_TEXT = {
       spl: "SPL",
       excursion: "Ход диффузора",
       groupDelay: "Групповая задержка",
+      impulse: "Импульсная характеристика",
       step: "Переходная характеристика",
       phase: "Фаза",
       impedance: "Импеданс",
@@ -420,7 +458,7 @@ const UI_TEXT = {
         qesNotAboveQts: "Qes должен быть больше Qts",
         qmsNotAboveQts: "Qms должен быть больше Qts",
         qtsFormulaMismatch: "Qts не согласуется с Qes и Qms",
-        fsMmsVasMismatch: "Fs, Mms, Vas и Sd дают заметно другую резонансную частоту",
+        fsMmsVasMismatch: "Fs, Mms, Vas, Sd и Cms заметно расходятся между собой",
         qtsHigh: "Qts высокий: ФИ может давать большой пик или длинный порт",
         qtsLow: "Qts очень низкий: проверьте данные или рассчитывайте на крупный ФИ",
         xmaxInvalid: "Xmax должен быть больше нуля или пустым",
@@ -434,6 +472,32 @@ const UI_TEXT = {
         vented: "Хороший кандидат для ФИ",
       } satisfies Record<DriverRecommendation, string>,
       title: "Проверка T/S",
+    },
+    driverDerivation: {
+      derive: "рассчитать",
+      derived: (value: string, unit: string) => `расчет: ${value}${unit ? ` ${unit}` : ""}`,
+      fixed: "фикс",
+      fixedTitle: (label: string) => `${label} зафиксирован как вход формулы и не будет мигать как кандидат на пересчет.`,
+      manual: "ручной ввод",
+      measured: "замер",
+      measuredTitle: (label: string) => `${label} используется как введенный или измеренный вход формулы.`,
+      title: (label: string) =>
+        `${label} выбран расчетным параметром. Остальные параметры этой формулы считаются входами. Введите это поле вручную, чтобы снова зафиксировать его.`,
+      unavailable: (label: string) => `Не хватает данных, чтобы рассчитать ${label}`,
+    },
+    driverRelations: {
+      chain: "Цепочка",
+      formulas: {
+        mechanical: "Fs/Mms/Cms/Vas/Sd",
+        motor: "Qes = 2π Fs Mms Re / BL²",
+        motorBl: "BL = √(2π Fs Mms Re / Qes)",
+        quality: "1/Qts = 1/Qes + 1/Qms",
+      },
+      graphs: "графики",
+      mismatches: "Невязки",
+      noChain: "Выберите параметр как расчетный, чтобы увидеть цепочку",
+      ok: "формулы сходятся",
+      title: "Связи T/S",
     },
     chartInputs: {
       title: "Входы графика",
@@ -453,7 +517,7 @@ const UI_TEXT = {
       rows: {
         damping: {
           charts: "АЧХ, SPL, фаза, задержка, ход, импеданс",
-          params: "Fs, Vas, Qts/Qes/Qms, Mms, BL",
+          params: "Fs, Vas, Cms, Qts/Qes/Qms, Mms, BL",
         },
         level: {
           charts: "SPL и уровень чувствительности",
@@ -741,6 +805,7 @@ const UI_TEXT = {
       spl: "SPL",
       excursion: "Excursion",
       groupDelay: "Group delay",
+      impulse: "Impulse",
       step: "Step",
       phase: "Phase",
       impedance: "Impedance",
@@ -751,6 +816,7 @@ const UI_TEXT = {
       spl: "SPL",
       excursion: "Cone excursion",
       groupDelay: "Group delay",
+      impulse: "Impulse response",
       step: "Step response",
       phase: "Phase",
       impedance: "Impedance",
@@ -802,7 +868,7 @@ const UI_TEXT = {
         qesNotAboveQts: "Qes must be greater than Qts",
         qmsNotAboveQts: "Qms must be greater than Qts",
         qtsFormulaMismatch: "Qts does not match Qes and Qms",
-        fsMmsVasMismatch: "Fs, Mms, Vas, and Sd imply a noticeably different resonance",
+        fsMmsVasMismatch: "Fs, Mms, Vas, Sd, and Cms are noticeably inconsistent",
         qtsHigh: "High Qts: vented boxes may peak or need a long port",
         qtsLow: "Very low Qts: verify the data or expect a large vented box",
         xmaxInvalid: "Xmax must be above zero or empty",
@@ -816,6 +882,32 @@ const UI_TEXT = {
         vented: "Good vented candidate",
       } satisfies Record<DriverRecommendation, string>,
       title: "T/S check",
+    },
+    driverDerivation: {
+      derive: "derive",
+      derived: (value: string, unit: string) => `derived: ${value}${unit ? ` ${unit}` : ""}`,
+      fixed: "fixed",
+      fixedTitle: (label: string) => `${label} is pinned as a formula input and will not pulse as a recalculation candidate.`,
+      manual: "manual input",
+      measured: "measured",
+      measuredTitle: (label: string) => `${label} is used as an entered or measured formula input.`,
+      title: (label: string) =>
+        `${label} is the derived parameter. The other parameters in this formula are treated as inputs. Type into this field to pin it manually again.`,
+      unavailable: (label: string) => `Not enough data to derive ${label}`,
+    },
+    driverRelations: {
+      chain: "Chain",
+      formulas: {
+        mechanical: "Fs/Mms/Cms/Vas/Sd",
+        motor: "Qes = 2π Fs Mms Re / BL²",
+        motorBl: "BL = √(2π Fs Mms Re / Qes)",
+        quality: "1/Qts = 1/Qes + 1/Qms",
+      },
+      graphs: "charts",
+      mismatches: "Residuals",
+      noChain: "Choose a parameter as derived to see the chain",
+      ok: "formulas match",
+      title: "T/S relations",
     },
     chartInputs: {
       title: "Chart inputs",
@@ -835,7 +927,7 @@ const UI_TEXT = {
       rows: {
         damping: {
           charts: "response, SPL, phase, delay, excursion, impedance",
-          params: "Fs, Vas, Qts/Qes/Qms, Mms, BL",
+          params: "Fs, Vas, Cms, Qts/Qes/Qms, Mms, BL",
         },
         level: {
           charts: "SPL and sensitivity level",
@@ -1128,9 +1220,15 @@ function App() {
   const [analysisPending, setAnalysisPending] = useState(true);
   const [chartPending, setChartPending] = useState(true);
   const [focusedDesignId, setFocusedDesignId] = useState(initialProject.focusedDesignId);
+  const [fixedDriverFields, setFixedDriverFields] = useState<FixedDriverFieldsByDriver>(() =>
+    initialProject.fixedDriverFields,
+  );
+  const selectedFixedDriverFields = fixedDriverFields[selectedDriver.id] ?? [];
   const [activeTab, setActiveTab] = useState<ChartTab>(initialProject.activeTab);
   const [chartFrequencyMinHz, setChartFrequencyMinHz] = useState(initialProject.chartFrequencyMinHz);
   const [chartFrequencyMaxHz, setChartFrequencyMaxHz] = useState(initialProject.chartFrequencyMaxHz);
+  const [chartStepTimeMinMs, setChartStepTimeMinMs] = useState(initialProject.chartStepTimeMinMs);
+  const [chartStepTimeMaxMs, setChartStepTimeMaxMs] = useState(initialProject.chartStepTimeMaxMs);
   const [chartYScales, setChartYScales] = useState<Record<ChartTab, ChartYScaleState>>(() => initialProject.chartYScales);
   const [chartExpanded, setChartExpanded] = useState(false);
   const [optimizerGoal, setOptimizerGoal] = useState<OptimizerGoal>(initialProject.optimizerGoal);
@@ -1139,6 +1237,16 @@ function App() {
   const [referenceByTab, setReferenceByTab] = useState<ReferenceByTab>(() => initialProject.referenceByTab);
   const [compareEnabled, setCompareEnabled] = useState(initialProject.compareEnabled);
   const [compareDriverIds, setCompareDriverIds] = useState<string[]>(() => initialProject.compareDriverIds);
+  const [mechanicalDerivedField, setMechanicalDerivedField] = useState<MechanicalDerivedField | undefined>(
+    () => initialProject.mechanicalDerivedField,
+  );
+  const [motorDerivedField, setMotorDerivedField] = useState<MotorDerivedField | undefined>(
+    () => initialProject.motorDerivedField,
+  );
+  const [qualityDerivedField, setQualityDerivedField] = useState<QualityDerivedField | undefined>(
+    () => initialProject.qualityDerivedField,
+  );
+  const [lastManualDriverField, setLastManualDriverField] = useState<keyof SpeakerDriver | undefined>();
   const [measurements, setMeasurements] = useState<MeasurementTrace[]>(() => initialProject.measurements);
   const [sealedZma, setSealedZma] = useState<SealedZmaState>(() => initialProject.sealedZma);
   const [acousticOptions, setAcousticOptions] = useState<AcousticOptions>(() => initialProject.acousticOptions);
@@ -1226,14 +1334,20 @@ function App() {
           activeTab,
           chartFrequencyMinHz,
           chartFrequencyMaxHz,
+          chartStepTimeMinMs,
+          chartStepTimeMaxMs,
           chartYScales,
           compareDriverIds,
           compareEnabled,
           designs,
           drivers,
           focusedDesignId,
+          fixedDriverFields,
           language,
           libraryFilters,
+          mechanicalDerivedField,
+          motorDerivedField,
+          qualityDerivedField,
           measurements,
           optimizerGoal,
           powerW,
@@ -1249,14 +1363,20 @@ function App() {
     activeTab,
     chartFrequencyMinHz,
     chartFrequencyMaxHz,
+    chartStepTimeMinMs,
+    chartStepTimeMaxMs,
     chartYScales,
     compareDriverIds,
     compareEnabled,
     designs,
     drivers,
     focusedDesignId,
+    fixedDriverFields,
     language,
     libraryFilters,
+    mechanicalDerivedField,
+    motorDerivedField,
+    qualityDerivedField,
     measurements,
     optimizerGoal,
     powerW,
@@ -1369,6 +1489,10 @@ function App() {
     () => normalizeChartFrequencyDomain(chartFrequencyMinHz, chartFrequencyMaxHz),
     [chartFrequencyMaxHz, chartFrequencyMinHz],
   );
+  const chartStepTimeDomain = useMemo(
+    () => normalizeChartStepTimeDomain(chartStepTimeMinMs, chartStepTimeMaxMs),
+    [chartStepTimeMaxMs, chartStepTimeMinMs],
+  );
   const activeChartYScale = chartYScales[activeTab] ?? defaultChartYScale(activeTab);
   const chartYDomain = useMemo(
     () => activeChartYScale.auto ? undefined : normalizeChartYDomain(activeChartYScale.min, activeChartYScale.max),
@@ -1390,6 +1514,11 @@ function App() {
     const [nextMin, nextMax] = normalizeChartFrequencyDomain(domain[0], domain[1]);
     setChartFrequencyMinHz(roundFrequencyForInput(nextMin));
     setChartFrequencyMaxHz(roundFrequencyForInput(nextMax));
+  };
+  const updateChartStepTimeDomain = (domain: [number, number]) => {
+    const [nextMin, nextMax] = normalizeChartStepTimeDomain(domain[0], domain[1]);
+    setChartStepTimeMinMs(roundStepTimeForInput(nextMin));
+    setChartStepTimeMaxMs(roundStepTimeForInput(nextMax));
   };
   const updateChartYDomain = (domain: [number, number]) => {
     const [nextMin, nextMax] = normalizeChartYDomain(domain[0], domain[1]);
@@ -1558,13 +1687,12 @@ function App() {
     });
   }, [analysisSnapshot, optimizerGoal]);
 
-  function updateDriverField(key: keyof SpeakerDriver, value: string) {
-    const editedDriver = applyDriverFieldValue(selectedDriver, key, value);
+  function commitSelectedDriver(editedDriver: SpeakerDriver, changedKey?: keyof SpeakerDriver) {
     const shouldForkPreset = isProtectedPresetDriver(selectedDriver);
     const nextDriver: SpeakerDriver = {
       ...editedDriver,
       id: shouldForkPreset ? newId("driver") : editedDriver.id,
-      name: shouldForkPreset && key !== "name"
+      name: shouldForkPreset && changedKey !== "name"
         ? `${displayDriverName(selectedDriver, text)} ${text.copySuffix}`
         : editedDriver.name,
       source: selectedDriver.source?.verified ? markSourceModified(selectedDriver.source) : selectedDriver.source,
@@ -1578,11 +1706,113 @@ function App() {
     });
 
     if (shouldForkPreset) {
+      setFixedDriverFields((current) => ({
+        ...current,
+        [nextDriver.id]: current[selectedDriver.id] ?? [],
+      }));
       setSelectedDriverId(nextDriver.id);
       setCompareDriverIds((current) =>
         current.map((id) => (id === selectedDriver.id ? nextDriver.id : id)),
       );
     }
+  }
+
+  function clearDerivedFormulaField(key: keyof SpeakerDriver) {
+    if (key === mechanicalDerivedField) {
+      setMechanicalDerivedField(undefined);
+    }
+    if (key === motorDerivedField) {
+      setMotorDerivedField(undefined);
+    }
+    if (key === qualityDerivedField) {
+      setQualityDerivedField(undefined);
+    }
+  }
+
+  function setDriverFormulaFieldFixed(key: keyof SpeakerDriver, fixed: boolean) {
+    if (!isDriverFormulaField(key)) {
+      return;
+    }
+    if (fixed || driverActiveFormulaForField(key, {
+      mechanical: mechanicalDerivedField,
+      motor: motorDerivedField,
+      quality: qualityDerivedField,
+    }) !== undefined) {
+      clearDerivedFormulaField(key);
+    }
+    setLastManualDriverField(undefined);
+    setFixedDriverFields((current) => {
+      const currentFields = current[selectedDriver.id] ?? [];
+      const nextFields = fixed
+        ? Array.from(new Set([...currentFields, key]))
+        : currentFields.filter((field) => field !== key);
+      const { [selectedDriver.id]: _removed, ...rest } = current;
+      return nextFields.length > 0 ? { ...rest, [selectedDriver.id]: nextFields } : rest;
+    });
+  }
+
+  function updateDriverField(key: keyof SpeakerDriver, value: string) {
+    const nextMechanicalDerivedField = key === mechanicalDerivedField ? undefined : mechanicalDerivedField;
+    const nextMotorDerivedField = key === motorDerivedField ? undefined : motorDerivedField;
+    const nextQualityDerivedField = key === qualityDerivedField ? undefined : qualityDerivedField;
+    const editedDriver = applyDriverFieldValue(
+      selectedDriver,
+      key,
+      value,
+      nextMechanicalDerivedField,
+      nextMotorDerivedField,
+      nextQualityDerivedField,
+    );
+
+    clearDerivedFormulaField(key);
+    if (key !== "name" && key !== "id" && key !== "source") {
+      setLastManualDriverField(key);
+    }
+
+    commitSelectedDriver(editedDriver, key);
+  }
+
+  function deriveDriverFormulaField(
+    field: MechanicalDerivedField | MotorDerivedField | QualityDerivedField,
+    formula: DriverFormulaKind,
+  ) {
+    const derivedDriver = formula === "mechanical" && isMechanicalDerivedField(field)
+      ? reconcileMechanicalDerivedField(selectedDriver, field)
+      : formula === "motor" && isMotorDerivedField(field)
+        ? reconcileMotorDerivedField(selectedDriver, field)
+        : formula === "quality" && isQualityDerivedField(field)
+          ? reconcileQualityDerivedField(selectedDriver, field)
+          : selectedDriver;
+    if (derivedDriver === selectedDriver) {
+      setStatus(text.driverDerivation.unavailable(driverFieldByKey.get(field)?.label ?? field));
+      return;
+    }
+
+    if (formula === "mechanical" && isMechanicalDerivedField(field)) {
+      setMechanicalDerivedField(field);
+    } else if (formula === "motor" && isMotorDerivedField(field)) {
+      setMotorDerivedField(field);
+      if (qualityDerivedField === field) {
+        setQualityDerivedField(undefined);
+      }
+    } else if (formula === "quality" && isQualityDerivedField(field)) {
+      setQualityDerivedField(field);
+      if (motorDerivedField === field) {
+        setMotorDerivedField(undefined);
+      }
+    } else {
+      return;
+    }
+    if (isDriverFormulaField(field)) {
+      setFixedDriverFields((current) => {
+        const currentFields = current[selectedDriver.id] ?? [];
+        const nextFields = currentFields.filter((item) => item !== field);
+        const { [selectedDriver.id]: _removed, ...rest } = current;
+        return nextFields.length > 0 ? { ...rest, [selectedDriver.id]: nextFields } : rest;
+      });
+    }
+    setLastManualDriverField(undefined);
+    commitSelectedDriver(derivedDriver, field);
   }
 
   function resetDriverToDatasheet() {
@@ -1595,11 +1825,20 @@ function App() {
       id: selectedDriver.id,
       name: selectedDriver.name,
     };
+    setMechanicalDerivedField(undefined);
+    setMotorDerivedField(undefined);
+    setQualityDerivedField(undefined);
+    setLastManualDriverField(undefined);
+    setFixedDriverFields((current) => {
+      const { [selectedDriver.id]: _removed, ...rest } = current;
+      return rest;
+    });
     setDrivers((current) => current.map((driver) => (driver.id === selectedDriver.id ? nextDriver : driver)));
   }
 
   function selectDriverWithDefaults(driver: SpeakerDriver) {
     const nextDesigns = createDefaultDesigns(driver);
+    setLastManualDriverField(undefined);
     setSelectedDriverId(driver.id);
     setDesigns(nextDesigns);
     setFocusedDesignId(nextDesigns.find((design) => design.enabled)?.id ?? nextDesigns[0]?.id ?? "");
@@ -1620,6 +1859,10 @@ function App() {
       name: `${displayDriverName(selectedDriver, text)} ${text.copySuffix}`,
     };
     setDrivers((current) => [...current, next]);
+    setFixedDriverFields((current) => ({
+      ...current,
+      [next.id]: current[selectedDriver.id] ?? [],
+    }));
     selectDriverWithDefaults(next);
   }
 
@@ -1629,6 +1872,10 @@ function App() {
     }
     const nextDrivers = drivers.filter((driver) => driver.id !== selectedDriver.id);
     setDrivers(nextDrivers);
+    setFixedDriverFields((current) => {
+      const { [selectedDriver.id]: _removed, ...rest } = current;
+      return rest;
+    });
     selectDriverWithDefaults(nextDrivers[0]);
   }
 
@@ -1701,12 +1948,18 @@ function App() {
     setLanguage(project.language);
     setDrivers(project.drivers);
     setLibraryFilters(project.libraryFilters);
+    setFixedDriverFields(project.fixedDriverFields);
+    setMechanicalDerivedField(project.mechanicalDerivedField);
+    setMotorDerivedField(project.motorDerivedField);
+    setQualityDerivedField(project.qualityDerivedField);
     setSelectedDriverId(project.selectedDriverId);
     setDesigns(project.designs);
     setFocusedDesignId(project.focusedDesignId);
     setActiveTab(project.activeTab);
     setChartFrequencyMinHz(project.chartFrequencyMinHz);
     setChartFrequencyMaxHz(project.chartFrequencyMaxHz);
+    setChartStepTimeMinMs(project.chartStepTimeMinMs);
+    setChartStepTimeMaxMs(project.chartStepTimeMaxMs);
     setChartYScales(project.chartYScales);
     setCompareEnabled(project.compareEnabled);
     setCompareDriverIds(project.compareDriverIds);
@@ -1732,14 +1985,20 @@ function App() {
           activeTab,
           chartFrequencyMinHz,
           chartFrequencyMaxHz,
+          chartStepTimeMinMs,
+          chartStepTimeMaxMs,
           chartYScales,
           compareDriverIds,
           compareEnabled,
           designs,
           drivers,
           focusedDesignId,
+          fixedDriverFields,
           language,
           libraryFilters,
+          mechanicalDerivedField,
+          motorDerivedField,
+          qualityDerivedField,
           measurements,
           optimizerGoal,
           powerW,
@@ -1976,7 +2235,69 @@ function App() {
   }
 
   const chartFocusedSeriesId = compareEnabled ? selectedDriver.id : focusedDesignId;
-  const chartProps = getChartProps(activeTab, chartDisplayResults, selectedDriver, chartFocusedSeriesId, text, powerW, splInputMode, chartFrequencyDomain, chartYDomain, measurementSeries);
+  const chartProps = getChartProps(activeTab, chartDisplayResults, selectedDriver, chartFocusedSeriesId, text, powerW, splInputMode, chartFrequencyDomain, chartStepTimeDomain, chartYDomain, measurementSeries);
+  const isTimeDomainChart = activeTab === "impulse" || activeTab === "step";
+  const chartXRangeControls = isTimeDomainChart
+    ? {
+        max: chartStepTimeMaxMs,
+        maxFloor: 1,
+        maxLimit: CHART_STEP_TIME_MAX_LIMIT_MS,
+        maxStep: "10",
+        min: chartStepTimeMinMs,
+        minFloor: CHART_STEP_TIME_MIN_LIMIT_MS,
+        minLimit: CHART_STEP_TIME_MIN_MAX_MS,
+        minStep: "1",
+        presets: CHART_STEP_TIME_PRESETS,
+        unit: text.axisLabels.time.includes("мс") ? "мс" : "ms",
+        onMaxChange: (value: string) => {
+          const nextMax = parseBoundedNumber(value, chartStepTimeMaxMs, 1, CHART_STEP_TIME_MAX_LIMIT_MS);
+          setChartStepTimeMaxMs(nextMax);
+          setChartStepTimeMinMs((currentMin) => currentMin < nextMax
+            ? currentMin
+            : clampNumber(nextMax - 50, CHART_STEP_TIME_MIN_LIMIT_MS, CHART_STEP_TIME_MIN_MAX_MS));
+        },
+        onMinChange: (value: string) => {
+          const nextMin = parseBoundedNumber(value, chartStepTimeMinMs, CHART_STEP_TIME_MIN_LIMIT_MS, CHART_STEP_TIME_MIN_MAX_MS);
+          setChartStepTimeMinMs(nextMin);
+          setChartStepTimeMaxMs((currentMax) => currentMax > nextMin
+            ? currentMax
+            : clampNumber(nextMin + 50, 1, CHART_STEP_TIME_MAX_LIMIT_MS));
+        },
+        onPreset: (preset: ChartRangePreset) => {
+          setChartStepTimeMinMs(preset.min);
+          setChartStepTimeMaxMs(preset.max);
+        },
+      }
+    : {
+        max: chartFrequencyMaxHz,
+        maxFloor: MIN_FREQUENCY_MAX_HZ,
+        maxLimit: MAX_FREQUENCY_MAX_HZ,
+        maxStep: "100",
+        min: chartFrequencyMinHz,
+        minFloor: CHART_FREQUENCY_MIN_LIMIT_HZ,
+        minLimit: CHART_FREQUENCY_MIN_MAX_HZ,
+        minStep: "10",
+        presets: CHART_RANGE_PRESETS.map((preset) => ({ label: preset.label, min: preset.minHz, max: preset.maxHz })),
+        unit: text.axisLabels.frequency.includes("Гц") ? "Гц" : "Hz",
+        onMaxChange: (value: string) => {
+          const nextMax = parseBoundedNumber(value, chartFrequencyMaxHz, MIN_FREQUENCY_MAX_HZ, MAX_FREQUENCY_MAX_HZ);
+          setChartFrequencyMaxHz(nextMax);
+          setChartFrequencyMinHz((currentMin) => currentMin < nextMax
+            ? currentMin
+            : clampNumber(nextMax / 2, CHART_FREQUENCY_MIN_LIMIT_HZ, CHART_FREQUENCY_MIN_MAX_HZ));
+        },
+        onMinChange: (value: string) => {
+          const nextMin = parseBoundedNumber(value, chartFrequencyMinHz, CHART_FREQUENCY_MIN_LIMIT_HZ, CHART_FREQUENCY_MIN_MAX_HZ);
+          setChartFrequencyMinHz(nextMin);
+          setChartFrequencyMaxHz((currentMax) => currentMax > nextMin
+            ? currentMax
+            : clampNumber(nextMin * 2, MIN_FREQUENCY_MAX_HZ, MAX_FREQUENCY_MAX_HZ));
+        },
+        onPreset: (preset: ChartRangePreset) => {
+          setChartFrequencyMinHz(preset.min);
+          setChartFrequencyMaxHz(preset.max);
+        },
+      };
   const focusedDesignName = focusedDesign ? displayDesignName(focusedDesign.name, text) : "";
   const chartSubtitle = compareEnabled && focusedDesign
     ? `${text.compare.mode} · ${focusedDesignName}`
@@ -2070,11 +2391,57 @@ function App() {
         <div className="driver-grid">
           {driverFields.map((field) => {
             const issues = driverProfile.fieldIssues[field.key] ?? [];
+            const mechanicalField = isMechanicalDerivedField(field.key) ? field.key : undefined;
+            const motorField = isMotorDerivedField(field.key) ? field.key : undefined;
+            const qualityField = isQualityDerivedField(field.key) ? field.key : undefined;
+            const derivableField = mechanicalField ?? motorField ?? qualityField;
+            const canChooseFieldMode = isDriverFormulaField(field.key);
+            const activeFormula = driverActiveFormulaForField(field.key, {
+              mechanical: mechanicalDerivedField,
+              motor: motorDerivedField,
+              quality: qualityDerivedField,
+            });
+            const promptFormula = lastManualDriverField !== undefined
+              ? driverFormulaPromptForField(lastManualDriverField, field.key, { motor: motorDerivedField })
+              : undefined;
+            const isDerivedField = activeFormula !== undefined;
+            const isFixedField = canChooseFieldMode &&
+              !isDerivedField &&
+              selectedFixedDriverFields.includes(field.key as DriverFormulaField);
+            const promptedDerivedFieldValue = promptFormula !== undefined
+              ? deriveDriverFormulaValue(selectedDriver, field.key, promptFormula)
+              : undefined;
+            const shouldPromptDerive = derivableField !== undefined &&
+              !isDerivedField &&
+              !isFixedField &&
+              promptFormula !== undefined &&
+              activeFormula !== promptFormula &&
+              promptedDerivedFieldValue !== undefined;
+            const fieldValue = selectedDriver[field.key];
+            let derivedFieldValue: number | undefined;
+            if (activeFormula !== undefined && typeof fieldValue === "number") {
+              derivedFieldValue = fieldValue;
+            } else if (activeFormula !== undefined) {
+              derivedFieldValue = deriveDriverFormulaValue(selectedDriver, field.key, activeFormula);
+            } else {
+              derivedFieldValue = promptedDerivedFieldValue ?? defaultDerivedFieldValue(selectedDriver, field.key);
+            }
+            const shownDerivedValue = derivedFieldValue ?? (
+              typeof fieldValue === "number" ? fieldValue : undefined
+            );
+            const derivedFieldText = shownDerivedValue !== undefined
+              ? formatCompactNumber(shownDerivedValue)
+              : undefined;
+            const titleItems = [
+              ...issues.map((issue) => text.driverAnalysis.issues[issue]),
+              isDerivedField ? text.driverDerivation.title(field.label) : "",
+              isFixedField ? text.driverDerivation.fixedTitle(field.label) : "",
+            ].filter(Boolean);
             return (
               <label
-                className={`field ${issues.length > 0 ? "invalid" : ""}`}
+                className={`field ${issues.length > 0 ? "invalid" : ""} ${isDerivedField ? "derived" : ""}`}
                 key={field.key}
-                title={issues.map((issue) => text.driverAnalysis.issues[issue]).join("\n")}
+                title={titleItems.join("\n")}
               >
                 <span>
                   {field.label}
@@ -2089,11 +2456,60 @@ function App() {
                   value={String(selectedDriver[field.key] ?? "")}
                   onChange={(event) => updateDriverField(field.key, event.target.value)}
                 />
+                {canChooseFieldMode ? (
+                  <div className={`field-mode-row ${shouldPromptDerive ? "attention" : ""}`}>
+                    <button
+                      className={!isDerivedField && !isFixedField ? "active" : ""}
+                      title={text.driverDerivation.measuredTitle(field.label)}
+                      type="button"
+                      onClick={(event) => {
+                        event.preventDefault();
+                        setDriverFormulaFieldFixed(field.key, false);
+                      }}
+                    >
+                      {text.driverDerivation.measured}
+                    </button>
+                    <button
+                      className={!isDerivedField && isFixedField ? "active fixed" : ""}
+                      title={text.driverDerivation.fixedTitle(field.label)}
+                      type="button"
+                      onClick={(event) => {
+                        event.preventDefault();
+                        setDriverFormulaFieldFixed(field.key, true);
+                      }}
+                    >
+                      {text.driverDerivation.fixed}
+                    </button>
+                    {derivableField !== undefined ? (
+                      <button
+                        className={`${isDerivedField ? "active derived" : ""} ${shouldPromptDerive ? "attention" : ""}`}
+                        title={isDerivedField ? text.driverDerivation.title(field.label) : undefined}
+                        type="button"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          deriveDriverFormulaField(derivableField, promptFormula ?? defaultFormulaForField(derivableField));
+                        }}
+                      >
+                        {isDerivedField && derivedFieldText
+                          ? text.driverDerivation.derived(derivedFieldText, field.unit)
+                          : text.driverDerivation.derive}
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
               </label>
             );
           })}
         </div>
         <DriverImpactPanel activeTab={activeTab} text={text} />
+        <DriverRelationsPanel
+          driver={selectedDriver}
+          lastManualField={lastManualDriverField}
+          mechanicalDerivedField={mechanicalDerivedField}
+          motorDerivedField={motorDerivedField}
+          qualityDerivedField={qualityDerivedField}
+          text={text}
+        />
         <DriverAnalysisPanel profile={driverProfile} text={text} />
       </>
     );
@@ -2406,33 +2822,31 @@ function App() {
                 </div>
                 <div className="chart-actions">
                   <ChartScaleControls
-                    frequencyMaxHz={chartFrequencyMaxHz}
-                    frequencyMinHz={chartFrequencyMinHz}
                     text={text}
+                    xMax={chartXRangeControls.max}
+                    xMaxFloor={chartXRangeControls.maxFloor}
+                    xMaxLimit={chartXRangeControls.maxLimit}
+                    xMaxStep={chartXRangeControls.maxStep}
+                    xMin={chartXRangeControls.min}
+                    xMinFloor={chartXRangeControls.minFloor}
+                    xMinLimit={chartXRangeControls.minLimit}
+                    xMinStep={chartXRangeControls.minStep}
+                    xPresets={chartXRangeControls.presets}
+                    xUnit={chartXRangeControls.unit}
                     yAuto={activeChartYScale.auto}
                     yMax={activeChartYScale.max}
                     yMin={activeChartYScale.min}
-                    onFrequencyMaxChange={(value) => {
-                      const nextMax = parseBoundedNumber(value, chartFrequencyMaxHz, MIN_FREQUENCY_MAX_HZ, MAX_FREQUENCY_MAX_HZ);
-                      setChartFrequencyMaxHz(nextMax);
-                      setChartFrequencyMinHz((currentMin) => currentMin < nextMax
-                        ? currentMin
-                        : clampNumber(nextMax / 2, CHART_FREQUENCY_MIN_LIMIT_HZ, CHART_FREQUENCY_MIN_MAX_HZ));
-                    }}
-                    onFrequencyMinChange={(value) => {
-                      const nextMin = parseBoundedNumber(value, chartFrequencyMinHz, CHART_FREQUENCY_MIN_LIMIT_HZ, CHART_FREQUENCY_MIN_MAX_HZ);
-                      setChartFrequencyMinHz(nextMin);
-                      setChartFrequencyMaxHz((currentMax) => currentMax > nextMin
-                        ? currentMax
-                        : clampNumber(nextMin * 2, MIN_FREQUENCY_MAX_HZ, MAX_FREQUENCY_MAX_HZ));
-                    }}
-                    onPreset={(preset) => {
-                      setChartFrequencyMinHz(preset.minHz);
-                      setChartFrequencyMaxHz(preset.maxHz);
-                    }}
+                    onXMaxChange={chartXRangeControls.onMaxChange}
+                    onXMinChange={chartXRangeControls.onMinChange}
+                    onPreset={chartXRangeControls.onPreset}
                     onReset={() => {
-                      setChartFrequencyMinHz(DEFAULT_CHART_FREQUENCY_MIN_HZ);
-                      setChartFrequencyMaxHz(DEFAULT_FREQUENCY_MAX_HZ);
+                      if (isTimeDomainChart) {
+                        setChartStepTimeMinMs(DEFAULT_CHART_STEP_TIME_MIN_MS);
+                        setChartStepTimeMaxMs(DEFAULT_CHART_STEP_TIME_MAX_MS);
+                      } else {
+                        setChartFrequencyMinHz(DEFAULT_CHART_FREQUENCY_MIN_HZ);
+                        setChartFrequencyMaxHz(DEFAULT_FREQUENCY_MAX_HZ);
+                      }
                       updateActiveChartYScale(defaultChartYScale(activeTab));
                     }}
                     onYAutoChange={(auto) => updateActiveChartYScale({ auto })}
@@ -2467,10 +2881,12 @@ function App() {
                   referenceLabel={text.reference}
                   referenceSeries={currentReference?.series ?? []}
                   svgRef={chartSvgRef}
-                  xLimit={[CHART_FREQUENCY_MIN_LIMIT_HZ, MAX_FREQUENCY_MAX_HZ]}
-                  onXDomainChange={activeTab === "step" ? undefined : updateChartFrequencyDomain}
-                  onXDomainReset={activeTab === "step"
-                    ? undefined
+                  xLimit={isTimeDomainChart
+                    ? [CHART_STEP_TIME_MIN_LIMIT_MS, CHART_STEP_TIME_MAX_LIMIT_MS]
+                    : [CHART_FREQUENCY_MIN_LIMIT_HZ, MAX_FREQUENCY_MAX_HZ]}
+                  onXDomainChange={isTimeDomainChart ? updateChartStepTimeDomain : updateChartFrequencyDomain}
+                  onXDomainReset={isTimeDomainChart
+                    ? () => updateChartStepTimeDomain([DEFAULT_CHART_STEP_TIME_MIN_MS, DEFAULT_CHART_STEP_TIME_MAX_MS])
                     : () => updateChartFrequencyDomain([DEFAULT_CHART_FREQUENCY_MIN_HZ, DEFAULT_FREQUENCY_MAX_HZ])}
                   onYDomainChange={updateChartYDomain}
                   onYDomainReset={() => updateActiveChartYScale(defaultChartYScale(activeTab))}
@@ -3641,29 +4057,45 @@ function DriverComparePanel({
 }
 
 function ChartScaleControls({
-  frequencyMaxHz,
-  frequencyMinHz,
   text,
+  xMax,
+  xMaxFloor,
+  xMaxLimit,
+  xMaxStep,
+  xMin,
+  xMinFloor,
+  xMinLimit,
+  xMinStep,
+  xPresets,
+  xUnit,
   yAuto,
   yMax,
   yMin,
-  onFrequencyMaxChange,
-  onFrequencyMinChange,
+  onXMaxChange,
+  onXMinChange,
   onPreset,
   onReset,
   onYAutoChange,
   onYMaxChange,
   onYMinChange,
 }: {
-  frequencyMaxHz: number;
-  frequencyMinHz: number;
   text: UiText;
+  xMax: number;
+  xMaxFloor: number;
+  xMaxLimit: number;
+  xMaxStep: string;
+  xMin: number;
+  xMinFloor: number;
+  xMinLimit: number;
+  xMinStep: string;
+  xPresets: ChartRangePreset[];
+  xUnit: string;
   yAuto: boolean;
   yMax: number;
   yMin: number;
-  onFrequencyMaxChange: (value: string) => void;
-  onFrequencyMinChange: (value: string) => void;
-  onPreset: (preset: (typeof CHART_RANGE_PRESETS)[number]) => void;
+  onXMaxChange: (value: string) => void;
+  onXMinChange: (value: string) => void;
+  onPreset: (preset: ChartRangePreset) => void;
   onReset: () => void;
   onYAutoChange: (value: boolean) => void;
   onYMaxChange: (value: string) => void;
@@ -3672,7 +4104,7 @@ function ChartScaleControls({
   return (
     <div className="chart-scale-controls">
       <div className="chart-scale-presets">
-        {CHART_RANGE_PRESETS.map((preset) => (
+        {xPresets.map((preset) => (
           <button key={preset.label} type="button" onClick={() => onPreset(preset)}>
             {preset.label}
           </button>
@@ -3683,23 +4115,23 @@ function ChartScaleControls({
         <input
           aria-label={text.chartScale.from}
           type="number"
-          min={CHART_FREQUENCY_MIN_LIMIT_HZ}
-          max={CHART_FREQUENCY_MIN_MAX_HZ}
-          step="10"
-          value={frequencyMinHz}
-          onChange={(event) => onFrequencyMinChange(event.target.value)}
+          min={xMinFloor}
+          max={xMinLimit}
+          step={xMinStep}
+          value={xMin}
+          onChange={(event) => onXMinChange(event.target.value)}
         />
         <em>-</em>
         <input
           aria-label={text.chartScale.to}
           type="number"
-          min={MIN_FREQUENCY_MAX_HZ}
-          max={MAX_FREQUENCY_MAX_HZ}
-          step="100"
-          value={frequencyMaxHz}
-          onChange={(event) => onFrequencyMaxChange(event.target.value)}
+          min={xMaxFloor}
+          max={xMaxLimit}
+          step={xMaxStep}
+          value={xMax}
+          onChange={(event) => onXMaxChange(event.target.value)}
         />
-        <em>{text.axisLabels.frequency.includes("Гц") ? "Гц" : "Hz"}</em>
+        <em>{xUnit}</em>
       </div>
       <label className="chart-range-control compact">
         <input
@@ -3746,7 +4178,7 @@ function DriverImpactPanel({
   text: UiText;
 }) {
   const rows: Array<{ id: keyof UiText["driverImpact"]["rows"]; tabs: ChartTab[] }> = [
-    { id: "damping", tabs: ["response", "spl", "phase", "groupDelay", "step", "excursion", "impedance"] },
+    { id: "damping", tabs: ["response", "spl", "phase", "groupDelay", "impulse", "step", "excursion", "impedance"] },
     { id: "level", tabs: ["spl"] },
     { id: "limits", tabs: ["spl", "excursion"] },
     { id: "motor", tabs: ["impedance", "response", "spl"] },
@@ -3768,6 +4200,62 @@ function DriverImpactPanel({
             </div>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+function DriverRelationsPanel({
+  driver,
+  lastManualField,
+  mechanicalDerivedField,
+  motorDerivedField,
+  qualityDerivedField,
+  text,
+}: {
+  driver: SpeakerDriver;
+  lastManualField?: keyof SpeakerDriver;
+  mechanicalDerivedField?: MechanicalDerivedField;
+  motorDerivedField?: MotorDerivedField;
+  qualityDerivedField?: QualityDerivedField;
+  text: UiText;
+}) {
+  const chain = driverFormulaChain({
+    lastManualField,
+    mechanicalDerivedField,
+    motorDerivedField,
+    qualityDerivedField,
+    text,
+  });
+  const formulas = driverActiveFormulaLabels({
+    mechanicalDerivedField,
+    motorDerivedField,
+    qualityDerivedField,
+    text,
+  });
+  const mismatches = driverFormulaMismatches(driver);
+
+  return (
+    <div className="driver-relations">
+      <div className="driver-relations-head">
+        <h3>{text.driverRelations.title}</h3>
+        <span>{text.driverRelations.mismatches}</span>
+      </div>
+      <div className="driver-chain">
+        <strong>{text.driverRelations.chain}</strong>
+        <span>{chain.length > 0 ? chain.join(" -> ") : text.driverRelations.noChain}</span>
+      </div>
+      {formulas.length > 0 ? (
+        <div className="driver-formula-list">
+          {formulas.map((formula) => (
+            <span key={formula}>{formula}</span>
+          ))}
+        </div>
+      ) : null}
+      <div className={`driver-mismatch-list ${mismatches.length === 0 ? "ok" : ""}`}>
+        {mismatches.length > 0 ? mismatches.map((mismatch) => (
+          <span key={mismatch.label}>{`${mismatch.label}: ${formatPercent(mismatch.errorRatio)}`}</span>
+        )) : <span>{text.driverRelations.ok}</span>}
       </div>
     </div>
   );
@@ -3870,21 +4358,21 @@ function chartInputGroups(
 
 function chartDriverKeys(activeTab: ChartTab): Array<keyof SpeakerDriver> {
   if (activeTab === "spl") {
-    return ["sensitivityDb", "fsHz", "qts", "qes", "qms", "vasL", "sdCm2", "reOhm", "leMh", "mmsG", "blTm", "xmaxMm", "peW"];
+    return ["sensitivityDb", "fsHz", "qts", "qes", "qms", "vasL", "sdCm2", "reOhm", "leMh", "mmsG", "cmsMmN", "blTm", "xmaxMm", "peW"];
   }
   if (activeTab === "excursion") {
-    return ["fsHz", "qts", "qes", "qms", "vasL", "sdCm2", "reOhm", "mmsG", "blTm", "xmaxMm"];
+    return ["fsHz", "qts", "qes", "qms", "vasL", "sdCm2", "reOhm", "mmsG", "cmsMmN", "blTm", "xmaxMm"];
   }
   if (activeTab === "impedance") {
-    return ["reOhm", "leMh", "fsHz", "qts", "qes", "qms", "mmsG", "blTm", "vasL", "sdCm2"];
+    return ["reOhm", "leMh", "fsHz", "qts", "qes", "qms", "mmsG", "cmsMmN", "blTm", "vasL", "sdCm2"];
   }
   if (activeTab === "port") {
     return ["fsHz", "qts", "qes", "qms", "vasL", "sdCm2"];
   }
-  if (activeTab === "phase" || activeTab === "groupDelay" || activeTab === "step") {
-    return ["fsHz", "qts", "qes", "qms", "vasL", "sdCm2", "reOhm", "mmsG", "blTm"];
+  if (activeTab === "phase" || activeTab === "groupDelay" || activeTab === "impulse" || activeTab === "step") {
+    return ["fsHz", "qts", "qes", "qms", "vasL", "sdCm2", "reOhm", "mmsG", "cmsMmN", "blTm"];
   }
-  return ["fsHz", "qts", "qes", "qms", "vasL", "sdCm2", "reOhm", "leMh", "mmsG", "blTm"];
+  return ["fsHz", "qts", "qes", "qms", "vasL", "sdCm2", "reOhm", "leMh", "mmsG", "cmsMmN", "blTm"];
 }
 
 function chartUsesPower(activeTab: ChartTab): boolean {
@@ -3978,6 +4466,13 @@ function formatCompactNumber(value: number): string {
   return formatted.includes(".")
     ? formatted.replace(/0+$/, "").replace(/\.$/, "")
     : formatted;
+}
+
+function formatPercent(value: number): string {
+  if (!Number.isFinite(value)) {
+    return "—";
+  }
+  return `${formatCompactNumber(value * 100)}%`;
 }
 
 function OptimizerPanel({
@@ -4804,6 +5299,9 @@ function outputsForChartTab(tab: ChartTab): SimulationOutput[] {
   if (tab === "groupDelay") {
     return ["groupDelay"];
   }
+  if (tab === "impulse") {
+    return ["impulse"];
+  }
   if (tab === "step") {
     return ["step"];
   }
@@ -4835,6 +5333,7 @@ function getChartProps(
   powerW: number,
   splInputMode: SplInputMode,
   chartFrequencyDomain: [number, number],
+  chartStepTimeDomain: [number, number],
   chartYDomain: [number, number] | undefined,
   measurementSeries: Series[] = [],
 ): Parameters<typeof LineChart>[0] {
@@ -4910,6 +5409,20 @@ function getChartProps(
       series: toSeriesList(results, "groupDelayMs", focusedDesignId, text),
     };
   }
+  if (tab === "impulse") {
+    const yDomain = chartYDomain ?? [-1.1, 1.1] as [number, number];
+    return {
+      ...base,
+      title: text.chartTitles.impulse,
+      yLabel: text.axisLabels.normalized,
+      xLabel: text.axisLabels.time,
+      xScale: "linear",
+      xDomain: chartStepTimeDomain,
+      yDomain,
+      referenceLines: visibleReferenceLines([{ y: 0, label: "0" }], yDomain),
+      series: toSeriesList(results, "impulse", focusedDesignId, text),
+    };
+  }
   if (tab === "step") {
     const yDomain = chartYDomain ?? [-1.1, 1.1] as [number, number];
     return {
@@ -4918,7 +5431,7 @@ function getChartProps(
       yLabel: text.axisLabels.normalized,
       xLabel: text.axisLabels.time,
       xScale: "linear",
-      xDomain: [0, 250],
+      xDomain: chartStepTimeDomain,
       yDomain,
       referenceLines: visibleReferenceLines([{ y: 0, label: "0" }], yDomain),
       series: toSeriesList(results, "step", focusedDesignId, text),
@@ -5795,10 +6308,9 @@ function analyzeDriver(driver: SpeakerDriver): DriverProfile {
     }
   }
   if (driver.mmsG !== undefined && driver.mmsG > 0 && driver.sdCm2 > 0 && driver.vasL > 0) {
-    const cms = (driver.vasL / 1000) / (1.204 * 343 * 343 * Math.pow(driver.sdCm2 / 10000, 2));
-    const expectedFs = 1 / (Math.PI * 2 * Math.sqrt((driver.mmsG / 1000) * cms));
-    if (Number.isFinite(expectedFs) && Math.abs(expectedFs - driver.fsHz) / Math.max(1, driver.fsHz) > 0.18) {
-      addIssue("fsMmsVasMismatch", ["fsHz", "mmsG", "vasL", "sdCm2"]);
+    const expectedFs = deriveMechanicalField(driver, "fsHz");
+    if (expectedFs !== undefined && Math.abs(expectedFs - driver.fsHz) / Math.max(1, driver.fsHz) > 0.18) {
+      addIssue("fsMmsVasMismatch", ["fsHz", "mmsG", "vasL", "sdCm2", ...(driver.cmsMmN !== undefined ? ["cmsMmN" as const] : [])]);
     }
   }
 
@@ -5818,6 +6330,349 @@ function analyzeDriver(driver: SpeakerDriver): DriverProfile {
     issues: Array.from(issues),
     recommendation,
   };
+}
+
+function deriveMechanicalField(
+  driver: SpeakerDriver,
+  target: MechanicalDerivedField,
+  changedKey?: keyof SpeakerDriver,
+): number | undefined {
+  const fsHz = positiveNumber(driver.fsHz);
+  const vasL = positiveNumber(driver.vasL);
+  const sdCm2 = positiveNumber(driver.sdCm2);
+  const mmsG = positiveNumber(driver.mmsG);
+  const cmsMmN = positiveNumber(driver.cmsMmN);
+
+  if (target === "mmsG") {
+    if (fsHz === undefined) {
+      return undefined;
+    }
+    const cms = complianceForDriver(driver, changedKey);
+    if (cms === undefined) {
+      return undefined;
+    }
+    const omegaS = Math.PI * 2 * fsHz;
+    return normalizeDerivedDriverValue(target, 1000 / (omegaS * omegaS * cms));
+  }
+
+  if (target === "fsHz") {
+    if (mmsG === undefined) {
+      return undefined;
+    }
+    const cms = complianceForDriver(driver, changedKey);
+    if (cms === undefined) {
+      return undefined;
+    }
+    const fs = 1 / (Math.PI * 2 * Math.sqrt((mmsG / 1000) * cms));
+    return normalizeDerivedDriverValue(target, fs);
+  }
+
+  if (target === "vasL") {
+    if (sdCm2 === undefined) {
+      return undefined;
+    }
+    const cms = complianceForDriver(driver, changedKey, "resonanceFirst");
+    if (cms === undefined) {
+      return undefined;
+    }
+    const sdM2 = sdCm2 / 10000;
+    const vasLValue = cms *
+      DRIVER_DERIVATION_AIR_DENSITY *
+      DRIVER_DERIVATION_SPEED_OF_SOUND *
+      DRIVER_DERIVATION_SPEED_OF_SOUND *
+      sdM2 *
+      sdM2 *
+      1000;
+    return normalizeDerivedDriverValue(target, vasLValue);
+  }
+
+  if (target === "sdCm2") {
+    if (vasL === undefined) {
+      return undefined;
+    }
+    const cms = complianceForDriver(driver, changedKey, "resonanceFirst");
+    if (cms === undefined) {
+      return undefined;
+    }
+    const vasM3 = vasL / 1000;
+    const denominator = cms *
+      DRIVER_DERIVATION_AIR_DENSITY *
+      DRIVER_DERIVATION_SPEED_OF_SOUND *
+      DRIVER_DERIVATION_SPEED_OF_SOUND;
+    const sdM2 = denominator > 0 ? Math.sqrt(vasM3 / denominator) : Number.NaN;
+    return normalizeDerivedDriverValue(target, sdM2 * 10000);
+  }
+
+  if (changedKey === "fsHz" || changedKey === "mmsG") {
+    const resonanceCms = complianceFromFsMms(fsHz, mmsG);
+    if (resonanceCms !== undefined) {
+      return normalizeDerivedDriverValue(target, resonanceCms * 1000);
+    }
+  }
+  const acousticCms = vasL !== undefined && sdCm2 !== undefined
+    ? complianceFromVasSd(vasL, sdCm2)
+    : undefined;
+  if (acousticCms !== undefined) {
+    return normalizeDerivedDriverValue(target, acousticCms * 1000);
+  }
+  const resonanceCms = cmsMmN !== undefined
+    ? cmsMmN / 1000
+    : complianceFromFsMms(fsHz, mmsG);
+  return resonanceCms !== undefined ? normalizeDerivedDriverValue(target, resonanceCms * 1000) : undefined;
+}
+
+function deriveMotorField(driver: SpeakerDriver, target: MotorDerivedField): number | undefined {
+  const fsHz = positiveNumber(driver.fsHz);
+  const mmsG = positiveNumber(driver.mmsG);
+  const reOhm = positiveNumber(driver.reOhm);
+  if (target === "qes") {
+    const blTm = positiveNumber(driver.blTm);
+    if (fsHz === undefined || mmsG === undefined || reOhm === undefined || blTm === undefined) {
+      return undefined;
+    }
+    const qes = (Math.PI * 2 * fsHz * (mmsG / 1000) * reOhm) / (blTm * blTm);
+    return normalizeDerivedDriverValue(target, qes);
+  }
+
+  if (target !== "blTm") {
+    return undefined;
+  }
+  const qes = positiveNumber(driver.qes);
+  if (fsHz === undefined || mmsG === undefined || reOhm === undefined || qes === undefined) {
+    return undefined;
+  }
+  const bl = Math.sqrt((Math.PI * 2 * fsHz * (mmsG / 1000) * reOhm) / qes);
+  return normalizeDerivedDriverValue(target, bl);
+}
+
+function deriveQualityField(driver: SpeakerDriver, target: QualityDerivedField): number | undefined {
+  if (target === "qts") {
+    const qes = positiveNumber(driver.qes);
+    const qms = positiveNumber(driver.qms);
+    if (qes === undefined || qms === undefined) {
+      return undefined;
+    }
+    return normalizeDerivedDriverValue(target, (qes * qms) / (qes + qms));
+  }
+
+  if (target === "qes") {
+    const qts = positiveNumber(driver.qts);
+    const qms = positiveNumber(driver.qms);
+    if (qts === undefined || qms === undefined || qms <= qts) {
+      return undefined;
+    }
+    return normalizeDerivedDriverValue(target, 1 / (1 / qts - 1 / qms));
+  }
+
+  const qts = positiveNumber(driver.qts);
+  const qes = positiveNumber(driver.qes);
+  if (qts === undefined || qes === undefined || qes <= qts) {
+    return undefined;
+  }
+  return normalizeDerivedDriverValue(target, 1 / (1 / qts - 1 / qes));
+}
+
+function reconcileMechanicalDerivedField(
+  driver: SpeakerDriver,
+  target?: MechanicalDerivedField,
+  changedKey?: keyof SpeakerDriver,
+): SpeakerDriver {
+  if (target === undefined) {
+    return driver;
+  }
+  if (changedKey !== undefined && (changedKey === target || !isMechanicalDerivedField(changedKey))) {
+    return driver;
+  }
+
+  const derivedValue = deriveMechanicalField(driver, target, changedKey);
+  if (derivedValue === undefined) {
+    return driver;
+  }
+  return { ...driver, [target]: derivedValue };
+}
+
+function reconcileMotorDerivedField(
+  driver: SpeakerDriver,
+  target?: MotorDerivedField,
+  changedKey?: keyof SpeakerDriver,
+): SpeakerDriver {
+  if (target === undefined) {
+    return driver;
+  }
+  if (changedKey !== undefined && (changedKey === target || !motorFormulaFields.has(changedKey))) {
+    return driver;
+  }
+
+  const derivedValue = deriveMotorField(driver, target);
+  if (derivedValue === undefined) {
+    return driver;
+  }
+  return { ...driver, [target]: derivedValue };
+}
+
+function reconcileQualityDerivedField(
+  driver: SpeakerDriver,
+  target?: QualityDerivedField,
+  changedKey?: keyof SpeakerDriver,
+): SpeakerDriver {
+  if (target === undefined) {
+    return driver;
+  }
+  if (changedKey !== undefined && (changedKey === target || !isQualityDerivedField(changedKey))) {
+    return driver;
+  }
+
+  const derivedValue = deriveQualityField(driver, target);
+  if (derivedValue === undefined) {
+    return driver;
+  }
+  return { ...driver, [target]: derivedValue };
+}
+
+function driverFormulaChain({
+  lastManualField,
+  mechanicalDerivedField,
+  motorDerivedField,
+  qualityDerivedField,
+  text,
+}: {
+  lastManualField?: keyof SpeakerDriver;
+  mechanicalDerivedField?: MechanicalDerivedField;
+  motorDerivedField?: MotorDerivedField;
+  qualityDerivedField?: QualityDerivedField;
+  text: UiText;
+}): string[] {
+  const chain: string[] = [];
+  const pushField = (field?: keyof SpeakerDriver) => {
+    const label = field !== undefined ? driverFieldByKey.get(field)?.label : undefined;
+    if (label !== undefined && chain[chain.length - 1] !== label) {
+      chain.push(label);
+    }
+  };
+  pushField(lastManualField);
+  pushField(mechanicalDerivedField);
+
+  if (motorDerivedField === "qes") {
+    pushField(motorDerivedField);
+    if (qualityDerivedField !== "qes") {
+      pushField(qualityDerivedField);
+    }
+  } else {
+    pushField(qualityDerivedField);
+    pushField(motorDerivedField);
+  }
+
+  if (chain.length > 0) {
+    chain.push(text.driverRelations.graphs);
+  }
+  return chain;
+}
+
+function driverActiveFormulaLabels({
+  mechanicalDerivedField,
+  motorDerivedField,
+  qualityDerivedField,
+  text,
+}: {
+  mechanicalDerivedField?: MechanicalDerivedField;
+  motorDerivedField?: MotorDerivedField;
+  qualityDerivedField?: QualityDerivedField;
+  text: UiText;
+}): string[] {
+  const labels: string[] = [];
+  if (mechanicalDerivedField !== undefined) {
+    labels.push(`${driverFieldByKey.get(mechanicalDerivedField)?.label ?? mechanicalDerivedField}: ${text.driverRelations.formulas.mechanical}`);
+  }
+  if (qualityDerivedField !== undefined) {
+    labels.push(`${driverFieldByKey.get(qualityDerivedField)?.label ?? qualityDerivedField}: ${text.driverRelations.formulas.quality}`);
+  }
+  if (motorDerivedField !== undefined) {
+    labels.push(`${driverFieldByKey.get(motorDerivedField)?.label ?? motorDerivedField}: ${
+      motorDerivedField === "blTm" ? text.driverRelations.formulas.motorBl : text.driverRelations.formulas.motor
+    }`);
+  }
+  return labels;
+}
+
+function driverFormulaMismatches(driver: SpeakerDriver): Array<{ errorRatio: number; label: string }> {
+  const mismatches: Array<{ errorRatio: number; label: string }> = [];
+  const addMismatch = (label: string, actual?: number, expected?: number) => {
+    if (actual === undefined || expected === undefined || actual <= 0 || expected <= 0) {
+      return;
+    }
+    const errorRatio = Math.abs(actual - expected) / Math.max(Math.abs(actual), Math.abs(expected), 1e-9);
+    if (errorRatio >= 0.02) {
+      mismatches.push({ errorRatio, label });
+    }
+  };
+
+  addMismatch("Qts", positiveNumber(driver.qts), deriveQualityField(driver, "qts"));
+  addMismatch("Fs", positiveNumber(driver.fsHz), deriveMechanicalField(driver, "fsHz"));
+  addMismatch("BL", positiveNumber(driver.blTm), deriveMotorField(driver, "blTm"));
+  addMismatch("Qes", positiveNumber(driver.qes), deriveMotorField(driver, "qes"));
+
+  return mismatches.length > 0
+    ? mismatches
+    : [];
+}
+
+function complianceForDriver(
+  driver: SpeakerDriver,
+  changedKey?: keyof SpeakerDriver,
+  priority: "explicitFirst" | "resonanceFirst" = "explicitFirst",
+): number | undefined {
+  const fsHz = positiveNumber(driver.fsHz);
+  const mmsG = positiveNumber(driver.mmsG);
+  const cmsMmN = positiveNumber(driver.cmsMmN);
+  const vasL = positiveNumber(driver.vasL);
+  const sdCm2 = positiveNumber(driver.sdCm2);
+  const explicitCms = cmsMmN !== undefined ? cmsMmN / 1000 : undefined;
+  const resonanceCms = complianceFromFsMms(fsHz, mmsG);
+  const acousticCms = vasL !== undefined && sdCm2 !== undefined ? complianceFromVasSd(vasL, sdCm2) : undefined;
+
+  if (changedKey === "fsHz" || changedKey === "mmsG") {
+    return resonanceCms ?? explicitCms ?? acousticCms;
+  }
+  if (changedKey === "vasL" || changedKey === "sdCm2") {
+    return acousticCms ?? explicitCms ?? resonanceCms;
+  }
+  if (priority === "resonanceFirst") {
+    return resonanceCms ?? explicitCms ?? acousticCms;
+  }
+  return explicitCms ?? acousticCms ?? resonanceCms;
+}
+
+function complianceFromVasSd(vasL: number, sdCm2: number): number | undefined {
+  const vasM3 = vasL / 1000;
+  const sdM2 = sdCm2 / 10000;
+  const cms = vasM3 /
+    (DRIVER_DERIVATION_AIR_DENSITY * DRIVER_DERIVATION_SPEED_OF_SOUND * DRIVER_DERIVATION_SPEED_OF_SOUND * sdM2 * sdM2);
+  return Number.isFinite(cms) && cms > 0 ? cms : undefined;
+}
+
+function complianceFromFsMms(fsHz?: number, mmsG?: number): number | undefined {
+  if (fsHz === undefined || mmsG === undefined || fsHz <= 0 || mmsG <= 0) {
+    return undefined;
+  }
+  const omegaS = Math.PI * 2 * fsHz;
+  const cms = 1 / (omegaS * omegaS * (mmsG / 1000));
+  return Number.isFinite(cms) && cms > 0 ? cms : undefined;
+}
+
+function normalizeDerivedDriverValue(
+  key: MechanicalDerivedField | MotorDerivedField | QualityDerivedField,
+  value: number,
+): number | undefined {
+  if (!Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+  const limits = driverFieldLimits.get(key);
+  const clamped = limits ? clampNumber(value, limits.min, limits.max ?? Number.POSITIVE_INFINITY) : value;
+  return roundTo(clamped, 4);
+}
+
+function positiveNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
 function loadProjectState(): ProjectState {
@@ -5843,12 +6698,15 @@ function loadProjectState(): ProjectState {
     activeTab: "response",
     chartFrequencyMinHz: DEFAULT_CHART_FREQUENCY_MIN_HZ,
     chartFrequencyMaxHz: DEFAULT_FREQUENCY_MAX_HZ,
+    chartStepTimeMinMs: DEFAULT_CHART_STEP_TIME_MIN_MS,
+    chartStepTimeMaxMs: DEFAULT_CHART_STEP_TIME_MAX_MS,
     chartYScales: defaultChartYScales(),
     compareDriverIds: [selectedDriver.id],
     compareEnabled: false,
     designs,
     drivers,
     focusedDesignId,
+    fixedDriverFields: {},
     language: loadLanguage(),
     libraryFilters: DEFAULT_LIBRARY_FILTERS,
     measurements: [],
@@ -5894,6 +6752,8 @@ function parseProjectFile(content: string): ProjectState | null {
       activeTab: isChartTab(parsed.activeTab) ? parsed.activeTab : "response",
       chartFrequencyMinHz: normalizeChartFrequencyMin(parsed.chartFrequencyMinHz),
       chartFrequencyMaxHz: normalizeChartFrequencyMax(parsed.chartFrequencyMaxHz),
+      chartStepTimeMinMs: normalizeChartStepTimeMin(parsed.chartStepTimeMinMs),
+      chartStepTimeMaxMs: normalizeChartStepTimeMax(parsed.chartStepTimeMaxMs),
       chartYScales: normalizeChartYScales(parsed.chartYScales),
       compareDriverIds: Array.isArray(parsed.compareDriverIds)
         ? parsed.compareDriverIds.filter((id): id is string => typeof id === "string" && drivers.some((driver) => driver.id === id))
@@ -5902,8 +6762,18 @@ function parseProjectFile(content: string): ProjectState | null {
       designs: normalizedDesigns,
       drivers,
       focusedDesignId,
+      fixedDriverFields: normalizeFixedDriverFields(parsed.fixedDriverFields, drivers),
       language: parsed.language === "en" ? "en" : "ru",
       libraryFilters: normalizeLibraryFilters(parsed.libraryFilters),
+      mechanicalDerivedField: isMechanicalDerivedField(parsed.mechanicalDerivedField)
+        ? parsed.mechanicalDerivedField
+        : undefined,
+      motorDerivedField: isMotorDerivedField(parsed.motorDerivedField)
+        ? parsed.motorDerivedField
+        : undefined,
+      qualityDerivedField: isQualityDerivedField(parsed.qualityDerivedField)
+        ? parsed.qualityDerivedField
+        : undefined,
       measurements: Array.isArray(parsed.measurements)
         ? normalizeMeasurementTraces(parsed.measurements, selectedDriverId)
         : [],
@@ -5979,6 +6849,24 @@ function normalizeSealedZmaState(value: unknown): SealedZmaState {
   };
 }
 
+function normalizeFixedDriverFields(value: unknown, drivers: SpeakerDriver[]): FixedDriverFieldsByDriver {
+  if (!isPlainRecord(value)) {
+    return {};
+  }
+  const driverIds = new Set(drivers.map((driver) => driver.id));
+  const normalized: FixedDriverFieldsByDriver = {};
+  for (const [driverId, fields] of Object.entries(value)) {
+    if (!driverIds.has(driverId) || !Array.isArray(fields)) {
+      continue;
+    }
+    const fixedFields = Array.from(new Set(fields.filter(isDriverFormulaField)));
+    if (fixedFields.length > 0) {
+      normalized[driverId] = fixedFields;
+    }
+  }
+  return normalized;
+}
+
 function normalizeChartFrequencyMax(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value)
     ? clampNumber(value, MIN_FREQUENCY_MAX_HZ, MAX_FREQUENCY_MAX_HZ)
@@ -5989,6 +6877,18 @@ function normalizeChartFrequencyMin(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value)
     ? clampNumber(value, CHART_FREQUENCY_MIN_LIMIT_HZ, CHART_FREQUENCY_MIN_MAX_HZ)
     : DEFAULT_CHART_FREQUENCY_MIN_HZ;
+}
+
+function normalizeChartStepTimeMax(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? clampNumber(value, 1, CHART_STEP_TIME_MAX_LIMIT_MS)
+    : DEFAULT_CHART_STEP_TIME_MAX_MS;
+}
+
+function normalizeChartStepTimeMin(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? clampNumber(value, CHART_STEP_TIME_MIN_LIMIT_MS, CHART_STEP_TIME_MIN_MAX_MS)
+    : DEFAULT_CHART_STEP_TIME_MIN_MS;
 }
 
 function normalizeChartYValue(value: unknown, fallback: number): number {
@@ -6086,7 +6986,14 @@ function mergePresetDrivers(drivers: SpeakerDriver[]): SpeakerDriver[] {
   return [...enrichedDrivers, ...missingPresets];
 }
 
-function applyDriverFieldValue(driver: SpeakerDriver, key: keyof SpeakerDriver, value: string): SpeakerDriver {
+function applyDriverFieldValue(
+  driver: SpeakerDriver,
+  key: keyof SpeakerDriver,
+  value: string,
+  mechanicalDerivedField?: MechanicalDerivedField,
+  motorDerivedField?: MotorDerivedField,
+  qualityDerivedField?: QualityDerivedField,
+): SpeakerDriver {
   if (key === "name") {
     return { ...driver, name: value };
   }
@@ -6105,7 +7012,39 @@ function applyDriverFieldValue(driver: SpeakerDriver, key: keyof SpeakerDriver, 
   const normalized = limits
     ? clampNumber(parsed, limits.min, limits.max ?? Number.POSITIVE_INFINITY)
     : parsed;
-  return reconcileDriverQualityFields({ ...driver, [key]: normalized }, key);
+  const nextDriver = { ...driver, [key]: normalized };
+  return reconcileDriverDerivedFields(
+    nextDriver,
+    key,
+    mechanicalDerivedField,
+    motorDerivedField,
+    qualityDerivedField,
+  );
+}
+
+function reconcileDriverDerivedFields(
+  driver: SpeakerDriver,
+  changedKey: keyof SpeakerDriver,
+  mechanicalDerivedField?: MechanicalDerivedField,
+  motorDerivedField?: MotorDerivedField,
+  qualityDerivedField?: QualityDerivedField,
+): SpeakerDriver {
+  const mechanicalDriver = reconcileMechanicalDerivedField(driver, mechanicalDerivedField, changedKey);
+  const downstreamChangedKey = mechanicalDriver === driver ? changedKey : undefined;
+
+  if (motorDerivedField === "qes") {
+    const motorDriver = reconcileMotorDerivedField(mechanicalDriver, motorDerivedField, downstreamChangedKey);
+    const qualityChangedKey = motorDriver === mechanicalDriver ? downstreamChangedKey : "qes";
+    return reconcileQualityDerivedField(motorDriver, qualityDerivedField, qualityChangedKey);
+  }
+
+  const qualityDriver = reconcileQualityDerivedField(mechanicalDriver, qualityDerivedField, downstreamChangedKey);
+  const motorChangedKey = qualityDriver === mechanicalDriver
+    ? downstreamChangedKey
+    : qualityDerivedField === "qes"
+      ? "qes"
+      : downstreamChangedKey;
+  return reconcileMotorDerivedField(qualityDriver, motorDerivedField, motorChangedKey);
 }
 
 function reconcileDriverQualityFields(driver: SpeakerDriver, changedKey: keyof SpeakerDriver): SpeakerDriver {
@@ -6214,6 +7153,7 @@ function driverMatchesPreset(driver: SpeakerDriver, preset: SpeakerDriver): bool
     driver.peW === preset.peW &&
     (driver.sensitivityDb === undefined || driver.sensitivityDb === preset.sensitivityDb) &&
     driver.mmsG === preset.mmsG &&
+    driver.cmsMmN === preset.cmsMmN &&
     driver.blTm === preset.blTm;
 }
 
@@ -6386,6 +7326,114 @@ function isChartTab(value: unknown): value is ChartTab {
   return typeof value === "string" && chartTabs.includes(value as ChartTab);
 }
 
+function isMechanicalDerivedField(value: unknown): value is MechanicalDerivedField {
+  return typeof value === "string" && mechanicalDerivedFieldSet.has(value as keyof SpeakerDriver);
+}
+
+function isMotorDerivedField(value: unknown): value is MotorDerivedField {
+  return typeof value === "string" && motorDerivedFieldSet.has(value as keyof SpeakerDriver);
+}
+
+function isQualityDerivedField(value: unknown): value is QualityDerivedField {
+  return typeof value === "string" && qualityDerivedFieldSet.has(value as keyof SpeakerDriver);
+}
+
+function isDriverFormulaField(value: unknown): value is DriverFormulaField {
+  return typeof value === "string" && driverFormulaFieldSet.has(value as keyof SpeakerDriver);
+}
+
+function driverActiveFormulaForField(
+  key: keyof SpeakerDriver,
+  derivedFields: {
+    mechanical?: MechanicalDerivedField;
+    motor?: MotorDerivedField;
+    quality?: QualityDerivedField;
+  },
+): DriverFormulaKind | undefined {
+  if (isMechanicalDerivedField(key) && derivedFields.mechanical === key) {
+    return "mechanical";
+  }
+  if (isMotorDerivedField(key) && derivedFields.motor === key) {
+    return "motor";
+  }
+  if (isQualityDerivedField(key) && derivedFields.quality === key) {
+    return "quality";
+  }
+  return undefined;
+}
+
+function driverFormulaPromptForField(
+  changedKey: keyof SpeakerDriver,
+  candidateKey: keyof SpeakerDriver,
+  derivedFields: {
+    motor?: MotorDerivedField;
+  } = {},
+): DriverFormulaKind | undefined {
+  if (candidateKey === changedKey) {
+    return undefined;
+  }
+  if (isMechanicalDerivedField(candidateKey) && isMechanicalDerivedField(changedKey)) {
+    return "mechanical";
+  }
+  if (isQualityDerivedField(candidateKey) && isQualityDerivedField(changedKey)) {
+    return "quality";
+  }
+  if (
+    isQualityDerivedField(candidateKey) &&
+    candidateKey !== "qes" &&
+    derivedFields.motor === "qes" &&
+    motorFormulaFields.has(changedKey)
+  ) {
+    return "quality";
+  }
+  if (isMotorDerivedField(candidateKey) && motorFormulaFields.has(changedKey)) {
+    return "motor";
+  }
+  return undefined;
+}
+
+function defaultFormulaForField(
+  field: MechanicalDerivedField | MotorDerivedField | QualityDerivedField,
+): DriverFormulaKind {
+  if (isMechanicalDerivedField(field)) {
+    return "mechanical";
+  }
+  if (isQualityDerivedField(field)) {
+    return "quality";
+  }
+  return "motor";
+}
+
+function defaultDerivedFieldValue(driver: SpeakerDriver, key: keyof SpeakerDriver): number | undefined {
+  if (isMechanicalDerivedField(key)) {
+    return deriveMechanicalField(driver, key);
+  }
+  if (isQualityDerivedField(key)) {
+    return deriveQualityField(driver, key);
+  }
+  if (isMotorDerivedField(key)) {
+    return deriveMotorField(driver, key);
+  }
+  return undefined;
+}
+
+function deriveDriverFormulaValue(
+  driver: SpeakerDriver,
+  key: keyof SpeakerDriver,
+  formula: DriverFormulaKind,
+): number | undefined {
+  if (formula === "mechanical" && isMechanicalDerivedField(key)) {
+    return deriveMechanicalField(driver, key);
+  }
+  if (formula === "quality" && isQualityDerivedField(key)) {
+    return deriveQualityField(driver, key);
+  }
+  if (formula === "motor" && isMotorDerivedField(key)) {
+    return deriveMotorField(driver, key);
+  }
+  return undefined;
+}
+
 function isOptimizerGoal(value: unknown): value is OptimizerGoal {
   return typeof value === "string" && optimizerGoals.includes(value as OptimizerGoal);
 }
@@ -6490,6 +7538,16 @@ function roundFrequencyForInput(value: number): number {
   return roundTo(value, 0);
 }
 
+function roundStepTimeForInput(value: number): number {
+  if (value < 10) {
+    return roundTo(value, 2);
+  }
+  if (value < 100) {
+    return roundTo(value, 1);
+  }
+  return roundTo(value, 0);
+}
+
 function roundChartYForInput(value: number): number {
   const absValue = Math.abs(value);
   if (absValue < 1) {
@@ -6508,6 +7566,15 @@ function normalizeChartFrequencyDomain(minHz: number, maxHz: number): [number, n
     return [min, max];
   }
   return [Math.max(CHART_FREQUENCY_MIN_LIMIT_HZ, max / 2), max];
+}
+
+function normalizeChartStepTimeDomain(minMs: number, maxMs: number): [number, number] {
+  const min = clampNumber(minMs, CHART_STEP_TIME_MIN_LIMIT_MS, CHART_STEP_TIME_MIN_MAX_MS);
+  const max = clampNumber(maxMs, 1, CHART_STEP_TIME_MAX_LIMIT_MS);
+  if (min < max) {
+    return [min, max];
+  }
+  return [Math.max(CHART_STEP_TIME_MIN_LIMIT_MS, max - 50), max];
 }
 
 function normalizeChartYDomain(minY: number, maxY: number): [number, number] {

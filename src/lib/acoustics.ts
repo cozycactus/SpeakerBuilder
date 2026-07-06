@@ -21,6 +21,7 @@ export interface SpeakerDriver {
   peW?: number;
   sensitivityDb?: number;
   mmsG?: number;
+  cmsMmN?: number;
   blTm?: number;
   source?: DriverSource;
 }
@@ -81,6 +82,7 @@ export type SimulationOutput =
   | "excursion"
   | "port"
   | "impedance"
+  | "impulse"
   | "step"
   | "metrics";
 
@@ -125,6 +127,7 @@ export interface SimulationResult {
   passiveRadiatorExcursionMm: Point[];
   portMach: Point[];
   impedanceOhm: Point[];
+  impulse: Point[];
   step: Point[];
   metrics: {
     f3Hz?: number;
@@ -610,6 +613,8 @@ export function simulateDesign(
   const needsExcursion = outputs.has("excursion") || needsMetrics;
   const needsPort = outputs.has("port") || needsMetrics;
   const needsImpedance = outputs.has("impedance") || needsMetrics;
+  const needsImpulse = outputs.has("impulse");
+  const needsStep = outputs.has("step");
   const powerW = Math.max(0.1, options.powerW);
   const driveInput = resolveDriveInput(driver, {
     powerW,
@@ -699,7 +704,7 @@ export function simulateDesign(
         y: cabs(item.response.inputImpedance),
       }))
     : [];
-  const step = outputs.has("step") ? createStepResponse(derived, design, refMagnitude) : [];
+  const transient = needsImpulse || needsStep ? createTransientResponse(derived, design, refMagnitude) : { impulse: [], step: [] };
   let f3Hz: number | undefined;
   let f6Hz: number | undefined;
   let peak = { x: 0, y: 0 };
@@ -835,7 +840,8 @@ export function simulateDesign(
     passiveRadiatorExcursionMm: outputs.has("excursion") || needsMetrics ? passiveRadiatorExcursionMm : [],
     portMach: outputs.has("port") || needsMetrics ? portMach : [],
     impedanceOhm: outputs.has("impedance") || needsMetrics ? impedanceOhm : [],
-    step,
+    impulse: needsImpulse ? transient.impulse : [],
+    step: needsStep ? transient.step : [],
     metrics: {
       f3Hz,
       f6Hz,
@@ -1444,7 +1450,8 @@ function deriveDriver(driver: SpeakerDriver): DerivedDriver {
   const reOhm = Math.max(0.2, driver.reOhm);
   const leH = Math.max(0, (driver.leMh ?? 0) / 1000);
   const omegaS = TWO_PI * fsHz;
-  const cms = vasM3 / (RHO * SPEED_OF_SOUND * SPEED_OF_SOUND * sdM2 * sdM2);
+  const cmsFromVas = vasM3 / (RHO * SPEED_OF_SOUND * SPEED_OF_SOUND * sdM2 * sdM2);
+  const cms = driver.cmsMmN && driver.cmsMmN > 0 ? driver.cmsMmN / 1000 : cmsFromVas;
   const mms = driver.mmsG ? driver.mmsG / 1000 : 1 / (omegaS * omegaS * cms);
   const rms = (omegaS * mms) / qms;
   const bl = driver.blTm && driver.blTm > 0
@@ -1470,11 +1477,11 @@ function deriveDriver(driver: SpeakerDriver): DerivedDriver {
   };
 }
 
-function createStepResponse(
+function createTransientResponse(
   driver: DerivedDriver,
   design: BoxDesign,
   refMagnitude: number,
-): Point[] {
+): { impulse: Point[]; step: Point[] } {
   const sampleRate = 2048;
   const n = 1024;
   const maxSamples = Math.floor(sampleRate * 0.25);
@@ -1491,7 +1498,7 @@ function createStepResponse(
     }
   }
 
-  const impulse: number[] = [];
+  const impulseValues: number[] = [];
   for (let sample = 0; sample < maxSamples; sample += 1) {
     let value = spectrum[0].re;
     for (let k = 1; k < n / 2; k += 1) {
@@ -1499,16 +1506,21 @@ function createStepResponse(
       value += 2 * (spectrum[k].re * Math.cos(angle) - spectrum[k].im * Math.sin(angle));
     }
     value += spectrum[n / 2].re * Math.cos(Math.PI * sample);
-    impulse.push(value / n);
+    impulseValues.push(value / n);
   }
 
   let running = 0;
-  const step = impulse.map((value, index) => {
+  const impulse = impulseValues.map((value, index) => ({ x: (index / sampleRate) * 1000, y: value }));
+  const step = impulseValues.map((value, index) => {
     running += value;
     return { x: (index / sampleRate) * 1000, y: running };
   });
-  const maxAbs = Math.max(0.000001, ...step.map((point) => Math.abs(point.y)));
-  return step.map((point) => ({ x: point.x, y: point.y / maxAbs }));
+  const maxImpulseAbs = Math.max(0.000001, ...impulse.map((point) => Math.abs(point.y)));
+  const maxStepAbs = Math.max(0.000001, ...step.map((point) => Math.abs(point.y)));
+  return {
+    impulse: impulse.map((point) => ({ x: point.x, y: point.y / maxImpulseAbs })),
+    step: step.map((point) => ({ x: point.x, y: point.y / maxStepAbs })),
+  };
 }
 
 function getReferenceMagnitude(
@@ -2006,6 +2018,7 @@ function normalizeDriver(input: unknown): SpeakerDriver | null {
       sensitivity283Db !== undefined ? sensitivity283Db + powerRatioDb(reOhm / (2.83 * 2.83)) : undefined
     ),
     mmsG: toNumber(get("mms", "mmsg")),
+    cmsMmN: toNumber(get("cms", "cmsmmn", "cmsmmpern", "cmsmmn")),
     blTm: toNumber(get("bl", "bltm")),
   };
 }
