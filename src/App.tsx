@@ -642,6 +642,8 @@ const UI_TEXT = {
       rename: "Имя измерения",
       show: "Показать на графике",
       hide: "Скрыть с графика",
+      fsFromFreeAir: (fs: string) => `Fs ${fs} - по свободному воздуху`,
+      fsFromDriver: (fs: string) => `Fs ${fs} - из параметров динамика`,
       applyToDriver: "Применить к динамику",
       applied: "Измеренные параметры применены к динамику",
       sealedZma: {
@@ -673,7 +675,7 @@ const UI_TEXT = {
         cmsByZma: "Cms по ZMA",
         conditions: "Условия: ZMA снят в свободном воздухе с известным грузом на диффузоре",
         fm: "Fm",
-        hint: "Fs и Sd берутся из параметров динамика",
+        hint: "Sd берется из параметров динамика",
         invalid: "Пик выбранного ZMA должен быть ниже Fs динамика",
         mass: "Груз",
         mmsByZma: "Mms по ZMA",
@@ -1110,6 +1112,8 @@ const UI_TEXT = {
       rename: "Measurement name",
       show: "Show on chart",
       hide: "Hide from chart",
+      fsFromFreeAir: (fs: string) => `Fs ${fs} - from the free-air measurement`,
+      fsFromDriver: (fs: string) => `Fs ${fs} - from the driver parameters`,
       applyToDriver: "Apply to driver",
       applied: "Measured values applied to the driver",
       sealedZma: {
@@ -1141,7 +1145,7 @@ const UI_TEXT = {
         cmsByZma: "Cms by ZMA",
         conditions: "Conditions: ZMA taken in free air with a known mass on the cone",
         fm: "Fm",
-        hint: "Fs and Sd come from the driver parameters",
+        hint: "Sd comes from the driver parameters",
         invalid: "The selected ZMA peak must be below the driver Fs",
         mass: "Added mass",
         mmsByZma: "Mms by ZMA",
@@ -1855,30 +1859,6 @@ function App() {
     () => currentDriverMeasurements.filter((measurement) => measurement.kind === "frd"),
     [currentDriverMeasurements],
   );
-  const selectedSealedZmaMeasurement = useMemo(
-    () => zmaMeasurements.find((measurement) => measurement.id === sealedZma.selectedMeasurementId) ?? zmaMeasurements[0],
-    [sealedZma.selectedMeasurementId, zmaMeasurements],
-  );
-  const sealedZmaEstimate = useMemo(
-    () => selectedSealedZmaMeasurement ? estimateSealedBoxFromZma(selectedSealedZmaMeasurement.points) : null,
-    [selectedSealedZmaMeasurement],
-  );
-  const sealedBoxTsEstimate = useMemo(
-    () => estimateSealedBoxTsFromZma(selectedDriver, sealedZmaEstimate, sealedZma.boxVolumeLiters),
-    [sealedZma.boxVolumeLiters, sealedZmaEstimate, selectedDriver],
-  );
-  const selectedAddedMassMeasurement = useMemo(
-    () => zmaMeasurements.find((measurement) => measurement.id === addedMassZma.selectedMeasurementId) ?? zmaMeasurements[0],
-    [addedMassZma.selectedMeasurementId, zmaMeasurements],
-  );
-  const addedMassZmaEstimate = useMemo(
-    () => selectedAddedMassMeasurement ? estimateSealedBoxFromZma(selectedAddedMassMeasurement.points) : null,
-    [selectedAddedMassMeasurement],
-  );
-  const addedMassTsEstimate = useMemo(
-    () => estimateAddedMassTsFromZma(selectedDriver, addedMassZmaEstimate, addedMassZma.addedMassGrams),
-    [addedMassZma.addedMassGrams, addedMassZmaEstimate, selectedDriver],
-  );
   const selectedFreeAirMeasurement = useMemo(
     () => zmaMeasurements.find((measurement) => measurement.id === freeAirZma.selectedMeasurementId) ?? zmaMeasurements[0],
     [freeAirZma.selectedMeasurementId, zmaMeasurements],
@@ -1890,6 +1870,50 @@ function App() {
       ? estimateFreeAirTsFromZma(selectedFreeAirMeasurement.points, freeAirReOhm)
       : null,
     [freeAirReOhm, selectedFreeAirMeasurement],
+  );
+  const selectedSealedZmaMeasurement = useMemo(
+    () => zmaMeasurements.find((measurement) => measurement.id === sealedZma.selectedMeasurementId) ?? zmaMeasurements[0],
+    [sealedZma.selectedMeasurementId, zmaMeasurements],
+  );
+  const sealedZmaEstimate = useMemo(
+    () => selectedSealedZmaMeasurement ? estimateSealedBoxFromZma(selectedSealedZmaMeasurement.points) : null,
+    [selectedSealedZmaMeasurement],
+  );
+  const sealedFsFromFreeAir = freeAirTsEstimate !== null &&
+    selectedFreeAirMeasurement !== undefined &&
+    selectedSealedZmaMeasurement !== undefined &&
+    selectedFreeAirMeasurement.id !== selectedSealedZmaMeasurement.id;
+  const sealedDerivationDriver = useMemo(
+    () => sealedFsFromFreeAir && freeAirTsEstimate
+      ? { ...selectedDriver, fsHz: freeAirTsEstimate.fsHz }
+      : selectedDriver,
+    [freeAirTsEstimate, sealedFsFromFreeAir, selectedDriver],
+  );
+  const sealedBoxTsEstimate = useMemo(
+    () => estimateSealedBoxTsFromZma(sealedDerivationDriver, sealedZmaEstimate, sealedZma.boxVolumeLiters),
+    [sealedDerivationDriver, sealedZma.boxVolumeLiters, sealedZmaEstimate],
+  );
+  const selectedAddedMassMeasurement = useMemo(
+    () => zmaMeasurements.find((measurement) => measurement.id === addedMassZma.selectedMeasurementId) ?? zmaMeasurements[0],
+    [addedMassZma.selectedMeasurementId, zmaMeasurements],
+  );
+  const addedMassZmaEstimate = useMemo(
+    () => selectedAddedMassMeasurement ? estimateSealedBoxFromZma(selectedAddedMassMeasurement.points) : null,
+    [selectedAddedMassMeasurement],
+  );
+  const addedMassFsFromFreeAir = freeAirTsEstimate !== null &&
+    selectedFreeAirMeasurement !== undefined &&
+    selectedAddedMassMeasurement !== undefined &&
+    selectedFreeAirMeasurement.id !== selectedAddedMassMeasurement.id;
+  const addedMassDerivationDriver = useMemo(
+    () => addedMassFsFromFreeAir && freeAirTsEstimate
+      ? { ...selectedDriver, fsHz: freeAirTsEstimate.fsHz }
+      : selectedDriver,
+    [addedMassFsFromFreeAir, freeAirTsEstimate, selectedDriver],
+  );
+  const addedMassTsEstimate = useMemo(
+    () => estimateAddedMassTsFromZma(addedMassDerivationDriver, addedMassZmaEstimate, addedMassZma.addedMassGrams),
+    [addedMassDerivationDriver, addedMassZma.addedMassGrams, addedMassZmaEstimate],
   );
   const measurementSeries = useMemo(
     () => {
@@ -2965,6 +2989,8 @@ function App() {
       return (
         <MeasurementPanel
           key={panelId}
+          addedMassFsFromFreeAir={addedMassFsFromFreeAir}
+          addedMassFsHz={addedMassDerivationDriver.fsHz}
           addedMassTsEstimate={addedMassTsEstimate}
           addedMassZma={addedMassZma}
           count={currentDriverMeasurements.length}
@@ -2975,6 +3001,8 @@ function App() {
           freeAirTsEstimate={freeAirTsEstimate}
           freeAirZma={freeAirZma}
           sealedBoxTsEstimate={sealedBoxTsEstimate}
+          sealedFsFromFreeAir={sealedFsFromFreeAir}
+          sealedFsHz={sealedDerivationDriver.fsHz}
           estimate={sealedZmaEstimate}
           sealedZma={sealedZma}
           text={text}
@@ -4295,6 +4323,8 @@ function AcousticCorrectionsPanel({
 }
 
 function MeasurementPanel({
+  addedMassFsFromFreeAir,
+  addedMassFsHz,
   addedMassTsEstimate,
   addedMassZma,
   count,
@@ -4306,6 +4336,8 @@ function MeasurementPanel({
   freeAirTsEstimate,
   freeAirZma,
   sealedBoxTsEstimate,
+  sealedFsFromFreeAir,
+  sealedFsHz,
   sealedZma,
   text,
   totalCount,
@@ -4324,6 +4356,8 @@ function MeasurementPanel({
   onDragOver,
   onDrop,
 }: {
+  addedMassFsFromFreeAir: boolean;
+  addedMassFsHz: number;
   addedMassTsEstimate: AddedMassTsEstimate | null;
   addedMassZma: AddedMassZmaState;
   count: number;
@@ -4335,6 +4369,8 @@ function MeasurementPanel({
   freeAirTsEstimate: FreeAirTsEstimate | null;
   freeAirZma: FreeAirZmaState;
   sealedBoxTsEstimate: SealedBoxTsEstimate | null;
+  sealedFsFromFreeAir: boolean;
+  sealedFsHz: number;
   sealedZma: SealedZmaState;
   text: UiText;
   totalCount: number;
@@ -4537,6 +4573,9 @@ function MeasurementPanel({
                 onChange={(targetQtc) => onSealedZmaChange({ targetQtc })}
               />
             </div>
+            <p>
+              {(sealedFsFromFreeAir ? text.measurements.fsFromFreeAir : text.measurements.fsFromDriver)(formatHz(sealedFsHz))}
+            </p>
             {estimate ? (
               <div className="sealed-zma-readout">
                 <div>
@@ -4634,6 +4673,9 @@ function MeasurementPanel({
                 onChange={(addedMassGrams) => onAddedMassZmaChange({ addedMassGrams })}
               />
             </div>
+            <p>
+              {(addedMassFsFromFreeAir ? text.measurements.fsFromFreeAir : text.measurements.fsFromDriver)(formatHz(addedMassFsHz))}
+            </p>
             {addedMassTsEstimate ? (
               <div className="sealed-zma-readout">
                 <div>
