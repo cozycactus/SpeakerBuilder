@@ -46,6 +46,18 @@ Run tests:
 npm test
 ```
 
+Run browser automation tests:
+
+```sh
+npm run test:e2e
+```
+
+Watch browser automation in Chrome:
+
+```sh
+npm run test:e2e:headed
+```
+
 Build the React app:
 
 ```sh

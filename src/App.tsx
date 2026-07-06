@@ -2404,6 +2404,7 @@ function App() {
           />
           <select
             className="driver-select"
+            data-testid="driver-select"
             value={selectedDriver.id}
             onChange={(event) => changeSelectedDriver(event.target.value)}
           >
@@ -2493,6 +2494,7 @@ function App() {
             return (
               <label
                 className={`field ${issues.length > 0 ? "invalid" : ""} ${isDerivedField ? "derived" : ""}`}
+                data-testid={`driver-field-${field.key}`}
                 key={field.key}
                 title={titleItems.join("\n")}
               >
@@ -2506,6 +2508,7 @@ function App() {
                   min={field.min}
                   max={field.max}
                   step={field.step}
+                  data-testid={`driver-input-${field.key}`}
                   value={String(selectedDriver[field.key] ?? "")}
                   onChange={(event) => updateDriverField(field.key, event.target.value)}
                 />
@@ -2514,6 +2517,7 @@ function App() {
                     <div className={`field-mode-row ${shouldPromptDerive ? "attention" : ""}`}>
                       <button
                         className={!isDerivedField && !isFixedField ? "active" : ""}
+                        data-testid={`driver-mode-${field.key}-measured`}
                         title={text.driverDerivation.measuredTitle(field.label)}
                         type="button"
                         onClick={(event) => {
@@ -2525,6 +2529,7 @@ function App() {
                       </button>
                       <button
                         className={!isDerivedField && isFixedField ? "active fixed" : ""}
+                        data-testid={`driver-mode-${field.key}-fixed`}
                         title={text.driverDerivation.fixedTitle(field.label)}
                         type="button"
                         onClick={(event) => {
@@ -2537,6 +2542,7 @@ function App() {
                       {derivableField !== undefined ? (
                         <button
                           className={`${isDerivedField ? "active derived" : ""} ${shouldPromptDerive ? "attention" : ""}`}
+                          data-testid={`driver-mode-${field.key}-derive`}
                           title={isDerivedField
                             ? text.driverDerivation.title(field.label)
                             : promptChainText !== undefined
@@ -2555,7 +2561,9 @@ function App() {
                       ) : null}
                     </div>
                     {promptChainText !== undefined ? (
-                      <span className="field-derive-chain">{text.driverDerivation.promptChain(promptChainText)}</span>
+                      <span className="field-derive-chain" data-testid={`driver-chain-${field.key}`}>
+                        {text.driverDerivation.promptChain(promptChainText)}
+                      </span>
                     ) : null}
                   </>
                 ) : null}

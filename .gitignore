@@ -1,5 +1,7 @@
 node_modules/
 dist/
+playwright-report/
+test-results/
 egui_app/target/
 *.tsbuildinfo
 vite.config.js
