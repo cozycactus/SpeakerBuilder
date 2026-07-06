@@ -243,6 +243,35 @@ describe("acoustic reference scenarios", () => {
     }
   });
 
+  it("keeps SPL calibration independent of the chart frequency range", () => {
+    const driver = presetById("dayton-rs180-8");
+    const designs = createDefaultDesigns(driver);
+    const sealed = designs.find((item) => item.kind === "sealed");
+    const bandpass = designs.find((item) => item.kind === "bandpass");
+    expect(sealed).toBeDefined();
+    expect(bandpass).toBeDefined();
+
+    for (const design of [sealed!, bandpass!]) {
+      const narrow = simulateDesign(driver, design, { powerW: 25, frequencyMaxHz: 200, outputs: ["spl"] });
+      const wide = simulateDesign(driver, design, { powerW: 25, outputs: ["spl"] });
+      expectNear(valueAt(narrow.splDb, 60), valueAt(wide.splDb, 60), 0.2);
+    }
+  });
+
+  it("references bandpass SPL to the driver instead of its own stopband", () => {
+    const driver = presetById("dayton-rs180-8");
+    const bandpass = createDefaultDesigns(driver).find((item) => item.kind === "bandpass");
+    expect(bandpass).toBeDefined();
+
+    const result = simulateDesign(driver, bandpass!, { powerW: 1 });
+    const passbandPeakDb = Math.max(...result.splDb.map((point) => point.y));
+
+    // At 1 W the passband peak must sit near the driver's sensitivity
+    // (resonance gain minus chamber losses), never tens of dB above it.
+    expect(passbandPeakDb).toBeLessThan(driver.sensitivityDb! + 6);
+    expect(passbandPeakDb).toBeGreaterThan(driver.sensitivityDb! - 12);
+  });
+
   it("matches the closed-box second-order high-pass reference shape", () => {
     const driver = {
       id: "reference-sealed-driver",

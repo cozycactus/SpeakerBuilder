@@ -639,7 +639,12 @@ export function simulateDesign(
         y: splAtOneMeter(item.response.acoustic, voltageRms),
       }))
     : [];
-  const splDb = needsSpl ? calibrateSplDb(uncalibratedSplDb, driver, driveInput.electricalPowerW) : [];
+  const splCalibrationDb = needsSpl
+    ? splCalibrationOffsetDb(derived, driver, design, voltageRms, driveInput.electricalPowerW)
+    : 0;
+  const splDb = needsSpl
+    ? uncalibratedSplDb.map((point) => ({ ...point, y: point.y + splCalibrationDb }))
+    : [];
   const rawFrequencies = raw.map((point) => point.frequency);
   const phaseRad = needsPhase ? unwrapPhase(raw.map((item) => carg(item.response.acoustic))) : [];
   const phaseDeg = outputs.has("phase")
@@ -1528,24 +1533,42 @@ function getReferenceMagnitude(
   return Math.max(1e-12, ...points.map((point) => point.magnitude));
 }
 
-function calibrateSplDb(points: Point[], driver: SpeakerDriver, powerW: number): Point[] {
-  if (!driver.sensitivityDb || points.length === 0) {
-    return points;
+const SPL_CALIBRATION_BAND_HZ: [number, number] = [300, 600];
+const SPL_CALIBRATION_POINTS = 17;
+
+function splCalibrationOffsetDb(
+  derived: DerivedDriver,
+  driver: SpeakerDriver,
+  design: BoxDesign,
+  voltageRms: number,
+  powerW: number,
+): number {
+  if (!driver.sensitivityDb) {
+    return 0;
   }
 
-  const referenceValues = points
-    .filter((point) => point.x >= 300 && point.x <= 600 && Number.isFinite(point.y))
-    .map((point) => point.y)
+  // A bandpass has no mass-band plateau of its own — 300-600 Hz is deep in its
+  // stopband, so anchoring there would hoist the passband far above reality.
+  // Reference the bare driver (infinite baffle) instead, which keeps all box
+  // kinds on the same absolute scale.
+  const referenceDesign: BoxDesign = design.kind === "bandpass"
+    ? { id: "spl-calibration", name: "", kind: "infinite", enabled: false, vbLiters: 1, color: "" }
+    : design;
+
+  // Evaluate the reference band on a fixed grid so the offset never depends on
+  // the frequency range requested for the charts.
+  const referenceValues = logspace(SPL_CALIBRATION_BAND_HZ[0], SPL_CALIBRATION_BAND_HZ[1], SPL_CALIBRATION_POINTS)
+    .map((frequency) =>
+      splAtOneMeter(responseAtFrequency(derived, referenceDesign, frequency).acoustic, voltageRms),
+    )
+    .filter((value) => Number.isFinite(value))
     .sort((left, right) => left - right);
   if (referenceValues.length === 0) {
-    return points;
+    return 0;
   }
 
   const referenceDb = referenceValues[Math.floor(referenceValues.length / 2)];
-  const targetDb = driver.sensitivityDb + powerRatioDb(powerW);
-  const offsetDb = targetDb - referenceDb;
-
-  return points.map((point) => ({ ...point, y: point.y + offsetDb }));
+  return driver.sensitivityDb + powerRatioDb(powerW) - referenceDb;
 }
 
 function findCutoff(points: Point[], targetDb: number): number | undefined {
