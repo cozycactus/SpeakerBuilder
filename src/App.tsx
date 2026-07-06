@@ -635,6 +635,8 @@ const UI_TEXT = {
       clear: "Очистить все",
       clearCurrent: "Очистить драйвер",
       remove: "Удалить измерение",
+      applyToDriver: "Применить к динамику",
+      applied: "Измеренные параметры применены к динамику",
       sealedZma: {
         boxVolume: "Vb тест",
         conditions: "Условия: ZMA снят с динамиком в закрытом ящике объёма Vb тест",
@@ -1096,6 +1098,8 @@ const UI_TEXT = {
       clear: "Clear all",
       clearCurrent: "Clear driver",
       remove: "Remove measurement",
+      applyToDriver: "Apply to driver",
+      applied: "Measured values applied to the driver",
       sealedZma: {
         boxVolume: "Test Vb",
         conditions: "Conditions: ZMA taken with the driver in a sealed box of the Test Vb volume",
@@ -2212,6 +2216,53 @@ function App() {
     setMeasurements((current) => current.filter((measurement) => measurement.id !== id));
   }
 
+  function applyMeasuredDriverValues(values: Partial<Record<DriverFormulaField, number | undefined>>) {
+    const entries = (Object.entries(values) as Array<[DriverFormulaField, number | undefined]>)
+      .filter((entry): entry is [DriverFormulaField, number] => Number.isFinite(entry[1]));
+    if (entries.length === 0) {
+      return;
+    }
+
+    const appliedKeys = new Set<keyof SpeakerDriver>(entries.map(([key]) => key));
+    const nextMechanicalDerivedField = mechanicalDerivedField !== undefined && appliedKeys.has(mechanicalDerivedField)
+      ? undefined
+      : mechanicalDerivedField;
+    const nextMotorDerivedField = motorDerivedField !== undefined && appliedKeys.has(motorDerivedField)
+      ? undefined
+      : motorDerivedField;
+    const nextQualityDerivedField = qualityDerivedField !== undefined && appliedKeys.has(qualityDerivedField)
+      ? undefined
+      : qualityDerivedField;
+
+    let editedDriver: SpeakerDriver = { ...selectedDriver };
+    for (const [key, value] of entries) {
+      const limits = driverFieldLimits.get(key);
+      const rounded = Math.round(value * 10000) / 10000;
+      editedDriver = {
+        ...editedDriver,
+        [key]: limits ? clampNumber(rounded, limits.min, limits.max ?? Number.POSITIVE_INFINITY) : rounded,
+      };
+    }
+    for (const [key] of entries) {
+      editedDriver = reconcileDriverDerivedFields(
+        editedDriver,
+        key,
+        nextMechanicalDerivedField,
+        nextMotorDerivedField,
+        nextQualityDerivedField,
+      );
+    }
+
+    setMechanicalDerivedField(nextMechanicalDerivedField);
+    setMotorDerivedField(nextMotorDerivedField);
+    setQualityDerivedField(nextQualityDerivedField);
+    setLastManualDriverField(undefined);
+    setLastDriverFormulaChangeFields([]);
+
+    commitSelectedDriver(editedDriver);
+    setStatus(text.measurements.applied);
+  }
+
   function updateMeasurementOffset(id: string, offsetDb: number) {
     setMeasurements((current) => current.map((measurement) =>
       measurement.id === id
@@ -2900,6 +2951,7 @@ function App() {
           totalCount={measurements.length}
           zmaMeasurements={zmaMeasurements}
           onAddedMassZmaChange={(patch) => setAddedMassZma((current) => normalizeAddedMassZmaState({ ...current, ...patch }))}
+          onApplyDriverValues={applyMeasuredDriverValues}
           onFreeAirZmaChange={(patch) => setFreeAirZma((current) => normalizeFreeAirZmaState({ ...current, ...patch }))}
           onAutoAlignSpl={autoAlignMeasurementSpl}
           onClear={() => setMeasurements([])}
@@ -4227,6 +4279,7 @@ function MeasurementPanel({
   totalCount,
   zmaMeasurements,
   onAddedMassZmaChange,
+  onApplyDriverValues,
   onAutoAlignSpl,
   onClear,
   onClearCurrent,
@@ -4253,6 +4306,7 @@ function MeasurementPanel({
   totalCount: number;
   zmaMeasurements: MeasurementTrace[];
   onAddedMassZmaChange: (patch: Partial<AddedMassZmaState>) => void;
+  onApplyDriverValues: (values: Partial<Record<DriverFormulaField, number | undefined>>) => void;
   onAutoAlignSpl: (id: string) => void;
   onClear: () => void;
   onClearCurrent: () => void;
@@ -4359,6 +4413,21 @@ function MeasurementPanel({
             ) : (
               <p>{text.measurements.freeAir.invalid}</p>
             )}
+            {freeAirTsEstimate ? (
+              <button
+                type="button"
+                className="text-button"
+                onClick={() => onApplyDriverValues({
+                  fsHz: freeAirTsEstimate.fsHz,
+                  qes: freeAirTsEstimate.qes,
+                  qms: freeAirTsEstimate.qms,
+                  qts: freeAirTsEstimate.qts,
+                  reOhm: freeAirTsEstimate.reOhm,
+                })}
+              >
+                {text.measurements.applyToDriver}
+              </button>
+            ) : null}
           </>
         ) : (
           <p>{text.measurements.freeAir.noZma}</p>
@@ -4453,6 +4522,18 @@ function MeasurementPanel({
                 ) : null}
               </div>
             ) : null}
+            {sealedBoxTsEstimate ? (
+              <button
+                type="button"
+                className="text-button"
+                onClick={() => onApplyDriverValues({
+                  qts: sealedBoxTsEstimate.qts,
+                  vasL: sealedBoxTsEstimate.vasL,
+                })}
+              >
+                {text.measurements.applyToDriver}
+              </button>
+            ) : null}
             <p>{qtcAdvice ?? text.measurements.sealedZma.responseHint}</p>
           </>
         ) : (
@@ -4514,6 +4595,19 @@ function MeasurementPanel({
             ) : (
               <p>{text.measurements.addedMass.invalid}</p>
             )}
+            {addedMassTsEstimate ? (
+              <button
+                type="button"
+                className="text-button"
+                onClick={() => onApplyDriverValues({
+                  cmsMmN: addedMassTsEstimate.cmsMmN,
+                  mmsG: addedMassTsEstimate.mmsG,
+                  vasL: addedMassTsEstimate.vasL,
+                })}
+              >
+                {text.measurements.applyToDriver}
+              </button>
+            ) : null}
             <p>{text.measurements.addedMass.hint}</p>
           </>
         ) : (
