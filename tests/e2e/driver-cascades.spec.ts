@@ -173,7 +173,7 @@ test("manual Fs change offers mechanical recalculations and can derive Cms", asy
   await expect(chain(page, "mmsG")).toContainText("Fs -> Mms");
   await expect(chain(page, "cmsMmN")).toContainText("Fs -> Cms");
   await expect(chain(page, "vasL")).toContainText("Fs -> Vas");
-  await expect(chain(page, "sdCm2")).toContainText("Fs -> Sd");
+  await expect(chain(page, "sdCm2")).toHaveCount(0);
 
   await mode(page, "cmsMmN", "derive").click();
 
@@ -184,7 +184,7 @@ test("manual Fs change offers mechanical recalculations and can derive Cms", asy
   expect(cms).toBeCloseTo(expectedCmsMmN(fs, mms), 4);
 });
 
-test("manual Vas change can derive Sd from an explicit Cms", async ({ page }) => {
+test("manual Vas change never prompts Sd but explicit derive still works", async ({ page }) => {
   await page.getByTestId("driver-select").selectOption({ label: "Usher 8945P" });
   await expect(field(page, "vasL")).toBeVisible();
 
@@ -196,9 +196,11 @@ test("manual Vas change can derive Sd from an explicit Cms", async ({ page }) =>
   await input(page, "cmsMmN").fill("1.55");
   await input(page, "vasL").fill("42");
 
-  await expect(chain(page, "sdCm2")).toContainText("Vas -> Sd");
+  // Sd is ruler-measured - the app must not suggest recalculating it
   await expect(chain(page, "cmsMmN")).toContainText("Vas -> Cms");
+  await expect(chain(page, "sdCm2")).toHaveCount(0);
 
+  // the explicit derive mode remains available as a datasheet cross-check
   await mode(page, "sdCm2", "derive").click();
 
   const vas = await numberValue(page, "vasL");
@@ -250,7 +252,7 @@ test("manual Cms change offers resonance and acoustic recalculations", async ({ 
   await expect(chain(page, "fsHz")).toContainText("Cms -> Fs");
   await expect(chain(page, "mmsG")).toContainText("Cms -> Mms");
   await expect(chain(page, "vasL")).toContainText("Cms -> Vas");
-  await expect(chain(page, "sdCm2")).toContainText("Cms -> Sd");
+  await expect(chain(page, "sdCm2")).toHaveCount(0);
 
   await mode(page, "fsHz", "derive").click();
 
