@@ -111,6 +111,11 @@ test("sealed-box ZMA import derives Vas and Qts for the selected driver", async 
   expect(Math.abs(await readoutNumber(tool, /^Qts (по|by) ZMA$/) - 0.537)).toBeLessThan(0.01);
   await expect(readout(tool, /^T\/S Fc \/ Qtc$/)).toHaveText("60.0 Hz / 1.07");
 
+  // Small eqs. 75-78: f3/fc = 0.764 for Qtc = 1.07, peak +1.7 dB near 80 Hz
+  expect(Math.abs(await readoutNumber(tool, /^F3$/) - 45.8)).toBeLessThan(0.3);
+  await expect(readout(tool, /^Пик$|^Peak$/)).toContainText("dB");
+  await expect(readout(tool, /^Выравнивание$|^Alignment$/)).toContainText(/Чебышев|Chebyshev/);
+
   await expect(page.getByTestId("added-mass-tool")).toContainText(/должен быть ниже|must be below/);
 });
 

@@ -35,6 +35,7 @@ test.beforeEach(async ({ page }) => {
 
 test("a single imported measurement can be removed", async ({ page }) => {
   await page.getByTestId("driver-select").selectOption({ label: "Usher 8945P" });
+  await expect(page.locator(".measurement-panel").getByRole("button", { name: /Импорт FRD|Import FRD/ })).toBeVisible();
   await importFile(page, "box.zma", ZMA_CONTENT);
   await importFile(page, "measured.frd", FRD_CONTENT);
 
