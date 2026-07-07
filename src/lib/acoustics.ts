@@ -1501,6 +1501,42 @@ export interface SealedEfficiencyEstimate {
   sensitivityDb: number;
 }
 
+// Small eq. 23: the same reference efficiency from driver T/S parameters alone
+export function estimateDriverReferenceEfficiency(driver: SpeakerDriver): SealedEfficiencyEstimate | null {
+  const qes = driver.qes;
+  if (
+    !Number.isFinite(driver.fsHz) || driver.fsHz <= 0 ||
+    !Number.isFinite(driver.vasL) || driver.vasL <= 0 ||
+    qes === undefined || !Number.isFinite(qes) || qes <= 0
+  ) {
+    return null;
+  }
+
+  const eta0 = (4 * Math.PI * Math.PI * Math.pow(driver.fsHz, 3) * (driver.vasL / 1000)) /
+    (Math.pow(SPEED_OF_SOUND, 3) * qes);
+  if (!Number.isFinite(eta0) || eta0 <= 0) {
+    return null;
+  }
+
+  return {
+    eta0,
+    sensitivityDb: 112.02 + 10 * Math.log10(eta0),
+  };
+}
+
+// Small eq. 36: the efficiency-bandwidth-volume physical ceiling
+export function maxReferenceEfficiency(f3Hz: number | undefined, boxVolumeLiters: number): number | null {
+  if (
+    f3Hz === undefined ||
+    !Number.isFinite(f3Hz) || f3Hz <= 0 ||
+    !Number.isFinite(boxVolumeLiters) || boxVolumeLiters <= 0
+  ) {
+    return null;
+  }
+  const eta0Max = 2.0e-6 * Math.pow(f3Hz, 3) * (boxVolumeLiters / 1000);
+  return Number.isFinite(eta0Max) && eta0Max > 0 ? eta0Max : null;
+}
+
 // Small, "Closed-Box Loudspeaker Systems", eqs. 24, 25, 49:
 // eta0 = (4*pi^2/c^3) * fc^3 * V_AT / Q_EC, V_AT = alpha/(alpha+1) * V_B
 export function estimateSealedReferenceEfficiency(

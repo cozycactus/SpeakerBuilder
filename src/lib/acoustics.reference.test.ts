@@ -4,10 +4,12 @@ import {
   alignSplOffsetDb,
   createDefaultDesigns,
   estimateAddedMassTsFromZma,
+  estimateDriverReferenceEfficiency,
   estimateFreeAirTsFromZma,
   estimateSealedBoxFromZma,
   estimateSealedBoxTsFromZma,
   estimateSealedReferenceEfficiency,
+  maxReferenceEfficiency,
   sealedAlignmentFromFcQtc,
   sealedResponseFromFcQtc,
   PRESET_DRIVERS,
@@ -384,6 +386,23 @@ describe("acoustic reference scenarios", () => {
       { x: 45, y: 7 },
       { x: 70, y: 6 },
     ], 28)).toBeNull();
+  });
+
+  it("derives driver reference efficiency and the eq. 36 ceiling", () => {
+    // Part II example driver: fs = 19 Hz, Qes = 0.35, Vas = 540 dm3 -> eta0 ~ 1.02 %
+    // (paper uses c = 345 m/s; with our 343 m/s the value lands at 1.035 %)
+    const driver = { ...presetById("usher-8945p"), fsHz: 19, qes: 0.35, vasL: 540 };
+    const efficiency = estimateDriverReferenceEfficiency(driver);
+
+    expect(efficiency).not.toBeNull();
+    expectNear((efficiency?.eta0 ?? 0) * 100, 1.035, 0.01);
+
+    // eq. 36: f3 = 40 Hz, Vb = 56.6 dm3 -> eta0max = 2e-6 * 40^3 * 0.0566 = 0.72 %
+    expectNear((maxReferenceEfficiency(40, 56.6) ?? 0) * 100, 0.724, 0.005);
+
+    expect(estimateDriverReferenceEfficiency({ ...driver, qes: undefined })).toBeNull();
+    expect(maxReferenceEfficiency(undefined, 56.6)).toBeNull();
+    expect(maxReferenceEfficiency(40, 0)).toBeNull();
   });
 
   it("estimates reference efficiency per the Small Part II worked example", () => {

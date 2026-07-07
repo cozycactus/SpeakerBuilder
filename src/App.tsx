@@ -65,11 +65,13 @@ import {
   createDefaultDesigns,
   createDesignFromTemplate,
   estimateAddedMassTsFromZma,
+  estimateDriverReferenceEfficiency,
   estimateFreeAirTsFromZma,
   estimateSealedBoxFromZma,
   estimateSealedBoxTsFromZma,
   estimateSealedReferenceEfficiency,
   getDesignTemplates,
+  maxReferenceEfficiency,
   optimizeDesigns,
   parseDriversFromFile,
   parseMeasurementTraceFile,
@@ -766,7 +768,10 @@ const UI_TEXT = {
       },
       labels: {
         electricalPower: "Эл. мощность",
+        eta0: "КПД η0 по T/S",
+        etaCeiling: "Потолок η0 · исп.",
         peakReduction: "Снижение пика",
+        splCalc: "SPL расч./паспорт",
         voltage: "Напряжение",
         zPeak: "Пик Z",
       },
@@ -1252,7 +1257,10 @@ const UI_TEXT = {
       },
       labels: {
         electricalPower: "Electrical power",
+        eta0: "T/S efficiency η0",
+        etaCeiling: "η0 ceiling · used",
         peakReduction: "Peak reduction",
+        splCalc: "SPL calc/spec",
         voltage: "Voltage",
         zPeak: "Z peak",
       },
@@ -5479,6 +5487,8 @@ function CalculationPassport({
   const driveInput = resolveDriveInput(driver, { powerW, splInputMode });
   const metrics = result.metrics;
   const translatedNotes = metrics.notes.map((note) => translateNote(note, text));
+  const driverEfficiency = estimateDriverReferenceEfficiency(driver);
+  const efficiencyCeiling = maxReferenceEfficiency(metrics.f3Hz, result.design.vbLiters);
   const alignmentRows = compactRows([
     { label: text.design, value: displayDesignName(result.design.name, text) },
     { label: text.type, value: text.boxLabels[result.design.kind] },
@@ -5497,6 +5507,17 @@ function CalculationPassport({
     { label: text.calculationPassport.labels.voltage, value: `${fmt(driveInput.voltageRms, 2)} Vrms` },
     { label: "Re / Znom", value: `${fmt(driver.reOhm, 2)} / ${fmt(driveInput.nominalOhm, 0)} Ω` },
     driver.sensitivityDb !== undefined ? { label: "Sens.", value: `${fmt(driver.sensitivityDb, 1)} dB` } : undefined,
+    driverEfficiency
+      ? { label: text.calculationPassport.labels.eta0, value: `${fmt(driverEfficiency.eta0 * 100, 2)} %` }
+      : undefined,
+    driverEfficiency
+      ? {
+        label: text.calculationPassport.labels.splCalc,
+        value: driver.sensitivityDb !== undefined
+          ? `${fmt(driverEfficiency.sensitivityDb, 1)} / ${fmt(driver.sensitivityDb, 1)} dB`
+          : `${fmt(driverEfficiency.sensitivityDb, 1)} dB`,
+      }
+      : undefined,
   ]);
   const limitRows = compactRows([
     { label: "F3 / F6", value: `${formatHz(metrics.f3Hz)} / ${formatHz(metrics.f6Hz)}` },
@@ -5513,6 +5534,13 @@ function CalculationPassport({
     { label: text.table.zmin, value: `${fmt(metrics.minImpedanceOhm, 1)} Ω` },
     metrics.impedancePeakOhm !== undefined
       ? { label: text.calculationPassport.labels.zPeak, value: `${fmt(metrics.impedancePeakOhm, 1)} Ω` }
+      : undefined,
+    efficiencyCeiling !== null && driverEfficiency
+      ? {
+        label: text.calculationPassport.labels.etaCeiling,
+        value: `${fmt(efficiencyCeiling * 100, 2)} % · ${fmt((driverEfficiency.eta0 / efficiencyCeiling) * 100, 0)} %`,
+        tone: driverEfficiency.eta0 > efficiencyCeiling ? "warning" as const : undefined,
+      }
       : undefined,
   ]);
 
