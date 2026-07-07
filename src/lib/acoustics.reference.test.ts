@@ -7,6 +7,7 @@ import {
   estimateFreeAirTsFromZma,
   estimateSealedBoxFromZma,
   estimateSealedBoxTsFromZma,
+  estimateSealedReferenceEfficiency,
   sealedAlignmentFromFcQtc,
   sealedResponseFromFcQtc,
   PRESET_DRIVERS,
@@ -383,6 +384,18 @@ describe("acoustic reference scenarios", () => {
       { x: 45, y: 7 },
       { x: 70, y: 6 },
     ], 28)).toBeNull();
+  });
+
+  it("estimates reference efficiency per the Small Part II worked example", () => {
+    // fc = 40 Hz, Qec = 0.824, alpha = 5, Vb = 56.6 dm3 -> eta0 ~ 0.35 %
+    const efficiency = estimateSealedReferenceEfficiency(40, 0.824, 5, 56.6);
+
+    expect(efficiency).not.toBeNull();
+    expectNear((efficiency?.eta0 ?? 0) * 100, 0.358, 0.01);
+    expectNear(efficiency?.sensitivityDb, 87.6, 0.15);
+
+    expect(estimateSealedReferenceEfficiency(0, 0.824, 5, 56.6)).toBeNull();
+    expect(estimateSealedReferenceEfficiency(40, 0.824, 0, 56.6)).toBeNull();
   });
 
   it("derives alignment metrics per Small eqs. 75-78", () => {

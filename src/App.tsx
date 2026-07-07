@@ -68,6 +68,7 @@ import {
   estimateFreeAirTsFromZma,
   estimateSealedBoxFromZma,
   estimateSealedBoxTsFromZma,
+  estimateSealedReferenceEfficiency,
   getDesignTemplates,
   optimizeDesigns,
   parseDriversFromFile,
@@ -666,8 +667,10 @@ const UI_TEXT = {
           good: "хорошее",
           poor: "слабое",
         },
+        efficiency: "КПД η0",
         f3: "F3",
         peak: "Пик",
+        sensitivity: "SPL 1Вт/1м",
         currentAboveTarget: "Qtc выше цели - увеличь объем или добавь демпфирование",
         currentBelowTarget: "Qtc ниже цели - объем можно уменьшить",
         derivedSeries: "Оценка ЗЯ по ZMA",
@@ -1150,8 +1153,10 @@ const UI_TEXT = {
           good: "good",
           poor: "poor",
         },
+        efficiency: "Efficiency η0",
         f3: "F3",
         peak: "Peak",
+        sensitivity: "SPL 1W/1m",
         currentAboveTarget: "Qtc is above target - increase volume or add damping",
         currentBelowTarget: "Qtc is below target - volume can be smaller",
         derivedSeries: "ZMA closed estimate",
@@ -4454,6 +4459,14 @@ function MeasurementPanel({
   const sealedAlignment = estimate?.qtc !== undefined
     ? sealedAlignmentFromFcQtc(estimate.fcHz, estimate.qtc)
     : null;
+  const sealedEfficiency = estimate?.qec !== undefined && sealedBoxTsEstimate
+    ? estimateSealedReferenceEfficiency(
+      estimate.fcHz,
+      estimate.qec,
+      sealedBoxTsEstimate.alpha,
+      sealedZma.boxVolumeLiters,
+    )
+    : null;
   const qtcAdvice = estimate?.qtc
     ? estimate.qtc > sealedZma.targetQtc + 0.04
       ? text.measurements.sealedZma.currentAboveTarget
@@ -4721,6 +4734,18 @@ function MeasurementPanel({
                           ? fmt(sealedBoxTsEstimate.qtcFromTs, 2)
                           : "-"}
                       </strong>
+                    </div>
+                  </>
+                ) : null}
+                {sealedEfficiency ? (
+                  <>
+                    <div>
+                      <span>{text.measurements.sealedZma.efficiency}</span>
+                      <strong>{fmt(sealedEfficiency.eta0 * 100, 2)} %</strong>
+                    </div>
+                    <div>
+                      <span>{text.measurements.sealedZma.sensitivity}</span>
+                      <strong>{fmt(sealedEfficiency.sensitivityDb, 1)} dB</strong>
                     </div>
                   </>
                 ) : null}

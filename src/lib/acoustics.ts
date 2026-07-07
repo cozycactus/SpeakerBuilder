@@ -1496,6 +1496,41 @@ export interface SealedAlignmentInfo {
   peakHz?: number;
 }
 
+export interface SealedEfficiencyEstimate {
+  eta0: number;
+  sensitivityDb: number;
+}
+
+// Small, "Closed-Box Loudspeaker Systems", eqs. 24, 25, 49:
+// eta0 = (4*pi^2/c^3) * fc^3 * V_AT / Q_EC, V_AT = alpha/(alpha+1) * V_B
+export function estimateSealedReferenceEfficiency(
+  fcHz: number,
+  qec: number,
+  alpha: number,
+  boxVolumeLiters: number,
+): SealedEfficiencyEstimate | null {
+  if (
+    !Number.isFinite(fcHz) || fcHz <= 0 ||
+    !Number.isFinite(qec) || qec <= 0 ||
+    !Number.isFinite(alpha) || alpha <= 0 ||
+    !Number.isFinite(boxVolumeLiters) || boxVolumeLiters <= 0
+  ) {
+    return null;
+  }
+
+  const vatM3 = (alpha / (alpha + 1)) * (boxVolumeLiters / 1000);
+  const eta0 = (4 * Math.PI * Math.PI * Math.pow(fcHz, 3) * vatM3) /
+    (Math.pow(SPEED_OF_SOUND, 3) * qec);
+  if (!Number.isFinite(eta0) || eta0 <= 0) {
+    return null;
+  }
+
+  return {
+    eta0,
+    sensitivityDb: 112.02 + 10 * Math.log10(eta0),
+  };
+}
+
 // Small, "Closed-Box Loudspeaker Systems", eqs. 75-78
 export function sealedAlignmentFromFcQtc(fcHz: number, qtc: number): SealedAlignmentInfo | null {
   if (!Number.isFinite(fcHz) || fcHz <= 0 || !Number.isFinite(qtc) || qtc <= 0) {
