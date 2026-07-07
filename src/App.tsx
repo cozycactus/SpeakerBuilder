@@ -275,6 +275,7 @@ type DriverIssue =
   | "qmsNotAboveQts"
   | "qtsFormulaMismatch"
   | "fsMmsVasMismatch"
+  | "sensitivityMismatch"
   | "xmaxInvalid"
   | "powerInvalid";
 
@@ -520,6 +521,7 @@ const UI_TEXT = {
         qmsNotAboveQts: "Qms должен быть больше Qts",
         qtsFormulaMismatch: "Qts не согласуется с Qes и Qms",
         fsMmsVasMismatch: "Fs, Mms, Vas, Sd и Cms заметно расходятся между собой",
+        sensitivityMismatch: "Паспортная чувствительность расходится с расчетной по T/S более чем на 2 дБ",
         qtsHigh: "Qts высокий: ФИ может давать большой пик или длинный порт",
         qtsLow: "Qts очень низкий: проверьте данные или рассчитывайте на крупный ФИ",
         xmaxInvalid: "Xmax должен быть больше нуля или пустым",
@@ -1009,6 +1011,7 @@ const UI_TEXT = {
         qmsNotAboveQts: "Qms must be greater than Qts",
         qtsFormulaMismatch: "Qts does not match Qes and Qms",
         fsMmsVasMismatch: "Fs, Mms, Vas, Sd, and Cms are noticeably inconsistent",
+        sensitivityMismatch: "Datasheet sensitivity disagrees with the T/S computed value by more than 2 dB",
         qtsHigh: "High Qts: vented boxes may peak or need a long port",
         qtsLow: "Very low Qts: verify the data or expect a large vented box",
         xmaxInvalid: "Xmax must be above zero or empty",
@@ -7266,6 +7269,12 @@ function analyzeDriver(driver: SpeakerDriver): DriverProfile {
     const expectedFs = deriveMechanicalField(driver, "fsHz");
     if (expectedFs !== undefined && Math.abs(expectedFs - driver.fsHz) / Math.max(1, driver.fsHz) > 0.18) {
       addIssue("fsMmsVasMismatch", ["fsHz", "mmsG", "vasL", "sdCm2", ...(driver.cmsMmN !== undefined ? ["cmsMmN" as const] : [])]);
+    }
+  }
+  if (driver.sensitivityDb !== undefined) {
+    const calculatedEfficiency = estimateDriverReferenceEfficiency(driver);
+    if (calculatedEfficiency !== null && Math.abs(calculatedEfficiency.sensitivityDb - driver.sensitivityDb) > 2) {
+      addIssue("sensitivityMismatch", ["sensitivityDb"]);
     }
   }
 

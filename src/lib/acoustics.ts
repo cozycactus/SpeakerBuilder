@@ -668,17 +668,11 @@ export function simulateDesign(
         y: db(cabs(item.response.acoustic) / refMagnitude),
       }))
     : [];
-  const uncalibratedSplDb = needsSpl
+  const splDb = needsSpl
     ? raw.map((item) => ({
         x: item.frequency,
         y: splAtOneMeter(item.response.acoustic, voltageRms),
       }))
-    : [];
-  const splCalibrationDb = needsSpl
-    ? splCalibrationOffsetDb(derived, driver, design, voltageRms, driveInput.electricalPowerW)
-    : 0;
-  const splDb = needsSpl
-    ? uncalibratedSplDb.map((point) => ({ ...point, y: point.y + splCalibrationDb }))
     : [];
   const rawFrequencies = raw.map((point) => point.frequency);
   const phaseRad = needsPhase ? unwrapPhase(raw.map((item) => carg(item.response.acoustic))) : [];
@@ -1851,44 +1845,6 @@ function getReferenceMagnitude(
   return Math.max(1e-12, ...points.map((point) => point.magnitude));
 }
 
-const SPL_CALIBRATION_BAND_HZ: [number, number] = [300, 600];
-const SPL_CALIBRATION_POINTS = 17;
-
-function splCalibrationOffsetDb(
-  derived: DerivedDriver,
-  driver: SpeakerDriver,
-  design: BoxDesign,
-  voltageRms: number,
-  powerW: number,
-): number {
-  if (!driver.sensitivityDb) {
-    return 0;
-  }
-
-  // A bandpass has no mass-band plateau of its own — 300-600 Hz is deep in its
-  // stopband, so anchoring there would hoist the passband far above reality.
-  // Reference the bare driver (infinite baffle) instead, which keeps all box
-  // kinds on the same absolute scale.
-  const referenceDesign: BoxDesign = design.kind === "bandpass"
-    ? { id: "spl-calibration", name: "", kind: "infinite", enabled: false, vbLiters: 1, color: "" }
-    : design;
-
-  // Evaluate the reference band on a fixed grid so the offset never depends on
-  // the frequency range requested for the charts.
-  const referenceValues = logspace(SPL_CALIBRATION_BAND_HZ[0], SPL_CALIBRATION_BAND_HZ[1], SPL_CALIBRATION_POINTS)
-    .map((frequency) =>
-      splAtOneMeter(responseAtFrequency(derived, referenceDesign, frequency).acoustic, voltageRms),
-    )
-    .filter((value) => Number.isFinite(value))
-    .sort((left, right) => left - right);
-  if (referenceValues.length === 0) {
-    return 0;
-  }
-
-  const referenceDb = referenceValues[Math.floor(referenceValues.length / 2)];
-  return driver.sensitivityDb + powerRatioDb(powerW) - referenceDb;
-}
-
 function findCutoff(points: Point[], targetDb: number): number | undefined {
   for (let index = 1; index < points.length; index += 1) {
     const previous = points[index - 1];
@@ -2431,8 +2387,10 @@ function powerRatioDb(value: number): number {
 }
 
 function splAtOneMeter(acousticProxy: Complex, voltageRms: number): number {
+  // 2*pi half-space radiation, the convention of Small's papers: the passband
+  // level then equals 112 dB + 10*log10(eta0 * Pe) with eta0 from eq. 23
   const pressurePa =
-    (cabs(acousticProxy) * voltageRms * RHO) / (4 * Math.PI * SPL_DISTANCE_M);
+    (cabs(acousticProxy) * voltageRms * RHO) / (2 * Math.PI * SPL_DISTANCE_M);
   return db(pressurePa / REFERENCE_PRESSURE_PA);
 }
 

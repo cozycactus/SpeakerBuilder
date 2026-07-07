@@ -22,7 +22,7 @@ This is an engineering design aid, not a replacement for measurement.
 
 - T/S enclosure modeling is most useful in the low-frequency range.
 - Above roughly 500 Hz, measured FRD/ZMA data is needed for breakup, directivity, cone behavior, baffle effects, and crossover work.
-- SPL is calibrated from datasheet sensitivity when available, but real systems still depend on baffle, room, losses, driver variation, and measurement conditions.
+- SPL is computed from the T/S model in the half-space convention of Small's papers (the passband level equals the eq. 23 reference efficiency); datasheet sensitivity is shown for comparison only. Real systems still depend on baffle, room, losses, driver variation, and measurement conditions.
 - Bandpass support is currently approximate.
 - Aperiodic modeling exposes physical inputs such as vent area, material, thickness, and flow resistance, but should still be verified experimentally.
 
