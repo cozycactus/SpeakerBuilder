@@ -116,6 +116,10 @@ test("sealed-box ZMA import derives Vas and Qts for the selected driver", async 
   await expect(readout(tool, /^Пик$|^Peak$/)).toContainText("dB");
   await expect(readout(tool, /^Выравнивание$|^Alignment$/)).toContainText(/Чебышев|Chebyshev/);
 
+  // Small eq. 24: eta0 = 4pi^2*fc^3*V_AT/(c^3*Qec) with V_AT = 0.75*Vb
+  expect(Math.abs(await readoutNumber(tool, /^КПД η0$|^Efficiency η0$/) - 0.12)).toBeLessThan(0.01);
+  expect(Math.abs(await readoutNumber(tool, /^SPL 1Вт\/1м$|^SPL 1W\/1m$/) - 82.7)).toBeLessThan(0.2);
+
   await expect(page.getByTestId("added-mass-tool")).toContainText(/должен быть ниже|must be below/);
 });
 
