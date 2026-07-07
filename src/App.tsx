@@ -3341,11 +3341,23 @@ function App() {
                       <RefreshCw size={16} />
                       {text.clearReference}
                     </button>
-                    <button type="button" className="text-button" onClick={exportChartSvg} title={text.exportSvg}>
+                    <button
+                      type="button"
+                      className="text-button"
+                      data-testid="export-chart-svg"
+                      onClick={exportChartSvg}
+                      title={text.exportSvg}
+                    >
                       <Download size={16} />
                       SVG
                     </button>
-                    <button type="button" className="text-button" onClick={exportChartPng} title={text.exportPng}>
+                    <button
+                      type="button"
+                      className="text-button"
+                      data-testid="export-chart-png"
+                      onClick={exportChartPng}
+                      title={text.exportPng}
+                    >
                       <Download size={16} />
                       PNG
                     </button>
@@ -5033,6 +5045,7 @@ function ChartScaleControls({
       <div className="chart-range-control x-range-control" aria-label={`${text.chartScale.from} ${text.chartScale.to}`}>
         <span>X</span>
         <input
+          data-testid="chart-x-min"
           aria-label={text.chartScale.from}
           type="number"
           min={xMinFloor}
@@ -5043,6 +5056,7 @@ function ChartScaleControls({
         />
         <em>-</em>
         <input
+          data-testid="chart-x-max"
           aria-label={text.chartScale.to}
           type="number"
           min={xMaxFloor}
@@ -5055,6 +5069,7 @@ function ChartScaleControls({
       </div>
       <label className="chart-range-control compact">
         <input
+          data-testid="chart-y-auto"
           type="checkbox"
           checked={yAuto}
           onChange={(event) => onYAutoChange(event.target.checked)}
@@ -5066,6 +5081,7 @@ function ChartScaleControls({
           <label className="chart-range-control y-field">
             <span>{text.chartScale.yMin}</span>
             <input
+              data-testid="chart-y-min"
               type="number"
               step="1"
               value={yMin}
@@ -5075,6 +5091,7 @@ function ChartScaleControls({
           <label className="chart-range-control y-field">
             <span>{text.chartScale.yMax}</span>
             <input
+              data-testid="chart-y-max"
               type="number"
               step="1"
               value={yMax}
@@ -5083,7 +5100,14 @@ function ChartScaleControls({
           </label>
         </div>
       ) : null}
-      <button type="button" className="icon-button chart-reset-button" onClick={onReset} title={text.chartScale.reset} aria-label={text.chartScale.reset}>
+      <button
+        type="button"
+        className="icon-button chart-reset-button"
+        data-testid="chart-scale-reset"
+        onClick={onReset}
+        title={text.chartScale.reset}
+        aria-label={text.chartScale.reset}
+      >
         <RefreshCw size={16} />
       </button>
     </div>
@@ -6079,6 +6103,7 @@ function LineChart({
     <div className={`chart-box ${onXDomainChange || onYDomainChange ? "interactive" : ""} ${isPanning ? "panning" : ""}`} ref={chartBoxRef}>
       <svg
         ref={setSvgElementRef}
+        data-testid="chart-svg"
         viewBox={`0 0 ${width} ${height}`}
         role="img"
         aria-label={title}
