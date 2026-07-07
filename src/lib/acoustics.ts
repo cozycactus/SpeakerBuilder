@@ -1266,9 +1266,10 @@ export function estimateSealedBoxFromZma(points: Point[], reOhm?: number): Seale
   const targetOhm = peakRatio > 1.2 ? Math.sqrt(peak.y * usedReOhm) : undefined;
   const f1Hz = targetOhm ? zmaCrossingFrequency(validPoints, targetOhm, 0, peakIndex, "rising") : undefined;
   const f2Hz = targetOhm ? zmaCrossingFrequency(validPoints, targetOhm, peakIndex, validPoints.length - 1, "falling") : undefined;
-  // Small, "Closed-Box Loudspeaker Systems", eqs. 45-47
+  // Small, "Closed-Box Loudspeaker Systems", eqs. 45-47, with Benson's
+  // sqrt(f1*f2) substitution compensating voice-coil inductance skew
   const qmc = f1Hz !== undefined && f2Hz !== undefined && f2Hz > f1Hz
-    ? (peak.x * Math.sqrt(peakRatio)) / (f2Hz - f1Hz)
+    ? (Math.sqrt(f1Hz * f2Hz) * Math.sqrt(peakRatio)) / (f2Hz - f1Hz)
     : undefined;
   const qec = qmc !== undefined ? qmc / (peakRatio - 1) : undefined;
   const qtc = qmc !== undefined ? qmc / peakRatio : undefined;
@@ -1396,7 +1397,7 @@ export function estimateFreeAirTsFromZma(points: Point[], reOhm?: number): FreeA
     return null;
   }
 
-  const qms = (analysis.peak.x * Math.sqrt(peakRatio)) / (f2Hz - f1Hz);
+  const qms = (Math.sqrt(f1Hz * f2Hz) * Math.sqrt(peakRatio)) / (f2Hz - f1Hz);
   if (!Number.isFinite(qms) || qms <= 0) {
     return null;
   }
@@ -1487,6 +1488,31 @@ function interpolateLogFrequency(left: Point, right: Point, targetY: number): nu
   const leftLog = Math.log10(Math.max(0.001, left.x));
   const rightLog = Math.log10(Math.max(0.001, right.x));
   return Math.pow(10, leftLog + (rightLog - leftLog) * ratio);
+}
+
+export interface SealedAlignmentInfo {
+  f3Hz: number;
+  peakDb?: number;
+  peakHz?: number;
+}
+
+// Small, "Closed-Box Loudspeaker Systems", eqs. 75-78
+export function sealedAlignmentFromFcQtc(fcHz: number, qtc: number): SealedAlignmentInfo | null {
+  if (!Number.isFinite(fcHz) || fcHz <= 0 || !Number.isFinite(qtc) || qtc <= 0) {
+    return null;
+  }
+
+  const inv = 1 / (qtc * qtc);
+  const f3Hz = fcHz * Math.sqrt(((inv - 2) + Math.sqrt(Math.pow(inv - 2, 2) + 4)) / 2);
+  if (qtc <= Math.SQRT1_2) {
+    return { f3Hz };
+  }
+
+  return {
+    f3Hz,
+    peakDb: db((qtc * qtc) / Math.sqrt(qtc * qtc - 0.25)),
+    peakHz: fcHz / Math.sqrt(1 - inv / 2),
+  };
 }
 
 export function sealedResponseFromFcQtc(fcHz: number, qtc: number, sourcePoints: Point[]): Point[] {

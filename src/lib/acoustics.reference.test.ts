@@ -7,6 +7,7 @@ import {
   estimateFreeAirTsFromZma,
   estimateSealedBoxFromZma,
   estimateSealedBoxTsFromZma,
+  sealedAlignmentFromFcQtc,
   sealedResponseFromFcQtc,
   PRESET_DRIVERS,
   parseMeasurementTraceFile,
@@ -382,6 +383,24 @@ describe("acoustic reference scenarios", () => {
       { x: 45, y: 7 },
       { x: 70, y: 6 },
     ], 28)).toBeNull();
+  });
+
+  it("derives alignment metrics per Small eqs. 75-78", () => {
+    // appendix values: B2 f3/fc = 1; C2 (Qtc = 1) f3/fc = 0.786, peak 1.25 dB;
+    // critically damped f3/fc = 1.554
+    const b2 = sealedAlignmentFromFcQtc(60, Math.SQRT1_2);
+    expectNear(b2?.f3Hz, 60, 0.01);
+    expect(b2?.peakDb).toBeUndefined();
+
+    const c2 = sealedAlignmentFromFcQtc(60, 1);
+    expectNear(c2?.f3Hz, 47.16, 0.05);
+    expectNear(c2?.peakDb, 1.25, 0.01);
+    expectNear(c2?.peakHz, 84.85, 0.05);
+
+    const critical = sealedAlignmentFromFcQtc(60, 0.5);
+    expectNear(critical?.f3Hz, 93.24, 0.05);
+
+    expect(sealedAlignmentFromFcQtc(0, 1)).toBeNull();
   });
 
   it("builds a second-order sealed response from Fc and Qtc", () => {

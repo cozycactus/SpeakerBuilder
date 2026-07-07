@@ -73,6 +73,7 @@ import {
   parseDriversFromFile,
   parseMeasurementTraceFile,
   resolveDriveInput,
+  sealedAlignmentFromFcQtc,
   sealedResponseFromFcQtc,
   simulateDesign,
 } from "./lib/acoustics";
@@ -650,6 +651,14 @@ const UI_TEXT = {
       applyToDriver: "Применить к динамику",
       applied: "Измеренные параметры применены к динамику",
       sealedZma: {
+        alignment: "Выравнивание",
+        alignmentLabels: {
+          bessel: "≈ Бессель BL2",
+          butterworth: "≈ Баттерворт B2",
+          chebyshev: "≈ Чебышев C2",
+          critical: "критическое (Qtc≈0.5)",
+          peaked: "сильный горб",
+        },
         boxVolume: "Vb тест",
         conditions: "Условия: ZMA снят с динамиком в закрытом ящике объёма Vb тест",
         confidence: {
@@ -657,6 +666,8 @@ const UI_TEXT = {
           good: "хорошее",
           poor: "слабое",
         },
+        f3: "F3",
+        peak: "Пик",
         currentAboveTarget: "Qtc выше цели - увеличь объем или добавь демпфирование",
         currentBelowTarget: "Qtc ниже цели - объем можно уменьшить",
         derivedSeries: "Оценка ЗЯ по ZMA",
@@ -1124,6 +1135,14 @@ const UI_TEXT = {
       applyToDriver: "Apply to driver",
       applied: "Measured values applied to the driver",
       sealedZma: {
+        alignment: "Alignment",
+        alignmentLabels: {
+          bessel: "≈ Bessel BL2",
+          butterworth: "≈ Butterworth B2",
+          chebyshev: "≈ Chebyshev C2",
+          critical: "critically damped (Qtc≈0.5)",
+          peaked: "strongly peaked",
+        },
         boxVolume: "Test Vb",
         conditions: "Conditions: ZMA taken with the driver in a sealed box of the Test Vb volume",
         confidence: {
@@ -1131,6 +1150,8 @@ const UI_TEXT = {
           good: "good",
           poor: "poor",
         },
+        f3: "F3",
+        peak: "Peak",
         currentAboveTarget: "Qtc is above target - increase volume or add damping",
         currentBelowTarget: "Qtc is below target - volume can be smaller",
         derivedSeries: "ZMA closed estimate",
@@ -3051,6 +3072,7 @@ function App() {
           onFreeAirZmaChange={(patch) => setFreeAirZma((current) => normalizeFreeAirZmaState({ ...current, ...patch }))}
           onAutoAlignSpl={autoAlignMeasurementSpl}
           onClear={() => setMeasurements([])}
+          onImport={() => measurementInputRef.current?.click()}
           onClearCurrent={() => {
             setMeasurements((current) => current.filter((measurement) => measurement.driverId !== selectedDriver.id));
           }}
@@ -3303,10 +3325,6 @@ function App() {
                     <button type="button" className="text-button" onClick={exportChartPng} title={text.exportPng}>
                       <Download size={16} />
                       PNG
-                    </button>
-                    <button type="button" className="text-button" onClick={() => measurementInputRef.current?.click()} title={text.measurements.import}>
-                      <Upload size={16} />
-                      FRD/ZMA
                     </button>
                   </div>
                 </div>
@@ -4386,6 +4404,7 @@ function MeasurementPanel({
   onClear,
   onClearCurrent,
   onFreeAirZmaChange,
+  onImport,
   onMeasurementOffsetChange,
   onRemoveMeasurement,
   onRenameMeasurement,
@@ -4419,6 +4438,7 @@ function MeasurementPanel({
   onClear: () => void;
   onClearCurrent: () => void;
   onFreeAirZmaChange: (patch: Partial<FreeAirZmaState>) => void;
+  onImport: () => void;
   onMeasurementOffsetChange: (id: string, offsetDb: number) => void;
   onRemoveMeasurement: (id: string) => void;
   onRenameMeasurement: (id: string, name: string) => void;
@@ -4431,6 +4451,9 @@ function MeasurementPanel({
   const selectedFrdMeasurement = frdMeasurements.find((measurement) => measurement.id === selectedFrdId) ??
     frdMeasurements[0];
   const targetVolume = sealedTargetVolumeFromTs(driver, sealedZma.targetQtc);
+  const sealedAlignment = estimate?.qtc !== undefined
+    ? sealedAlignmentFromFcQtc(estimate.fcHz, estimate.qtc)
+    : null;
   const qtcAdvice = estimate?.qtc
     ? estimate.qtc > sealedZma.targetQtc + 0.04
       ? text.measurements.sealedZma.currentAboveTarget
@@ -4448,6 +4471,10 @@ function MeasurementPanel({
       </div>
       <p>{text.measurements.visibleHint}</p>
       <div className="measurement-actions">
+        <button type="button" className="text-button" onClick={onImport} title={text.measurements.import}>
+          <Upload size={16} />
+          {text.measurements.import}
+        </button>
         <button type="button" className="text-button" disabled={count === 0} onClick={onClearCurrent}>
           <RefreshCw size={16} />
           {text.measurements.clearCurrent}
@@ -4649,6 +4676,26 @@ function MeasurementPanel({
                   <span>{text.measurements.sealedZma.f12}</span>
                   <strong>{formatHzPair(estimate.f1Hz, estimate.f2Hz)}</strong>
                 </div>
+                {sealedAlignment ? (
+                  <>
+                    <div>
+                      <span>{text.measurements.sealedZma.f3}</span>
+                      <strong>{formatHz(sealedAlignment.f3Hz)}</strong>
+                    </div>
+                    {sealedAlignment.peakDb !== undefined ? (
+                      <div>
+                        <span>{text.measurements.sealedZma.peak}</span>
+                        <strong>+{fmt(sealedAlignment.peakDb, 1)} dB · {formatHz(sealedAlignment.peakHz)}</strong>
+                      </div>
+                    ) : null}
+                    {estimate.qtc !== undefined ? (
+                      <div>
+                        <span>{text.measurements.sealedZma.alignment}</span>
+                        <strong>{text.measurements.sealedZma.alignmentLabels[sealedAlignmentKey(estimate.qtc)]}</strong>
+                      </div>
+                    ) : null}
+                  </>
+                ) : null}
                 {targetVolume ? (
                   <div>
                     <span>{text.measurements.sealedZma.tsTargetVolume}</span>
@@ -6791,6 +6838,22 @@ function acousticCorrectionDb(frequency: number, options: AcousticOptions): numb
     ? -options.baffleStepDb / (1 + Math.pow(baffleHz / Math.max(1, frequency), 2))
     : 0;
   return roomGain + baffle;
+}
+
+function sealedAlignmentKey(qtc: number): "bessel" | "butterworth" | "chebyshev" | "critical" | "peaked" {
+  if (qtc < 0.54) {
+    return "critical";
+  }
+  if (qtc < 0.65) {
+    return "bessel";
+  }
+  if (qtc < 0.8) {
+    return "butterworth";
+  }
+  if (qtc <= 1.15) {
+    return "chebyshev";
+  }
+  return "peaked";
 }
 
 function measurementKindToDefaultTab(kind: MeasurementTraceKind): ChartTab {
