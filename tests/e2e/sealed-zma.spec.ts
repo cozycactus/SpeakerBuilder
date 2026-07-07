@@ -5,12 +5,14 @@ type DriverFieldKey = "fsHz" | "qts" | "qes" | "qms" | "reOhm" | "vasL";
 const input = (page: Page, key: DriverFieldKey) => page.getByTestId(`driver-input-${key}`);
 const mode = (page: Page, key: DriverFieldKey) => page.getByTestId(`driver-mode-${key}-measured`);
 
+// mass-preserved sealed box over a 30 Hz / Qes 0.671 / Qms 2.683 driver:
+// fc = 60, rc = 5, dF = fc*sqrt(rc)/Qmc = 25
 const SEALED_ZMA_CONTENT = [
   "20 6",
   "32 7",
-  "40 13.4164",
+  "48.79 13.4164",
   "60 30",
-  "90 13.4164",
+  "73.79 13.4164",
   "140 8",
   "260 6.5",
   "500 6.4",
@@ -77,27 +79,37 @@ test.beforeEach(async ({ page }) => {
   await page.reload();
 });
 
-test("sealed-box ZMA import derives Vas and Qts for the selected driver", async ({ page }) => {
-  await page.getByTestId("driver-select").selectOption({ label: "Usher 8945P" });
-  await expect(input(page, "fsHz")).toBeVisible();
-
+async function fillSealedScenarioDriver(page: Page) {
   await mode(page, "fsHz").click();
+  await mode(page, "qes").click();
   await mode(page, "qts").click();
   await mode(page, "vasL").click();
   await input(page, "fsHz").fill("30");
-  await input(page, "qts").fill("0.4");
+  await input(page, "qes").fill("0.6708");
+  await input(page, "qts").fill("0.5367");
   await input(page, "vasL").fill("30");
+}
+
+test("sealed-box ZMA import derives Vas and Qts for the selected driver", async ({ page }) => {
+  await page.getByTestId("driver-select").selectOption({ label: "Usher 8945P" });
+  await expect(input(page, "fsHz")).toBeVisible();
+  await fillSealedScenarioDriver(page);
 
   await importZma(page, "sealed-box.zma", SEALED_ZMA_CONTENT);
 
   const tool = page.getByTestId("sealed-zma-tool");
   await expect(tool.locator(".sealed-zma-readout")).toBeVisible();
   await expect(toolField(tool, /Vb тест|Test Vb/)).toHaveValue("10");
+  await toolField(tool, /Re \(DC\)/).fill("6");
 
-  expect(await readoutNumber(tool, /^Qtc$/)).toBeCloseTo(1.2, 1);
+  // Small eqs. 45-47: Qmc = 60*sqrt(5)/25, Qec = Qmc/4, Qtc = Qmc/5
+  expect(Math.abs(await readoutNumber(tool, /^Qmc$/) - 5.367)).toBeLessThan(0.02);
+  expect(Math.abs(await readoutNumber(tool, /^Qec$/) - 1.342)).toBeLessThan(0.01);
+  expect(Math.abs(await readoutNumber(tool, /^Qtc$/) - 1.07)).toBeLessThan(0.01);
+  // eq. 48: alpha = fc*Qec/(fs*Qes) - 1 = 3
   expect(Math.abs(await readoutNumber(tool, /^Vas (по|by) ZMA$/) - 30)).toBeLessThan(0.5);
-  expect(Math.abs(await readoutNumber(tool, /^Qts (по|by) ZMA$/) - 0.6)).toBeLessThan(0.03);
-  await expect(readout(tool, /^T\/S Fc \/ Qtc$/)).toHaveText("60.0 Hz / 0.80");
+  expect(Math.abs(await readoutNumber(tool, /^Qts (по|by) ZMA$/) - 0.537)).toBeLessThan(0.01);
+  await expect(readout(tool, /^T\/S Fc \/ Qtc$/)).toHaveText("60.0 Hz / 1.07");
 
   await expect(page.getByTestId("added-mass-tool")).toContainText(/должен быть ниже|must be below/);
 });
@@ -105,13 +117,7 @@ test("sealed-box ZMA import derives Vas and Qts for the selected driver", async 
 test("changing the test volume rescales the ZMA-derived T/S estimate", async ({ page }) => {
   await page.getByTestId("driver-select").selectOption({ label: "Usher 8945P" });
   await expect(input(page, "fsHz")).toBeVisible();
-
-  await mode(page, "fsHz").click();
-  await mode(page, "qts").click();
-  await mode(page, "vasL").click();
-  await input(page, "fsHz").fill("30");
-  await input(page, "qts").fill("0.4");
-  await input(page, "vasL").fill("30");
+  await fillSealedScenarioDriver(page);
 
   await importZma(page, "sealed-box.zma", SEALED_ZMA_CONTENT);
 
@@ -119,11 +125,12 @@ test("changing the test volume rescales the ZMA-derived T/S estimate", async ({ 
   await expect(tool.locator(".sealed-zma-readout")).toBeVisible();
   const volume = toolField(tool, /Vb тест|Test Vb/);
   await expect(volume).toHaveValue("10");
+  await toolField(tool, /Re \(DC\)/).fill("6");
   const qtsBefore = await readoutNumber(tool, /^Qts (по|by) ZMA$/);
 
   await volume.fill("20");
 
-  await expect(readout(tool, /^T\/S Fc \/ Qtc$/)).toHaveText("47.4 Hz / 0.63");
+  await expect(readout(tool, /^T\/S Fc \/ Qtc$/)).toHaveText("47.4 Hz / 0.85");
   expect(Math.abs(await readoutNumber(tool, /^Vas (по|by) ZMA$/) - 60)).toBeLessThan(1);
   expect(await readoutNumber(tool, /^Qts (по|by) ZMA$/)).toBeCloseTo(qtsBefore, 5);
 });
