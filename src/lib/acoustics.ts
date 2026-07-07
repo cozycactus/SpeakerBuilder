@@ -249,6 +249,12 @@ interface SplLimitSummary {
 
 const RHO = 1.204;
 const SPEED_OF_SOUND = 343;
+// SPL at 1 m produced by 1 W of acoustic power radiating into half space:
+// I = P / (2*pi*r^2), p = sqrt(I*rho*c), SPL = 20*log10(p / 20 uPa) ~ 112 dB.
+// Small cites this watts-to-SPL conversion (Beranek, Acoustics, p. 14) for the
+// dual scale of Part I Fig. 11; a system passband therefore sits at
+// HALF_SPACE_SPL_1W_DB + 10*log10(eta0 * Pe).
+const HALF_SPACE_SPL_1W_DB = 112.02;
 const TWO_PI = Math.PI * 2;
 const REFERENCE_PRESSURE_PA = 20e-6;
 const SPL_DISTANCE_M = 1;
@@ -1514,7 +1520,7 @@ export function estimateDriverReferenceEfficiency(driver: SpeakerDriver): Sealed
 
   return {
     eta0,
-    sensitivityDb: 112.02 + 10 * Math.log10(eta0),
+    sensitivityDb: HALF_SPACE_SPL_1W_DB + 10 * Math.log10(eta0),
   };
 }
 
@@ -1557,7 +1563,7 @@ export function estimateSealedReferenceEfficiency(
 
   return {
     eta0,
-    sensitivityDb: 112.02 + 10 * Math.log10(eta0),
+    sensitivityDb: HALF_SPACE_SPL_1W_DB + 10 * Math.log10(eta0),
   };
 }
 

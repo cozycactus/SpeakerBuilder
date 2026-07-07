@@ -528,6 +528,8 @@ const UI_TEXT = {
       } satisfies Record<DriverIssue, string>,
       noIssues: "Параметры выглядят согласованно",
       recommendation: "Рекомендация",
+      sealedB2: (vb: string, fc: string, alpha: string) => `ЗЯ B2: Vb ≈ ${vb} L · Fc = F3 ≈ ${fc} · α ${alpha}`,
+      sealedB2Unavailable: "ЗЯ B2 недостижим: Qts ≥ 0.71",
       recommendations: {
         mixed: "Можно сравнить закрытый и ФИ",
         review: "Нужна ручная проверка",
@@ -1018,6 +1020,8 @@ const UI_TEXT = {
       } satisfies Record<DriverIssue, string>,
       noIssues: "Parameters look consistent",
       recommendation: "Recommendation",
+      sealedB2: (vb: string, fc: string, alpha: string) => `Sealed B2: Vb ≈ ${vb} L · Fc = F3 ≈ ${fc} · α ${alpha}`,
+      sealedB2Unavailable: "Sealed B2 unreachable: Qts ≥ 0.71",
       recommendations: {
         mixed: "Compare sealed and vented",
         review: "Needs manual review",
@@ -3011,7 +3015,7 @@ function App() {
           qualityDerivedField={qualityDerivedField}
           text={text}
         />
-        <DriverAnalysisPanel profile={driverProfile} text={text} />
+        <DriverAnalysisPanel driver={selectedDriver} profile={driverProfile} text={text} />
       </>
     );
   }
@@ -5178,12 +5182,15 @@ function DriverRelationsPanel({
 }
 
 function DriverAnalysisPanel({
+  driver,
   profile,
   text,
 }: {
+  driver: SpeakerDriver;
   profile: DriverProfile;
   text: UiText;
 }) {
+  const sealedB2 = sealedB2DesignFromTs(driver);
   return (
     <div className="driver-analysis">
       <div className="driver-analysis-head">
@@ -5192,6 +5199,11 @@ function DriverAnalysisPanel({
       </div>
       <div className="driver-analysis-chips">
         <span>{`${text.driverAnalysis.recommendation}: ${text.driverAnalysis.recommendations[profile.recommendation]}`}</span>
+        <span>
+          {sealedB2
+            ? text.driverAnalysis.sealedB2(fmt(sealedB2.vbLiters, 1), formatHz(sealedB2.fcHz), fmt(sealedB2.alpha, 1))
+            : text.driverAnalysis.sealedB2Unavailable}
+        </span>
       </div>
       {profile.issues.length > 0 ? (
         <div className="validation-list">
@@ -8237,6 +8249,17 @@ function sealedTargetVolumeFromTs(driver: SpeakerDriver, targetQtc: number): num
   }
   const ratio = Math.pow(targetQtc / driver.qts, 2) - 1;
   return ratio > 0 ? driver.vasL / ratio : undefined;
+}
+
+// Small Part II eqs. 54-57: the Butterworth sealed box a driver implies
+function sealedB2DesignFromTs(driver: SpeakerDriver): { alpha: number; fcHz: number; vbLiters: number } | undefined {
+  const targetQtc = Math.SQRT1_2;
+  if (!(driver.qts > 0) || driver.qts >= targetQtc || !(driver.vasL > 0) || !(driver.fsHz > 0)) {
+    return undefined;
+  }
+  const ratio = targetQtc / driver.qts;
+  const alpha = ratio * ratio - 1;
+  return { alpha, fcHz: driver.fsHz * ratio, vbLiters: driver.vasL / alpha };
 }
 
 function fmt(value?: number, decimals = 1): string {
