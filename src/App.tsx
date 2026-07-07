@@ -205,6 +205,7 @@ interface ChartYScaleState {
 
 interface SealedZmaState {
   boxVolumeLiters: number;
+  reOhm?: number;
   selectedMeasurementId?: string;
   targetQtc: number;
 }
@@ -662,8 +663,11 @@ const UI_TEXT = {
         f12: "F1 / F2",
         fc: "Fc",
         noZma: "Загрузи ZMA закрытого ящика",
+        qec: "Qec",
+        qmc: "Qmc",
         qtc: "Qtc",
         qtsByZma: "Qts по ZMA",
+        reDc: "Re (DC)",
         responseHint: "На АЧХ: пунктиром НЧ-оценка по ZMA и цель Qtc",
         targetQtc: "Цель Qtc",
         targetSeries: "Цель ЗЯ (Qtc)",
@@ -1133,8 +1137,11 @@ const UI_TEXT = {
         f12: "F1 / F2",
         fc: "Fc",
         noZma: "Load a sealed-box ZMA",
+        qec: "Qec",
+        qmc: "Qmc",
         qtc: "Qtc",
         qtsByZma: "Qts by ZMA",
+        reDc: "Re (DC)",
         responseHint: "Dashed ZMA estimate and target Qtc curves appear on Response",
         targetQtc: "Target Qtc",
         targetSeries: "Sealed target (Qtc)",
@@ -1879,9 +1886,11 @@ function App() {
     () => zmaMeasurements.find((measurement) => measurement.id === sealedZma.selectedMeasurementId) ?? zmaMeasurements[0],
     [sealedZma.selectedMeasurementId, zmaMeasurements],
   );
+  const sealedReOhm = sealedZma.reOhm ??
+    (Number.isFinite(selectedDriver.reOhm) && selectedDriver.reOhm > 0 ? selectedDriver.reOhm : undefined);
   const sealedZmaEstimate = useMemo(
-    () => selectedSealedZmaMeasurement ? estimateSealedBoxFromZma(selectedSealedZmaMeasurement.points) : null,
-    [selectedSealedZmaMeasurement],
+    () => selectedSealedZmaMeasurement ? estimateSealedBoxFromZma(selectedSealedZmaMeasurement.points, sealedReOhm) : null,
+    [sealedReOhm, selectedSealedZmaMeasurement],
   );
   const sealedFsFromFreeAir = freeAirTsEstimate !== null &&
     selectedFreeAirMeasurement !== undefined &&
@@ -1889,7 +1898,7 @@ function App() {
     selectedFreeAirMeasurement.id !== selectedSealedZmaMeasurement.id;
   const sealedDerivationDriver = useMemo(
     () => sealedFsFromFreeAir && freeAirTsEstimate
-      ? { ...selectedDriver, fsHz: freeAirTsEstimate.fsHz }
+      ? { ...selectedDriver, fsHz: freeAirTsEstimate.fsHz, qes: freeAirTsEstimate.qes }
       : selectedDriver,
     [freeAirTsEstimate, sealedFsFromFreeAir, selectedDriver],
   );
@@ -4593,6 +4602,15 @@ function MeasurementPanel({
                 onChange={(boxVolumeLiters) => onSealedZmaChange({ boxVolumeLiters })}
               />
               <NumberField
+                label={text.measurements.sealedZma.reDc}
+                unit="Ω"
+                value={sealedZma.reOhm ?? driver.reOhm}
+                min={0.1}
+                max={100}
+                step="0.01"
+                onChange={(reOhm) => onSealedZmaChange({ reOhm })}
+              />
+              <NumberField
                 label={text.measurements.sealedZma.targetQtc}
                 unit=""
                 value={sealedZma.targetQtc}
@@ -4614,6 +4632,14 @@ function MeasurementPanel({
                 <div>
                   <span>{text.measurements.sealedZma.qtc}</span>
                   <strong>{fmt(estimate.qtc, 2)}</strong>
+                </div>
+                <div>
+                  <span>{text.measurements.sealedZma.qmc}</span>
+                  <strong>{fmt(estimate.qmc, 3)}</strong>
+                </div>
+                <div>
+                  <span>{text.measurements.sealedZma.qec}</span>
+                  <strong>{fmt(estimate.qec, 3)}</strong>
                 </div>
                 <div>
                   <span>{text.measurements.sealedZma.zMax}</span>
@@ -7570,8 +7596,10 @@ function normalizeSealedZmaState(value: unknown): SealedZmaState {
   if (!isPlainRecord(value)) {
     return DEFAULT_SEALED_ZMA;
   }
+  const reOhm = finiteOptional(value.reOhm);
   return {
     boxVolumeLiters: clampNumber(finiteOptional(value.boxVolumeLiters) ?? DEFAULT_SEALED_ZMA.boxVolumeLiters, 0.1, 10000),
+    reOhm: reOhm !== undefined ? clampNumber(reOhm, 0.1, 100) : undefined,
     selectedMeasurementId: typeof value.selectedMeasurementId === "string" ? value.selectedMeasurementId : undefined,
     targetQtc: clampNumber(finiteOptional(value.targetQtc) ?? DEFAULT_SEALED_ZMA.targetQtc, 0.3, 2),
   };

@@ -109,7 +109,10 @@ export interface SealedZmaEstimate {
   f1Hz?: number;
   f2Hz?: number;
   fcHz: number;
+  qec?: number;
+  qmc?: number;
   qtc?: number;
+  reOhm: number;
   responseDb: Point[];
   targetOhm?: number;
   zMaxOhm: number;
@@ -1252,19 +1255,23 @@ function analyzeZmaPeak(points: Point[]): ZmaPeakAnalysis | null {
   return { baselineOhm, peak, peakIndex: validPoints.indexOf(peak), validPoints };
 }
 
-export function estimateSealedBoxFromZma(points: Point[]): SealedZmaEstimate | null {
+export function estimateSealedBoxFromZma(points: Point[], reOhm?: number): SealedZmaEstimate | null {
   const analysis = analyzeZmaPeak(points);
   if (!analysis) {
     return null;
   }
-  const { baselineOhm, peak, validPoints } = analysis;
-  const peakRatio = peak.y / baselineOhm;
-  const targetOhm = peakRatio > 1.2 ? Math.sqrt(peak.y * baselineOhm) : undefined;
-  const f1Hz = targetOhm ? zmaCrossingFrequency(validPoints, targetOhm, 0, validPoints.indexOf(peak), "rising") : undefined;
-  const f2Hz = targetOhm ? zmaCrossingFrequency(validPoints, targetOhm, validPoints.indexOf(peak), validPoints.length - 1, "falling") : undefined;
-  const qtc = f1Hz !== undefined && f2Hz !== undefined && f2Hz > f1Hz
-    ? peak.x / (f2Hz - f1Hz)
+  const { baselineOhm, peak, peakIndex, validPoints } = analysis;
+  const usedReOhm = reOhm !== undefined && Number.isFinite(reOhm) && reOhm > 0 ? reOhm : baselineOhm;
+  const peakRatio = peak.y / usedReOhm;
+  const targetOhm = peakRatio > 1.2 ? Math.sqrt(peak.y * usedReOhm) : undefined;
+  const f1Hz = targetOhm ? zmaCrossingFrequency(validPoints, targetOhm, 0, peakIndex, "rising") : undefined;
+  const f2Hz = targetOhm ? zmaCrossingFrequency(validPoints, targetOhm, peakIndex, validPoints.length - 1, "falling") : undefined;
+  // Small, "Closed-Box Loudspeaker Systems", eqs. 45-47
+  const qmc = f1Hz !== undefined && f2Hz !== undefined && f2Hz > f1Hz
+    ? (peak.x * Math.sqrt(peakRatio)) / (f2Hz - f1Hz)
     : undefined;
+  const qec = qmc !== undefined ? qmc / (peakRatio - 1) : undefined;
+  const qtc = qmc !== undefined ? qmc / peakRatio : undefined;
   const confidence: SealedZmaEstimateQuality =
     qtc !== undefined && peakRatio >= 2.5 && validPoints.length >= 12
       ? "good"
@@ -1278,7 +1285,10 @@ export function estimateSealedBoxFromZma(points: Point[]): SealedZmaEstimate | n
     f1Hz,
     f2Hz,
     fcHz: peak.x,
+    qec,
+    qmc,
     qtc,
+    reOhm: usedReOhm,
     responseDb: qtc ? sealedResponseFromFcQtc(peak.x, qtc, validPoints) : [],
     targetOhm,
     zMaxOhm: peak.y,
@@ -1302,7 +1312,12 @@ export function estimateSealedBoxTsFromZma(
     return null;
   }
 
-  const alpha = Math.pow(estimate.fcHz / driver.fsHz, 2) - 1;
+  // Small eq. 48 when the electrical Q of the box measurement is known;
+  // the (fc/fs)^2 form ignores the air-load mass change inside the box
+  const driverQes = driver.qes;
+  const alpha = estimate.qec !== undefined && driverQes !== undefined && Number.isFinite(driverQes) && driverQes > 0
+    ? (estimate.fcHz * estimate.qec) / (driver.fsHz * driverQes) - 1
+    : Math.pow(estimate.fcHz / driver.fsHz, 2) - 1;
   if (!Number.isFinite(alpha) || alpha <= 0) {
     return null;
   }

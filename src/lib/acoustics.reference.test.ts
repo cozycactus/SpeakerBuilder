@@ -193,7 +193,7 @@ describe("acoustic reference scenarios", () => {
     ]);
   });
 
-  it("estimates sealed-box Fc and Qtc from an impedance peak", () => {
+  it("estimates sealed-box Fc and Q factors per Small eqs. 45-47", () => {
     const targetOhm = Math.sqrt(30 * 6);
     const estimate = estimateSealedBoxFromZma([
       { x: 20, y: 6 },
@@ -204,40 +204,69 @@ describe("acoustic reference scenarios", () => {
       { x: 140, y: 8 },
       { x: 260, y: 6.5 },
       { x: 500, y: 6.4 },
-    ]);
+    ], 6);
 
+    // rc = 5, dF = 50: Qmc = 60*sqrt(5)/50, Qec = Qmc/4, Qtc = Qmc/5
     expect(estimate).not.toBeNull();
     expectNear(estimate?.fcHz, 60, 0.1);
-    expectNear(estimate?.qtc, 1.2, 0.05);
+    expectNear(estimate?.reOhm, 6, 0.001);
+    expectNear(estimate?.qmc, 2.683, 0.01);
+    expectNear(estimate?.qec, 0.671, 0.005);
+    expectNear(estimate?.qtc, 0.537, 0.005);
     expect(estimate?.responseDb.length).toBeGreaterThan(40);
     expect(valueAt(estimate?.responseDb ?? [], 400)).toBeGreaterThan(-0.5);
   });
 
   it("derives Vas and Qts from a sealed-box ZMA estimate and known box volume", () => {
+    // mass-preserved box: fc/fs = 2, so Qmc = 2*Qms, Qec = 2*Qes, dF = fc*sqrt(rc)/Qmc = 25
     const targetOhm = Math.sqrt(30 * 6);
     const estimate = estimateSealedBoxFromZma([
       { x: 20, y: 6 },
       { x: 32, y: 7 },
-      { x: 40, y: targetOhm },
+      { x: 48.79, y: targetOhm },
       { x: 60, y: 30 },
-      { x: 90, y: targetOhm },
+      { x: 73.79, y: targetOhm },
       { x: 140, y: 8 },
       { x: 260, y: 6.5 },
       { x: 500, y: 6.4 },
-    ]);
+    ], 6);
     const driver = {
       ...presetById("usher-8945p"),
       fsHz: 30,
-      qts: 0.4,
+      qes: 0.67082,
+      qms: 2.68328,
+      qts: 0.53666,
       vasL: 30,
     };
     const derived = estimateSealedBoxTsFromZma(driver, estimate, 10);
 
+    // eq. 48: alpha = fc*Qec/(fs*Qes) - 1 = 3, agreeing with (fc/fs)^2 - 1 here
     expect(derived).not.toBeNull();
-    expectNear(derived?.vasL, 30, 0.1);
-    expectNear(derived?.qts, 0.6, 0.03);
+    expectNear(derived?.alpha, 3, 0.02);
+    expectNear(derived?.vasL, 30, 0.2);
+    expectNear(derived?.qts, 0.537, 0.005);
     expectNear(derived?.fcFromTsHz, 60, 0.1);
-    expectNear(derived?.qtcFromTs, 0.8, 0.01);
+    expectNear(derived?.qtcFromTs, 1.073, 0.01);
+  });
+
+  it("falls back to the frequency-ratio alpha when the box Qec is unknown", () => {
+    const driver = {
+      ...presetById("usher-8945p"),
+      fsHz: 30,
+      vasL: 30,
+    };
+    const legacyEstimate = {
+      baselineOhm: 6,
+      confidence: "poor" as const,
+      fcHz: 60,
+      reOhm: 6,
+      responseDb: [],
+      zMaxOhm: 7,
+    };
+    const derived = estimateSealedBoxTsFromZma(driver, legacyEstimate, 10);
+
+    expectNear(derived?.alpha, 3, 0.001);
+    expectNear(derived?.vasL, 30, 0.01);
   });
 
   it("derives Mms, Cms, and Vas from an added-mass ZMA estimate", () => {
