@@ -627,6 +627,11 @@ describe("acoustic reference scenarios", () => {
     expect(bandpass).toBeDefined();
     expect(bandpass!.bandpassRearLiters).toBeGreaterThan(0);
     expect(bandpass!.bandpassFrontLiters).toBeGreaterThan(0);
+    expectNear(
+      bandpass!.vbLiters,
+      (bandpass!.bandpassRearLiters ?? 0) + (bandpass!.bandpassFrontLiters ?? 0),
+      0.001,
+    );
 
     const result = simulateDesign(driver, bandpass!, { powerW: 10 });
 

@@ -572,11 +572,23 @@ export function createDefaultDesigns(driver: SpeakerDriver): BoxDesign[] {
     },
   ];
 
-  return designs.map((design) => ({
-    ...design,
-    vbLiters: roundTo(Math.max(0.5, design.vbLiters), 1),
-    fbHz: design.fbHz ? roundTo(design.fbHz, 1) : undefined,
-  }));
+  return designs.map((design) => {
+    const bandpassRearLiters = design.bandpassRearLiters
+      ? roundTo(design.bandpassRearLiters, 1)
+      : undefined;
+    const bandpassFrontLiters = design.bandpassFrontLiters
+      ? roundTo(design.bandpassFrontLiters, 1)
+      : undefined;
+    return {
+      ...design,
+      vbLiters: bandpassRearLiters && bandpassFrontLiters
+        ? roundTo(bandpassRearLiters + bandpassFrontLiters, 1)
+        : roundTo(Math.max(0.5, design.vbLiters), 1),
+      fbHz: design.fbHz ? roundTo(design.fbHz, 1) : undefined,
+      bandpassRearLiters,
+      bandpassFrontLiters,
+    };
+  });
 }
 
 export function createDesignFromTemplate(
@@ -953,6 +965,8 @@ function createOptimizerDesigns(driver: SpeakerDriver): BoxDesign[] {
       vbLiters: roundTo(Math.max(0.5, design.vbLiters), 1),
       fbHz: design.fbHz ? roundTo(design.fbHz, 1) : undefined,
       portDiameterCm: design.portDiameterCm ? roundTo(design.portDiameterCm, 1) : undefined,
+      bandpassRearLiters: design.bandpassRearLiters ? roundTo(design.bandpassRearLiters, 1) : undefined,
+      bandpassFrontLiters: design.bandpassFrontLiters ? roundTo(design.bandpassFrontLiters, 1) : undefined,
     });
   };
 
