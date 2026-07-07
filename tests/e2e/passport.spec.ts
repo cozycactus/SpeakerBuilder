@@ -17,4 +17,10 @@ test("passport shows T/S efficiency, computed sensitivity, and the ceiling", asy
   // Small eq. 36 ceiling with utilization percentage
   await expect(passport).toContainText(/Потолок η0|η0 ceiling/);
   await expect(passport).toContainText("· исп.");
+
+  // Small eqs. 54-57: the B2 sealed box this driver implies
+  const analysis = page.locator(".driver-analysis");
+  await expect(analysis).toContainText(/ЗЯ B2|Sealed B2/);
+  await expect(analysis).toContainText("Vb ≈ 10.8 L");
+  await expect(analysis).toContainText("71.8 Hz");
 });
