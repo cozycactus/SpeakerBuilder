@@ -2874,7 +2874,10 @@ function App() {
               ? deriveDriverFormulaValue(selectedDriver, field.key, promptFormula)
               : undefined;
             const fieldValue = selectedDriver[field.key];
+            // Sd is a ruler-measured geometric constant - never suggest recalculating it,
+            // though the explicit derive mode stays available for datasheet cross-checks
             const shouldPromptDerive = derivableField !== undefined &&
+              field.key !== "sdCm2" &&
               !isDerivedField &&
               !isFixedField &&
               promptFormula !== undefined &&
